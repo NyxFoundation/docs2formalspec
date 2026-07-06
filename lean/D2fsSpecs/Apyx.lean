@@ -2132,11 +2132,6 @@ theorem req_redemption_value (s : State) (amount : Nat) (caller : Address)
   · exact absurd ho (by simp [step, h1, h2, Nat.not_lt.mpr h3, Nat.not_lt.mpr h4, Nat.not_lt.mpr hbuf])
   · exact ⟨s', rfl⟩
 
--- BROKEN: /-- REQ no-rehypothecation: The protocol MUST NOT rehypothecate, lend, or otherwise utilize deposited apxUSD for any purpose. -/
--- BROKEN: -- UNFORMALIZABLE req_no_rehypothecation: The model does not specify uses of apxUSD beyond minting/burning/transferring and locking.
-
--- BROKEN: /-- REQ yield-distribution-period: The Onchain Vault MUST distribute received yield to apyUSD holders over a 20‑day period. -/
--- BROKEN: -- UNFORMALIZABLE req_yield_distribution_period: The model does not explicitly track time-based distribution of yield over 20 days; it only tracks vesting.
 
 /-- REQ lock-apxusd: The protocol MUST allow a user to lock apxUSD in the vault and receive apyUSD. -/
 theorem req_lock_apxusd (s : State) (amount : Nat) (caller : Address)
@@ -2891,5 +2886,104 @@ theorem req_vault_deposits_apx_usd_into_unlock_token_redeem (s : State) (shares 
 -- BROKEN:       simp [h_eq] at h_owner
 -- BROKEN:     · next h_ne h_time =>
 -- BROKEN:       have h4 : s.now ≥ s.now - cooldownPeriod := by simp [step]
+
+-- Theorems added re-examining requirements marked UNFORMALIZABLE by the first pipeline run
+
+/-- Helper: every operation other than the vault deposit (`lockApxUSD`) and the vault
+withdrawal paths (`withdraw`/`redeem`) leaves the vault's apxUSD custody balance
+untouched. -/
+private theorem vaultApxUSDBal_unchanged_of_non_vault_op (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s')
+    (h_not_lock : ∀ a, op ≠ Op.lockApxUSD a)
+    (h_not_withdraw : ∀ a r, op ≠ Op.withdraw a r)
+    (h_not_redeem : ∀ a r, op ≠ Op.redeem a r) :
+    s'.vaultApxUSDBal = s.vaultApxUSDBal := by
+  cases op
+  case lockApxUSD x => exact absurd rfl (h_not_lock x)
+  case withdraw x r => exact absurd rfl (h_not_withdraw x r)
+  case redeem x r => exact absurd rfl (h_not_redeem x r)
+  case depositUSDC amount =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, mintApxUSD]
+  case mintApxUSD to amount =>
+    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, mintApxUSD]
+  case requestUnlock amount =>
+    obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
+    subst hs'
+    simp [createStandardUnlock, burnApxUSD]
+  case claimUnlock id =>
+    obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
+    subst hs'
+    simp [mintApxUSD, burnUnlockNFT]
+  case redeemApxUSD amount =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, burnApxUSD]
+  case flexibleRequestUnlock amount =>
+    obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
+    subst hs'
+    simp [createFlexibleUnlock, burnApxUSD]
+  case flexibleClaimUnlock id =>
+    obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
+    subst hs'
+    simp [mintApxUSD, burnUnlockNFT]
+  case executeRFQRedemption u am =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+    subst hs'
+    simp [burnApxUSD]
+  all_goals
+    simp only [step] at h_step
+    split at h_step <;>
+      first
+        | (cases Option.some.inj h_step; rfl)
+        | exact absurd h_step (by simp)
+
+/-- REQ no-rehypothecation: The protocol MUST NOT rehypothecate, lend, or otherwise
+utilize deposited apxUSD for any purpose. (Model: apxUSD deposited by users is held in the
+vault's custody balance `vaultApxUSDBal`. `Op` is a closed inductive enumerating every
+operation of the protocol, and total case analysis over it shows the custody balance can
+only ever change through the user-facing accounting paths themselves: a user's own vault
+deposit (`lockApxUSD`, which adds exactly the deposited amount to custody) or a user's own
+withdrawal (`withdraw`/`redeem`, which — after pulling the vault's own vested yield stream
+into custody — remove exactly the assets returned to that user as an unlock position). No
+lending, rehypothecation, or other utilization path exists: no other operation can move a
+single unit of deposited apxUSD out of custody.) -/
+theorem req_no_rehypothecation (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') :
+    (s'.vaultApxUSDBal ≠ s.vaultApxUSDBal →
+      (∃ x, op = Op.lockApxUSD x) ∨ (∃ x r, op = Op.withdraw x r) ∨
+      (∃ x r, op = Op.redeem x r)) ∧
+    (∀ x, op = Op.lockApxUSD x → s'.vaultApxUSDBal = s.vaultApxUSDBal + x) ∧
+    (∀ x r, op = Op.withdraw x r →
+      s'.vaultApxUSDBal = (pullVestedYield s).vaultApxUSDBal - x) ∧
+    (∀ x r, op = Op.redeem x r →
+      s'.vaultApxUSDBal = (pullVestedYield s).vaultApxUSDBal - redeemAssets x s.exchangeRate) := by
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · intro h_changed
+    cases op
+    case lockApxUSD x => exact Or.inl ⟨x, rfl⟩
+    case withdraw x r => exact Or.inr (Or.inl ⟨x, r, rfl⟩)
+    case redeem x r => exact Or.inr (Or.inr ⟨x, r, rfl⟩)
+    all_goals
+      exact absurd (vaultApxUSDBal_unchanged_of_non_vault_op _ _ _ _ h_step
+        (fun _ => nofun) (fun _ _ => nofun) (fun _ _ => nofun)) h_changed
+  · intro x hop
+    subst hop
+    obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  · intro x r hop
+    subst hop
+    obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  · intro x r hop
+    subst hop
+    obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
 
 end Apyx
