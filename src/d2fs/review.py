@@ -12,6 +12,12 @@ from .config import Config
 from .extract import Requirement
 from .llm import LLM
 
+
+def _normalize_id(s: str) -> str:
+    """Case/separator-insensitive key so req ids with internal capitals (apyUSD,
+    UnlockToken, minAssets, ...) still match their `req_<snake_case>` theorem name."""
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
 INFORMALIZE_SYSTEM = """\
 You read Lean 4 theorem statements and restate exactly what they assert in plain \
 English, faithfully — including what they do NOT assert. Do not consult the docstring \
@@ -56,8 +62,9 @@ def regen_flagged(llm: LLM, cfg: Config, reqs: list[Requirement], lean_code: str
         name = _thm_name(b)
         if not name:
             continue
-        rid = name.removeprefix("req_").replace("_", "-")
-        if rid not in flagged or rid not in req_by_id:
+        rid = next((r.id for r in reqs
+                    if _normalize_id(r.id) == _normalize_id(name.removeprefix("req_"))), None)
+        if rid is None or rid not in flagged or rid not in req_by_id:
             continue
         r = req_by_id[rid]
         note = flagged[rid].get("note", "")
@@ -98,8 +105,7 @@ def roundtrip_review(llm: LLM, cfg: Config, reqs: list[Requirement], lean_code: 
     theorems = _split_theorems(lean_code)
     by_req: dict[str, str] = {}
     for name, text in theorems.items():
-        rid = name.removeprefix("req_").replace("_", "-")
-        by_req[rid] = text
+        by_req[_normalize_id(name.removeprefix("req_"))] = text
 
     from .leangen import find_unformalizable
 
@@ -108,7 +114,7 @@ def roundtrip_review(llm: LLM, cfg: Config, reqs: list[Requirement], lean_code: 
     for r in reqs:
         if not r.formalizable:
             continue
-        thm = by_req.get(r.id)
+        thm = by_req.get(_normalize_id(r.id))
         if thm is None:
             verdict = "unformalizable" if r.id in declared_unform else "missing"
             results.append({"id": r.id, "verdict": verdict,
