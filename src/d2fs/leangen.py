@@ -204,11 +204,17 @@ def gen_lean(llm: LLM, cfg: Config, system_name: str, module_name: str,
     batch_gate: optional (model_code, chunk) -> (ok, errors) for immediate
     per-batch statement validation."""
     log("[leangen] phase 1: domain model")
-    model_code = gen_model(llm, cfg, system_name, module_name, model_summary, reqs)
-    if compile_gate:
+    # a broken model poisons every downstream stage; resample rather than proceed
+    for sample in range(1, 4):
+        model_code = gen_model(llm, cfg, system_name, module_name, model_summary, reqs)
+        if not compile_gate:
+            break
         ok, model_code = compile_gate(model_code)
-        if not ok:
-            log("[leangen] WARNING: model failed compile gate; proceeding best-effort")
+        if ok:
+            break
+        log(f"[leangen] model sample {sample} failed compile gate; resampling")
+    else:
+        raise RuntimeError("model generation failed compile gate after 3 samples")
     log("[leangen] phase 2: theorems")
     gate_for = (lambda m: (lambda chunk: batch_gate(m, chunk))) if batch_gate else (lambda m: None)
     theorems_code = gen_theorems(llm, cfg, model_code, reqs, log=log,
