@@ -1,0 +1,6 @@
+name = "D2fsSpecs"
+version = "0.1.0"
+defaultTargets = ["D2fsSpecs"]
+
+[[lean_lib]]
+name = "D2fsSpecs"
