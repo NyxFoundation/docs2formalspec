@@ -47,13 +47,19 @@ def roundtrip_review(llm: LLM, cfg: Config, reqs: list[Requirement], lean_code: 
         rid = name.removeprefix("req_").replace("_", "-")
         by_req[rid] = text
 
+    from .leangen import find_unformalizable
+
+    declared_unform = set(find_unformalizable(lean_code))
     results = []
     for r in reqs:
         if not r.formalizable:
             continue
         thm = by_req.get(r.id)
         if thm is None:
-            results.append({"id": r.id, "verdict": "missing", "note": "no theorem generated"})
+            verdict = "unformalizable" if r.id in declared_unform else "missing"
+            results.append({"id": r.id, "verdict": verdict,
+                            "note": "declared unformalizable by generator" if verdict == "unformalizable"
+                            else "no theorem generated"})
             continue
         reading = llm.chat_json(
             cfg.review_model,

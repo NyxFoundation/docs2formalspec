@@ -46,6 +46,43 @@ def _lake_build(cfg: Config, module_name: str) -> tuple[bool, str]:
     return proc.returncode == 0, out
 
 
+_DECL_RE = re.compile(r"^(?:theorem|def|structure|inductive|abbrev|instance)\s", re.M)
+
+
+def _error_lines(build_output: str) -> list[int]:
+    return [int(m.group(1)) for m in re.finditer(r"\.lean:(\d+):\d+", build_output)]
+
+
+def sorry_stub_failing_proofs(code: str, build_output: str) -> tuple[str, int]:
+    """Deterministic PALM-style fallback: for every compile error located inside a
+    theorem's proof, replace that proof body with `sorry`, keeping the statement.
+    Returns (new_code, number_of_stubbed_theorems)."""
+    lines = code.splitlines()
+    # start line (0-based) of each declaration
+    decl_starts = [i for i, l in enumerate(lines) if _DECL_RE.match(l)]
+    if not decl_starts:
+        return code, 0
+    stub_targets: set[int] = set()
+    for el in _error_lines(build_output):
+        idx = el - 1
+        encl = max((s for s in decl_starts if s <= idx), default=None)
+        if encl is not None and lines[encl].lstrip().startswith("theorem"):
+            stub_targets.add(encl)
+    if not stub_targets:
+        return code, 0
+    decl_starts.append(len(lines))
+    out_lines = list(lines)
+    for start in sorted(stub_targets, reverse=True):
+        end = min(s for s in decl_starts if s > start)
+        decl_text = "\n".join(lines[start:end])
+        m = re.search(r":=\s*(by\b|calc\b|sorry\b)?", decl_text)
+        if not m:
+            continue
+        stubbed = decl_text[: m.start()].rstrip() + " := sorry\n"
+        out_lines[start:end] = stubbed.splitlines() + [""]
+    return "\n".join(out_lines) + "\n", len(stub_targets)
+
+
 def _metrics(code: str) -> tuple[int, int, int]:
     return (len(re.findall(r"\bsorry\b", code)),
             len(re.findall(r"\btheorem\b", code)),
@@ -53,7 +90,8 @@ def _metrics(code: str) -> tuple[int, int, int]:
 
 
 def check_and_repair(llm: LLM, cfg: Config, module_name: str, lean_code: str,
-                     max_rounds: int = 8, max_devac_rounds: int = 2, log=print) -> CheckResult:
+                     max_rounds: int = 8, max_devac_rounds: int = 2,
+                     llm_repair_rounds: int = 4, log=print) -> CheckResult:
     code = lean_code
     out = ""
     devac_used = 0
@@ -73,6 +111,13 @@ def check_and_repair(llm: LLM, cfg: Config, module_name: str, lean_code: str,
                 continue
             n_sorry, n_thm, n_vac = _metrics(code)
             return CheckResult(True, attempt, n_sorry, n_thm, n_vac, out, code)
+        if attempt > llm_repair_rounds:
+            # LLM repair is not converging — deterministically stub failing proofs
+            stubbed, n = sorry_stub_failing_proofs(code, out)
+            if n:
+                log(f"[leancheck] sorry-stubbed {n} failing proofs (deterministic fallback)")
+                code = stubbed
+                continue
         code = repair_lean(llm, cfg, code, out)
     _write_module(cfg, module_name, code)
     ok, out = _lake_build(cfg, module_name)

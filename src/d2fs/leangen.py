@@ -83,6 +83,16 @@ preserve every theorem name and keep each theorem statement as strong as possibl
 a proof cannot be completed, replace the proof body with `sorry` — NEVER weaken a \
 statement to `True` and never delete a theorem. Never add `import Mathlib`."""
 
+EXTEND_SYSTEM = """\
+You extend a Lean 4 (v4.31, core + Std, NO mathlib) state-machine model so that more \
+requirements become formalizable. You receive the current model and requirements that \
+could not be stated against it. Add the missing State fields, Ops, step cases, or \
+helper defs (e.g. sharePrice, totalSupply, vesting schedule fields) needed to state \
+them — keep every existing definition and its behavior intact, only extend. Do NOT \
+close the namespace. Output ONLY a Lean code block with the COMPLETE extended model \
+(no theorems)."""
+
+
 DEVACUATE_SYSTEM = """\
 You strengthen vacuous Lean 4 theorems. You receive a compiling file in which some \
 theorems are stated as `True` (vacuous). Rewrite ONLY those theorems into meaningful \
@@ -136,12 +146,44 @@ def assemble(module_name: str, model_code: str, theorems_code: str) -> str:
     return f"{model}\n\n-- Requirements as theorems\n\n{theorems_code}\n\nend {module_name}\n"
 
 
+def find_unformalizable(theorems_code: str) -> list[str]:
+    """Req ids declared unformalizable by the theorem generator."""
+    ids = re.findall(r"--\s*UNFORMALIZABLE\s+req[_-]([A-Za-z0-9_-]+)", theorems_code)
+    return [i.replace("_", "-") for i in ids]
+
+
+def extend_model(llm: LLM, cfg: Config, model_code: str, reqs: list[Requirement]) -> str:
+    text = llm.chat(
+        cfg.lean_model,
+        EXTEND_SYSTEM,
+        "Current model:\n```lean\n" + model_code + "\n```\n\nUnformalizable requirements:\n"
+        + json.dumps([{"id": r.id, "category": r.category, "statement": r.statement}
+                      for r in reqs], ensure_ascii=False, indent=1),
+        max_tokens=20_000,
+    )
+    return strip_lean_block(text)
+
+
 def gen_lean(llm: LLM, cfg: Config, system_name: str, module_name: str,
              model_summary: str, reqs: list[Requirement], log=print) -> str:
     log("[leangen] phase 1: domain model")
     model_code = gen_model(llm, cfg, system_name, module_name, model_summary, reqs)
     log("[leangen] phase 2: theorems")
     theorems_code = gen_theorems(llm, cfg, model_code, reqs, log=log)
+
+    # model-extension feedback round: if requirements were declared unformalizable,
+    # extend the model to support them and regenerate just those theorems
+    missing_ids = set(find_unformalizable(theorems_code))
+    missing = [r for r in reqs if r.formalizable and r.id in missing_ids]
+    if missing:
+        log(f"[leangen] phase 3: extending model for {len(missing)} unformalizable reqs")
+        model_code = extend_model(llm, cfg, model_code, missing)
+        extra = gen_theorems(llm, cfg, model_code, missing, log=log)
+        kept = "\n".join(
+            l for l in theorems_code.splitlines()
+            if not re.match(r"\s*--\s*UNFORMALIZABLE", l)
+        )
+        theorems_code = kept + "\n\n-- Theorems added after model extension\n\n" + extra
     return assemble(module_name, model_code, theorems_code)
 
 

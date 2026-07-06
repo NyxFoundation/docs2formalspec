@@ -39,9 +39,14 @@ frontend behavior, business processes) are NOT formalizable.
 """
 
 MERGE_SYSTEM = """\
-You deduplicate and reconcile requirement lists extracted from multiple documents of \
-the same system. Merge near-duplicates (keep the strongest phrasing), drop vacuous \
-items, keep ids stable and unique, and flag contradictions. Output JSON only."""
+You deduplicate requirement lists extracted from multiple documents of the same \
+system. Merge ONLY true duplicates — two items that constrain the same operation with \
+the same condition (keep the strongest phrasing, union their sources). Requirements \
+about different operations, different state variables, different thresholds, or \
+different failure modes are DISTINCT and must all be kept, even if thematically \
+similar. Do not generalize several specific requirements into one broader one. Expect \
+the output list to be nearly as long as the input minus exact duplicates. Keep ids \
+stable and unique, and flag contradictions. Output JSON only."""
 
 
 @dataclass

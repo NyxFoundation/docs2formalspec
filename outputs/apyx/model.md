@@ -1,68 +1,68 @@
 **Apyx Protocol – Formal State‑Transition Model**  
-*(Version 1.0 Draft – ≤ 60 lines)*  
+
+---
+
+### 1. State Variables  
+
+| Variable | Type | Meaning (quantitative) |
+|----------|------|------------------------|
+| `totalCollateralValue` | `uint256` (USD‑scaled, 18 dec) | Market value of **all** collateral assets **including** the over‑collateralization buffer. |
+| `totalMintedApxUSD` | `uint256` (18 dec) | Number of apxUSD tokens currently issued. |
+| `redemptionValue` | `uint256` (18 dec) | Current per‑token redemption price (USD). |
+| `bufferAmount` | `uint256` (18 dec) | `totalCollateralValue – (totalMintedApxUSD × redemptionValue)`. |
+| `totalApyUSDshares` | `uint256` (18 dec) | Total supply of apyUSD (ERC‑4626 shares). |
+| `totalApyAssets` | `uint256` (18 dec) | `totalApyUSDshares × exchangeRate`; includes streamed yield from `LinearVestV0`. |
+| `exchangeRate` | `uint256` (18 dec) | `totalApyAssets / totalApyUSDshares`; grows with accrued yield. |
+| `paused` | `bool` | Global emergency stop flag. |
+| `denyList` | `mapping(address ⇒ bool)` | Addresses prohibited from any interaction. |
+| `whitelist` | `mapping(address ⇒ bool)` | Addresses allowed to use privileged mint/redeem paths. |
+| `authorizedCounterparties` | `mapping(address ⇒ bool)` | RFQ executors. |
+| `unlockRequests[addr]` | `struct { uint256 amount; uint256 start; bool claimed; }` | One active flexible‑redemption request per user (NFT‑backed). |
+| `governanceVotes` | `mapping(uint256 ⇒ Vote)` | Ongoing buffer‑deployment proposals. |
+
+---
+
+### 2. Actors  
+
+| Actor | Role |
+|-------|------|
+| **User** | Deposits USDC, mints/redeems apxUSD, locks apxUSD → apyUSD, initiates unlocks. |
+| **Whitelisted Participant** | Calls `arbitrageMint` / `arbitrageRedeem`. |
+| **Governance Token Holder** | Votes on buffer deployment, upgrades, back‑stop. |
+| **Authorized Counterparty** | Executes `rfqExecute`. |
+| **Protocol Contracts** | `Vault`, `LinearVestV0`, `UnlockReceiptNFT`, `PauseController`. |
+| **Oracle** | Supplies `priceUSDC`, `priceRedemptionBasket`. |
+
+---
+
+### 3. Operations  
+
+| Operation | Inputs | Preconditions (must hold) | Effects (state changes) |
+|----------|--------|--------------------------|--------------------------|
+| `depositForMinShares(user, usdcAmt, minApx)` | `usdcAmt:uint256`, `minApx:uint256` | `!paused`, `!denyList[user]`, `usdcAmt ≥ minApx` | Transfer USDC from `user`; `totalMintedApxUSD += minApx`; `totalCollateralValue += usdcAmt`; mint `minApx` apxUSD to `user`. |
+| `mintForMaxAssets(user, apxAmt, maxUSDC)` | `apxAmt:uint256`, `maxUSDC:uint256` | `!paused`, `!denyList[user]`, `maxUSDC ≥ apxAmt` | Pull `apxAmt` USDC; update `totalMintedApxUSD`, `totalCollateralValue`; mint `apxAmt` apxUSD. |
+| `redeemForMinAssets(user, apxAmt, minUSDC)` | `apxAmt:uint256`, `minUSDC:uint256` | `!paused`, `!denyList[user]`, `apxAmt ≤ totalMintedApxUSD`, `redemptionValue × apxAmt ≥ minUSDC` | Burn `apxAmt` apxUSD; `totalMintedApxUSD -= apxAmt`; `totalCollateralValue -= redemptionValue × apxAmt`; transfer USDC ≥ `minUSDC` to `user`. |
+| `lock(user, apxAmt)` | `apxAmt:uint256` | `apxAmt ≤ balanceApxUSD(user)`, `!paused` | Burn `apxAmt` apxUSD; `totalApyUSDshares += shares = apxAmt / exchangeRate`; `totalApyAssets += apxAmt`; mint `shares` apyUSD to `user`. |
+| `unlock(user, apxAmt)` | `apxAmt:uint256` | `apxAmt ≤ balanceApxUSD(user)`, **no active request** | Burn `apxAmt` apxUSD; create `UnlockReceiptNFT` with `amount=apxAmt`, `start=block.timestamp`; store in `unlockRequests[user]`. |
+| `claimUnlock(user)` | – | `request exists && block.timestamp ≥ start + 3 days` | Transfer `amount` USDC (minus early‑fee if <20 days); delete request; `totalCollateralValue -= amount`. |
+| `pause()` / `unpause()` | – | `caller ∈ governance` | Set `paused = true/false`. |
+| `voteDeployBuffer(proposalId, amount)` | `proposalId:uint256`, `amount:uint256` | `caller ∈ governance`, `amount ≤ bufferAmount` | On successful quorum, `totalCollateralValue -= amount`; `bufferAmount -= amount`; funds sent to designated risk‑module. |
+| `rfqSubmit(user, apxAmt, quote)` | `apxAmt:uint256`, `quote:uint256` | `!paused`, `apxAmt ≤ balanceApxUSD(user)` | Record RFQ entry `pending[user] = {apxAmt, quote}`. |
+| `rfqExecute(counterparty, user)` | – | `authorizedCounterparties[counterparty]`, `pending[user] exists` | Burn `apxAmt`; transfer `quote` USDC to `user`; delete pending entry. |
+| `arbitrageMint(arbitrageur, usdcAmt)` | `usdcAmt:uint256` | `whitelist[arbitrageur]`, `apxUSD price > $1` | Transfer `usdcAmt` to buffer; mint `usdcAmt` apxUSD at $1 peg; `totalMintedApxUSD += usdcAmt`; `totalCollateralValue += usdcAmt`. |
+| `arbitrageRedeem(arbitrageur, apxAmt)` | `apxAmt:uint256` | `whitelist[arbitrageur]`, `apxUSD price < $1` | Burn `apxAmt`; transfer `apxAmt × redemptionValue` USDC from buffer; `totalMintedApxUSD -= apxAmt`; `totalCollateralValue -= apxAmt × redemptionValue`. |
+| `streamYield(amount, period)` *(LinearVestV0)* | `amount:uint256`, `period:uint256` | `caller = Vault` | `totalApyAssets += amount`; vest linearly over `period`; only non‑cooldown apyUSD holders accrue. |
+| `activateBackstop()` | – | `governance vote passes`, catastrophic condition | `redemptionValue = totalCollateralValue / totalMintedApxUSD`; distribute all assets pro‑rata to apxUSD holders; `bufferAmount = 0`. |
+
+*All mutating functions are protected by `nonReentrant` and emit appropriate events.*  
 
 ---  
 
-## 1. State Variables  
+**Key Quantitative Guarantees**  
 
-| Name | Type | Meaning / Invariant |
-|------|------|---------------------|
-| `totalCollateralValue` | `uint256` (USD‑scaled × 1e18) | Value of Prefs + bonds held off‑chain. |
-| `redemptionValue` | `uint256` (USD‑scaled) | Dollar price used for all apxUSD redemptions (≥ 1 USD). |
-| `liquidityBuffer` | `uint256` (USD‑scaled) | Over‑collateralisation; must be **≥ maxHistoricalTVLDrawdown** and never decrease under stress. |
-| `exchangeRate` | `uint256` (ray = 1e27) | apxUSD / apyUSD multiplier; **≥ 1** and **non‑decreasing**. |
-| `globalPause` | `bool` | When `true` all `deposit`/`mint` revert. |
-| `denyList` | `mapping(address ⇒ bool)` | `true` ⇒ address blocked from deposit/mint. |
-| `cooldownEnd[bytes32]` | `mapping(bytes32 ⇒ uint256)` | Timestamp when a specific `apxUSD_unlock` NFT becomes claimable. |
-| `unlockFeeSlope` | `uint256` (basis‑points per second) | Linear fee slope = `(3500‑10) bps / 20 days`. |
-| `unlockReceiptId` | `uint256` (counter) | Auto‑incremented ID for each Unlock Receipt NFT. |
-| `vaultShares` | `mapping(address ⇒ uint256)` | apyUSD ERC‑4626 share balance (non‑rebasing). |
-| `vestedYield` | `uint256` (USD‑scaled) | Amount already streamed to the vault (from `LinearVestV0`). |
-| `rfqActive` | `bool` | `true` while an RFQ redemption request is open. |
-| `bufferDeployVotes[address]` | `mapping(address ⇒ uint256)` | Governance‑token‑weighted votes for buffer deployment. |
+- **Peg:** `apxUSD` minted at exactly **$1** (1 USDC = 1 apxUSD).  
+- **Over‑collateralization:** `bufferAmount ≥ 0` at all times; must cover the largest historical TVL draw‑down of comparable stablecoins.  
+- **Yield:** `exchangeRate` is monotonic non‑decreasing; no rebasing of apyUSD balances.  
+- **Cooldown:** Flexible unlocks lock assets for **≥ 3 days**; early claim fee = `3.5% – (elapsed/20days)×(3.4%)`, floor **0.1%**.  
 
----  
-
-## 2. Actors  
-
-| Actor | Authority / Role |
-|-------|------------------|
-| **WhitelistedUser** | Can call `mint` / `redeem` (must be on‑chain whitelist). |
-| **AnyUser** | Permissionless `deposit`, `lock`, `unlock`, `claim`. |
-| **GovernanceHolder** | Calls `voteBufferDeployment`. |
-| **OffchainTreasury** | Receives USDC, buys Prefs + bonds, reports `totalCollateralValue`. |
-| **YieldDistributor** | Calls `pushYield(uint256 amount)` to credit the vault. |
-| **ApprovedCounterparty** | Executes RFQ redemption at competitive price. |
-| **Admin** | Calls `pause`, `unpause`, `addToDenyList`, `removeFromDenyList`. |
-
----  
-
-## 3. Operations  
-
-| Operation | Inputs | Preconditions (must hold) | Effects (state change) |
-|-----------|--------|--------------------------|--------------------------|
-| `deposit(uint256 assets, address receiver)` | `assets` apxUSD, `receiver` | `!globalPause` ∧ `!denyList[msg.sender]` ∧ `!denyList[receiver]` ∧ `assets > 0` | `transferFrom(msg.sender, vault, assets)`<br>`shares = assets * 1e27 / exchangeRate`<br>`vaultShares[receiver] += shares` |
-| `mint(uint256 shares, address receiver)` | `shares` apyUSD, `receiver` | Same as `deposit` + `shares > 0` | `required = shares * exchangeRate / 1e27`<br>`transferFrom(msg.sender, vault, required)`<br>`vaultShares[receiver] += shares` |
-| `lock(uint256 amount)` | `amount` apxUSD | `amount > 0` | `transferFrom(msg.sender, vault, amount)`<br>`shares = amount * 1e27 / exchangeRate`<br>`vaultShares[msg.sender] += shares` |
-| `unlock(uint256 amount)` | `amount` apxUSD (requested) | `amount > 0` ∧ `vaultShares[msg.sender] ≥ amount * exchangeRate / 1e27` | Burn corresponding `shares`.<br>`unlockId = ++unlockReceiptId`<br>`cooldownEnd[unlockId] = block.timestamp + 20 days`<br`mint UnlockReceiptNFT(unlockId, amount, msg.sender)` |
-| `claim(uint256 unlockId)` | `unlockId` | `block.timestamp ≥ cooldownEnd[unlockId]` ∧ `ownerOf(unlockId) == msg.sender` | Burn UnlockReceiptNFT.<br>`transfer(apxUSD, msg.sender, amount)` |
-| `redeem(uint256 shares, address receiver)` | `shares` apyUSD | `shares > 0` ∧ `vaultShares[msg.sender] ≥ shares` | Burn `shares`.<br>`amount = shares * exchangeRate / 1e27`<br>`unlockId = ++unlockReceiptId`<br>`cooldownEnd[unlockId] = block.timestamp + 20 days`<br>`mint UnlockReceiptNFT(unlockId, amount, receiver)` |
-| `submitRFQ(RFQRequest req)` | `req.amount` apxUSD | `!rfqActive` ∧ `req.amount ≤ vaultBalance` | `rfqActive = true`<br>`store req` |
-| `executeRFQ(address counterparty, uint256 priceBps)` | `counterparty`, `priceBps` | `rfqActive` ∧ `counterparty ∈ ApprovedCounterparties` | Transfer `req.amount` apxUSD to `counterparty` at `priceBps` discount/premium.<br>`rfqActive = false` |
-| `pushYield(uint256 amount)` | `amount` apxUSD | `amount > 0` | `vestedYield += amount`<br>`LinearVestV0.startVesting(amount, 20 days)` |
-| `voteBufferDeployment(uint256 amount)` | `amount` USD‑scaled | `msg.sender` holds governance tokens ≥ `amount` | `bufferDeployVotes[msg.sender] += amount` |
-| `pause()` / `unpause()` | – | `msg.sender == admin` | `globalPause = true/false` |
-| `addToDenyList(address a)` / `removeFromDenyList(address a)` | `a` | `msg.sender == admin` | `denyList[a] = true/false` |
-
-**Notes on Quantitative Rules**  
-
-* **Cooldown** = 20 days (≈ 1 728 000 seconds).  
-* **Early‑unlock fee** = `3.5% – ( (block.timestamp‑start) * unlockFeeSlope )`, floor = 0.1 %.  
-* **ExchangeRate** never drops below `1e27` (i.e., 1.0) and is updated only upward after each yield vesting tranche.  
-* **Liquidity Buffer** must satisfy `liquidityBuffer ≥ maxHistoricalTVLDrawdown` (e.g., ≥ 30 % of peak TVL).  
-* **Yield streaming**: linear over 20 days from `pushYield` → `LinearVestV0`.  
-* **Unlock Receipt NFT** is non‑transferable: `transfer`/`transferFrom` always revert.  
-
----  
-
-*All operations are atomic; state updates occur before any external call to prevent re‑entrancy.*  
+*All state transitions are atomic and deterministic, enabling formal verification of safety properties.*  

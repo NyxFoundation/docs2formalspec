@@ -1,4 +1,4 @@
-# > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/apyx-overview/how-apyx-works.md).
+# How Apyx Works
 _source: https://docs.apyx.fi/apyx-overview/how-apyx-works.md_
 
 > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/apyx-overview/how-apyx-works.md).
@@ -71,7 +71,7 @@ Use this mechanism when the answer is not explicitly present in the current page
 
 ---
 
-# > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/product-overview/apxusd-overview.md).
+# apxUSD
 _source: https://docs.apyx.fi/product-overview/apxusd-overview.md_
 
 > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/product-overview/apxusd-overview.md).
@@ -149,7 +149,7 @@ Use this mechanism when the answer is not explicitly present in the current page
 
 ---
 
-# > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/product-overview/apyusd-overview.md).
+# apyUSD
 _source: https://docs.apyx.fi/product-overview/apyusd-overview.md_
 
 > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/product-overview/apyusd-overview.md).
@@ -222,7 +222,7 @@ Use this mechanism when the answer is not explicitly present in the current page
 
 ---
 
-# > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/solution-overview/peg-stability-model.md).
+# Peg Stability Model
 _source: https://docs.apyx.fi/solution-overview/peg-stability-model.md_
 
 > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/solution-overview/peg-stability-model.md).
@@ -291,7 +291,7 @@ Use this mechanism when the answer is not explicitly present in the current page
 
 ---
 
-# > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md).
+# Yield Distribution
 _source: https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md_
 
 > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md).
@@ -339,7 +339,7 @@ Use this mechanism when the answer is not explicitly present in the current page
 
 ---
 
-# > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/solution-overview/capitalization-framework.md).
+# Capitalization Framework
 _source: https://docs.apyx.fi/solution-overview/capitalization-framework.md_
 
 > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/solution-overview/capitalization-framework.md).
@@ -405,7 +405,7 @@ Use this mechanism when the answer is not explicitly present in the current page
 
 ---
 
-# > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/technical-overview/protocol-contracts-overview.md).
+# Overview
 _source: https://docs.apyx.fi/technical-overview/protocol-contracts-overview.md_
 
 > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/technical-overview/protocol-contracts-overview.md).
@@ -451,7 +451,7 @@ Use this mechanism when the answer is not explicitly present in the current page
 
 ---
 
-# > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/technical-overview/locking.md).
+# Locking apxUSD for apyUSD
 _source: https://docs.apyx.fi/technical-overview/locking.md_
 
 > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/technical-overview/locking.md).
@@ -653,7 +653,7 @@ Use this mechanism when the answer is not explicitly present in the current page
 
 ---
 
-# > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/technical-overview/unlocking.md).
+# Unlocking apyUSD for apxUSD
 _source: https://docs.apyx.fi/technical-overview/unlocking.md_
 
 > For the complete documentation index, see [llms.txt](https://docs.apyx.fi/llms.txt). Markdown versions of documentation pages are available by appending `.md` to page URLs; this page is available as [Markdown](https://docs.apyx.fi/technical-overview/unlocking.md).
