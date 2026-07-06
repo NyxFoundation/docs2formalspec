@@ -33,8 +33,11 @@ ingest (URL→trafilatura→markdown | file→text)
 - 今後: 要件カバレッジ(formalizable要件のうちtheorem化された率)、vacuity check(`True`定理の検出)
 
 ## TODO / 未決
-- [ ] 類似研究サーベイの反映(調査エージェント実行中 → docs/01-related-work.md)
-- [ ] apyx プロトコルのドキュメントURL確定(調査中 → docs/02-apyx.md)
-- [ ] docsサイトのクロール(単一URLだけでなくサイトマップ/リンク追跡)
-- [ ] SPECAプラグイン化のインターフェース設計(docs/03-speca-plugin.md 予定)
-- [ ] 自己改善ループ: 出力レビュー用モデル (`review_model`) による spec 完備性チェック
+- [x] 類似研究サーベイの反映 → docs/01-related-work.md(採用決定7項目は同ファイル末尾)
+- [x] apyx プロトコルのドキュメントURL確定 → docs/02-apyx.md(llms.txt インデックス、.md直配信)
+- [x] Clover風ラウンドトリップ整合ゲート → src/d2fs/review.py(informalize→judge、full/partial/vacuous/mismatch)
+- [ ] ベースライン実行(apyx 9 docs)の品質評価 → docs/03-eval-log.md に記録予定
+- [ ] EARS風制約構文の抽出プロンプトへの導入(ベースライン評価後)
+- [ ] docsサイトのクロール(llms.txt 対応)
+- [ ] SPECAプラグイン化のインターフェース設計(docs/04-speca-plugin.md 予定)
+- [ ] 証明ディスチャージパス(cheap tactics → 将来 Goedel-Prover-V2)

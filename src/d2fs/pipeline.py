@@ -67,6 +67,13 @@ def run(system_name: str, sources: list[str], cfg: Config | None = None, log=pri
         "ok": result.ok, "attempts": result.attempts, "theorems": result.theorem_count,
         "sorries": result.sorry_count,
     }, indent=1))
+    log("[review] round-trip consistency gate")
+    from .review import roundtrip_review
+
+    review = roundtrip_review(llm, cfg, reqs, result.lean_code)
+    (outdir / "review.json").write_text(json.dumps(review, ensure_ascii=False, indent=1))
+    log(f"[review] verdicts={review['counts']} full-coverage={review['coverage_full']:.0%}")
+
     log(f"[done] ok={result.ok} theorems={result.theorem_count} sorries={result.sorry_count}")
     return {
         "outdir": str(outdir),
