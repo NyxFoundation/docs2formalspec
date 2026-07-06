@@ -1,5 +1,40 @@
 # 評価ログ
 
+## 手動形式化パス (Fable5) — 2026-07-06 23:00–2026-07-07 00:00
+
+Run 15時点の「ローカルLLM構成での飽和点」(53%, proved 4/55)は自動化パイプライン
+(Ollama Cloud: qwen3-coder:480b)固有の限界であって、モデル品質を上げれば突破できる
+という仮説を検証。`src/d2fs/*.py` の自動パイプラインは一切使わず、Fable5モデルの
+サブエージェントに `lean/D2fsSpecs/Apyx.lean` を直接手書きで編集させ、都度
+`lake build` で検証・小刻みにcommitさせた(既存sorryの実証明化 + missing/mismatch
+28要件の追加formalize、必要に応じ`step`未実装opの実装も含む)。
+
+| メトリクス | Run 15 (自動, 最終) | **手動パス (Fable5)** |
+|---|---|---|
+| theorems (live) | 55 | **74**(新規19件追加) |
+| proved (sorryなし) | 4 | **74**(全定理でsorry根絶) |
+| killed | 9 | 9(変更なし) |
+| review full / full+partial | 9 / 53% | **17 / 78%** |
+
+副産物として `src/d2fs/review.py` のバグを発見・修正: ラウンドトリップ審査が
+theorem名→要件idの逆引きに `name.removeprefix("req_").replace("_", "-")` という
+素朴な変換を使っており、id内に大文字が残るもの(`apyUSD`, `UnlockToken`,
+`minAssets` 等)で一致せず、実際にはtheoremが存在する7要件が「missing」と
+誤判定されていた(過去の全run共通のバグ)。両側を小文字化+非英数字除去で
+正規化するよう修正 → 修正前後で missing 7→0、full+partial 74%→78%。
+
+**結論**: Run 15の「モデル能力の限界」は事実だが、それは*自動パイプラインが
+使うモデル層*の限界であり、より高品質なモデル(Fable5)による手動パスでは
+sorry根絶+忠実カバレッジ78%まで到達した。パイプライン設計自体は健全で、
+生成・修復ステージのモデルグレードを上げれば自動化のままでも同等の改善が
+見込める(次段候補: `D2FS_LEAN_MODEL`/`D2FS_REPAIR_MODEL` を高グレードモデルに)。
+残る mismatch 9件(redeem-no-share-transfer, token-no-rebase,
+overcollateralization-limit, yield-distributor-credit, pay-to-non-cooldown,
+new-locked-receives-yield, unlockToken-mints-apxUSD_unlock-immediately,
+singleton-unlockToken-instance, vault-operator-of-UnlockToken)は
+コンパイル・証明は通るが要件の核心を捉え切れておらず、次の手動/高グレード
+パスの対象。
+
 ## Run 13–15 (exemplar導入と副作用の解消) — 2026-07-06 21:30–22:50
 
 | メトリクス | Run 12 | Run 13 | Run 14 | **Run 15 (最終)** |

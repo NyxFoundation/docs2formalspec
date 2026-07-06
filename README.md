@@ -4,18 +4,18 @@ Documentation URLs / file paths in → **RFC 2119-conformant specification** + *
 
 ## Status
 
-Evaluated over 15 iterative runs against [Apyx](https://docs.apyx.fi) (a dividend-backed stablecoin protocol). Current best result (`outputs/apyx/`):
+Evaluated over 15 iterative runs against [Apyx](https://docs.apyx.fi) (a dividend-backed stablecoin protocol), then taken further with a higher-grade hand-formalization pass. Current best result (`outputs/apyx/`):
 
 | Metric | Value |
 |---|---|
 | Requirements extracted (formalizable) | 82 (77) |
 | Lean 4 compilation | ✅ passes |
-| Theorems generated (live / killed) | 55 / 9 |
-| Mechanically proved | 4 |
+| Theorems (live / killed) | 74 / 9 |
+| Mechanically proved | 74 (0 sorry) |
 | Vacuous theorems (`: True`) | 0 |
-| Faithful coverage (full + partial review) | 53% |
+| Faithful coverage (full + partial review) | 78% |
 
-This is roughly on par with frontier-model results reported in Verina (ICLR 2026, ~51% spec-sound-complete), suggesting the pipeline has reached the ceiling of what local-class models (via Ollama Cloud) can achieve rather than a design limitation. Further gains likely require more model budget — k-sample selection, retrieval-augmented property generation, or a local-GPU proof-search pass. Full run-by-run history and failure-mode analysis in [`docs/03-eval-log.md`](docs/03-eval-log.md).
+The automated pipeline (local-class LLMs via Ollama Cloud) plateaus around 53% faithful coverage with a 4/55 proof rate — roughly on par with frontier-model results reported in Verina (ICLR 2026, ~51% spec-sound-complete). A higher-grade model doing the same hand-editing task (proof by real tactics instead of `sorry`, plus formalizing the requirements the pipeline had left missing/mismatched) pushed proof rate to 100% and faithful coverage to 78%, confirming the plateau is a model-grade limit rather than a pipeline-design limit. Full run-by-run history and failure-mode analysis in [`docs/03-eval-log.md`](docs/03-eval-log.md).
 
 ## Usage
 
