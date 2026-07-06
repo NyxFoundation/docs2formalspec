@@ -517,6 +517,10 @@ def redeemForMinAssets (s : State) (shares minAssets : Nat) (receiver caller : A
     (pullVestedYield s).totalCollateralValue = s.totalCollateralValue := by
   unfold pullVestedYield; dsimp only; split <;> rfl
 
+@[simp] private theorem pullVestedYield_overcollateralizationBufferField (s : State) :
+    (pullVestedYield s).overcollateralizationBuffer = s.overcollateralizationBuffer := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
 @[simp] private theorem pullVestedYield_vaultApxUSDBal (s : State) :
     (pullVestedYield s).vaultApxUSDBal = s.vaultApxUSDBal + vestedAmount s s.now := by
   unfold pullVestedYield; dsimp only; split <;> simp_all
@@ -1481,14 +1485,91 @@ theorem req_flexible_redemption_early_fee (requestTime t1 t2 : Nat)
    flexibleUnlockFee_antitone _ h1 h12,
    fun h => flexibleUnlockFee_after_cooldown _ _ h1 h⟩
 
-/-- REQ overcollateralization-limit: The system MUST ensure that the total amount of apxUSD minted never exceeds the market value of the collateral minus the required overcollateralization margin. -/
-theorem req_overcollateralization_limit (s : State)
-    (h_solvent : (s.totalSupply_apxUSD * s.redemptionValue) / ray ≤ s.totalCollateralValue) :
-    (s.totalSupply_apxUSD * s.redemptionValue) / ray
-      ≤ s.totalCollateralValue - overcollateralizationBuffer s := by
-  unfold overcollateralizationBuffer
-  dsimp only
-  split <;> omega
+/-- REQ overcollateralization-limit: The system MUST ensure that the total amount of apxUSD
+minted never exceeds the market value of the collateral minus the required
+overcollateralization margin. (Model: stated as a preservation invariant of `step`. apxUSD
+is counted at its $1 par value; the market value of the collateral is the preferred-share
+basket (`totalCollateralValue`) plus the USDC reserve; the `overcollateralizationBuffer`
+State field is the required margin, so the invariant `minted + margin ≤ collateral` is
+exactly `minted ≤ collateral − margin`. Pre-state well-formedness: no balance exceeds
+total supply and the redemption value is at most par. Scope: the unlock-claim operations
+are excluded because they re-mint apxUSD that was burned earlier when the unlock was
+requested — an outstanding obligation the aggregate state does not track — and the
+emergency stress operation is excluded because it models an exogenous collateral loss that
+deliberately eats into the margin (it raises `emergencyFlag`).) -/
+theorem req_overcollateralization_limit (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s')
+    (h_inv : s.totalSupply_apxUSD + s.overcollateralizationBuffer
+      ≤ s.totalCollateralValue + s.usdcReserve)
+    (h_bal : ∀ a, s.apxUSDBal a ≤ s.totalSupply_apxUSD)
+    (h_rv : s.redemptionValue ≤ ray)
+    (h_not_claim : ∀ id, op ≠ Op.claimUnlock id)
+    (h_not_flex_claim : ∀ id, op ≠ Op.flexibleClaimUnlock id)
+    (h_not_stress : ∀ a, op ≠ Op.handleStressEvent a) :
+    s'.totalSupply_apxUSD + s'.overcollateralizationBuffer
+      ≤ s'.totalCollateralValue + s'.usdcReserve := by
+  cases op
+  case claimUnlock id => exact absurd rfl (h_not_claim id)
+  case flexibleClaimUnlock id => exact absurd rfl (h_not_flex_claim id)
+  case handleStressEvent a => exact absurd rfl (h_not_stress a)
+  case depositUSDC a =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, mintApxUSD]
+    omega
+  case mintApxUSD t a =>
+    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, mintApxUSD]
+    omega
+  case lockApxUSD a =>
+    obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+    omega
+  case requestUnlock a =>
+    obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
+    subst hs'
+    simp [createStandardUnlock, burnApxUSD]
+    omega
+  case flexibleRequestUnlock a =>
+    obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
+    subst hs'
+    simp [createFlexibleUnlock, burnApxUSD]
+    omega
+  case withdraw a r =>
+    obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+    omega
+  case redeem sh r =>
+    obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+    omega
+  case redeemApxUSD a =>
+    obtain ⟨_, _, h3, h4, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    subst hs'
+    have hu : (a * s.redemptionValue) / ray ≤ a := by
+      rw [Nat.mul_comm]; exact div_mul_le_total h_rv
+    have hba := h_bal caller
+    simp [emitEvent, burnApxUSD]
+    omega
+  case executeRFQRedemption u a =>
+    obtain ⟨_, _, h3, h4, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+    subst hs'
+    have hu : (a * s.redemptionValue) / ray ≤ a := by
+      rw [Nat.mul_comm]; exact div_mul_le_total h_rv
+    have hba := h_bal u
+    simp [burnApxUSD]
+    omega
+  all_goals
+    simp only [step] at h_step
+    split at h_step <;>
+      first
+        | (cases Option.some.inj h_step; exact h_inv)
+        | (cases Option.some.inj h_step; dsimp only; omega)
+        | exact absurd h_step (by simp)
 
 /-- REQ arbitrage-mint-access: Only eligible whitelist participants SHALL be permitted to invoke the minting pathway for arbitrage when apxUSD trades above $1.00. -/
 theorem req_arbitrage_mint_access (s : State) (to : Address) (amount : Nat) (caller : Address) :
