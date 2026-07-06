@@ -1324,15 +1324,19 @@ theorem req_redeem_for_min_assets_revert_if_below_min_assets (s : State)
   simp [redeemForMinAssets, h]
 
 /-- REQ unlockToken-mints-apxUSD_unlock-immediately: The UnlockToken contract MUST mint
-apxUSD_unlock tokens to the user immediately after the deposit. (Model: "the deposit" is
-apxUSD entering the UnlockToken contract. That happens when the vault deposits the
-withdrawn apxUSD during its `withdraw`/`redeem` operations — see REQ
-vault-deposits-apxUSD-into-UnlockToken — and when a user deposits apxUSD directly via
-`requestUnlock`/`flexibleRequestUnlock`. In every one of these cases the apxUSD_unlock
-token is minted to the user within the very same atomic step as the deposit: the freshly
-allocated position is owned by the user — the `receiver` for vault-initiated
-withdrawals/redeems, the depositing caller otherwise — and carries the full deposited
-apxUSD amount. There is no separate or delayed mint.) -/
+apxUSD_unlock tokens to the user immediately after the deposit. (Source: "User immediately
+receives apxUSD_unlock tokens (UnlockToken shares)"; "Minting occurs instantly after the
+vault deposits assets." "The deposit" is therefore the vault depositing apxUSD assets INTO
+the UnlockToken contract — the step of the withdraw/redeem flow in which withdrawn apxUSD
+enters the UnlockToken registry as a pending unlock — not the user's initial deposit into
+the vault. Model: the vault deposits apxUSD into the UnlockToken registry during
+`Op.withdraw`/`Op.redeem` (and a user deposits apxUSD directly via
+`requestUnlock`/`flexibleRequestUnlock`). The theorem states that in the very same atomic
+step as each such deposit, the UnlockToken contract mints the apxUSD_unlock position to
+the user: the freshly allocated position at the registry counter is owned by the user —
+the `receiver` of the vault-initiated withdraw/redeem, the depositing caller otherwise —
+and carries the full deposited apxUSD amount. Minting is instant; there is no separate or
+delayed mint step.) -/
 theorem req_unlock_token_mints_apx_usd_unlock_immediately (s : State) :
     (∀ (assets : Nat) (receiver caller : Address) (s' : State),
       step s (Op.withdraw assets receiver) caller = some s' →
