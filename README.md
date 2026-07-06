@@ -10,10 +10,10 @@ Evaluated over 15 iterative runs against [Apyx](https://docs.apyx.fi) (a dividen
 |---|---|
 | Requirements extracted (formalizable) | 82 (77) |
 | Lean 4 compilation | ✅ passes |
-| Theorems (live / killed) | 74 / 9 |
-| Mechanically proved | 74 (0 sorry) |
+| Theorems (live / killed) | 73 / 9 |
+| Mechanically proved | 73 (0 sorry) |
 | Vacuous theorems (`: True`) | 0 |
-| Faithful coverage (full + partial review) | 78% |
+| Faithful coverage (full + partial review) | 82% |
 
 The automated pipeline (local-class LLMs via Ollama Cloud) plateaus around 53% faithful coverage with a 4/55 proof rate — roughly on par with frontier-model results reported in Verina (ICLR 2026, ~51% spec-sound-complete). A higher-grade model doing the same hand-editing task (proof by real tactics instead of `sorry`, plus formalizing the requirements the pipeline had left missing/mismatched) pushed proof rate to 100% and faithful coverage to 78%, confirming the plateau is a model-grade limit rather than a pipeline-design limit. Full run-by-run history and failure-mode analysis in [`docs/03-eval-log.md`](docs/03-eval-log.md).
 
