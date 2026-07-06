@@ -513,6 +513,14 @@ def redeemForMinAssets (s : State) (shares minAssets : Nat) (receiver caller : A
     (pullVestedYield s).unlockTokenAmount = s.unlockTokenAmount := by
   unfold pullVestedYield; dsimp only; split <;> rfl
 
+@[simp] private theorem pullVestedYield_unlockTokenAddress (s : State) :
+    (pullVestedYield s).unlockTokenAddress = s.unlockTokenAddress := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_unlockTokenOperator (s : State) :
+    (pullVestedYield s).unlockTokenOperator = s.unlockTokenOperator := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
 @[simp] private theorem pullVestedYield_usdcBal (s : State) :
     (pullVestedYield s).usdcBal = s.usdcBal := by
   unfold pullVestedYield; dsimp only; split <;> rfl
@@ -891,6 +899,118 @@ private theorem apyUSDBal_unchanged_of_non_share_op (s : State) (op : Op) (calle
         | (cases Option.some.inj h_step; rfl)
         | exact absurd h_step (by simp)
 
+/-- Helper: no operation ever changes which address is the UnlockToken operator. -/
+private theorem step_unlockTokenOperator_unchanged (s : State) (op : Op) (caller : Address)
+    (s' : State) (h_step : step s op caller = some s') :
+    s'.unlockTokenOperator = s.unlockTokenOperator := by
+  cases op
+  case depositUSDC amount =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, mintApxUSD]
+  case mintApxUSD to amount =>
+    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, mintApxUSD]
+  case lockApxUSD a =>
+    obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  case requestUnlock a =>
+    obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
+    subst hs'
+    simp [createStandardUnlock, burnApxUSD]
+  case claimUnlock id =>
+    obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
+    subst hs'
+    simp [mintApxUSD, burnUnlockNFT]
+  case redeemApxUSD a =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, burnApxUSD]
+  case withdraw a r =>
+    obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  case redeem sh r =>
+    obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  case flexibleRequestUnlock a =>
+    obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
+    subst hs'
+    simp [createFlexibleUnlock, burnApxUSD]
+  case flexibleClaimUnlock id =>
+    obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
+    subst hs'
+    simp [mintApxUSD, burnUnlockNFT]
+  case executeRFQRedemption u am =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+    subst hs'
+    simp [burnApxUSD]
+  all_goals
+    simp only [step] at h_step
+    split at h_step <;>
+      first
+        | (cases Option.some.inj h_step; rfl)
+        | exact absurd h_step (by simp)
+
+/-- Helper: no operation ever changes the recorded UnlockToken instance address. -/
+private theorem step_unlockTokenAddress_unchanged (s : State) (op : Op) (caller : Address)
+    (s' : State) (h_step : step s op caller = some s') :
+    s'.unlockTokenAddress = s.unlockTokenAddress := by
+  cases op
+  case depositUSDC amount =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, mintApxUSD]
+  case mintApxUSD to amount =>
+    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, mintApxUSD]
+  case lockApxUSD a =>
+    obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  case requestUnlock a =>
+    obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
+    subst hs'
+    simp [createStandardUnlock, burnApxUSD]
+  case claimUnlock id =>
+    obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
+    subst hs'
+    simp [mintApxUSD, burnUnlockNFT]
+  case redeemApxUSD a =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, burnApxUSD]
+  case withdraw a r =>
+    obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  case redeem sh r =>
+    obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  case flexibleRequestUnlock a =>
+    obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
+    subst hs'
+    simp [createFlexibleUnlock, burnApxUSD]
+  case flexibleClaimUnlock id =>
+    obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
+    subst hs'
+    simp [mintApxUSD, burnUnlockNFT]
+  case executeRFQRedemption u am =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+    subst hs'
+    simp [burnApxUSD]
+  all_goals
+    simp only [step] at h_step
+    split at h_step <;>
+      first
+        | (cases Option.some.inj h_step; rfl)
+        | exact absurd h_step (by simp)
+
 /-- REQ token-no-rebase: The apyUSD token MUST NOT rebase its balances; balances may change
 only via transfers, minting, or burning. (Model: whenever any address's apyUSD balance
 changes across a step, that step was an explicit mint (`lockApxUSD`) or burn
@@ -910,13 +1030,6 @@ theorem req_token_no_rebase (s : State) (op : Op) (caller : Address) (s' : State
   all_goals
     exact absurd (apyUSDBal_unchanged_of_non_share_op _ _ _ _ h_step
       (fun _ => nofun) (fun _ _ => nofun) (fun _ _ => nofun) a) h_changed
-
--- UNFORMALIZABLE req_singleton-unlockToken-instance: "exactly one instance of UnlockToken
--- exists and is used exclusively by the apyUSD vault" is a deployment/architecture fact
--- about contract instances; the model folds every contract into a single global `State`
--- with one implicit unlock registry, so instance counting cannot be stated as a
--- state-machine property (the exclusivity half is covered by
--- req_vault_operator_of_unlock_token).
 
 /-- REQ redeem-no-share-transfer: The system MUST NOT transfer preferred shares directly to
 a participant who redeems apxUSD. (Model: preferred shares are held as `governanceTokenBal`;
@@ -1150,17 +1263,10 @@ theorem req_unlock_token_redeem_after_cooldown (s : State) (id : Nat) (owner : A
   · simp [step, h_req, h_owner, Nat.not_lt.mpr h_time]
   · simp [mintApxUSD, burnUnlockNFT]
 
-/-- REQ vault-operator-of-UnlockToken: The apyUSD vault MUST be configured as the operator
-of the UnlockToken contract, allowing it to initiate redeem requests on behalf of users
-immediately. (Model: contracts are folded into one `State`, so "operator configuration" is
-represented by exclusivity of access: if a step creates a new apxUSD_unlock position for
-some owner, that step was one of the vault's own operations — `withdraw`/`redeem`, where
-the vault initiates the unlock on the user's behalf within the same step, or the vault's
-`requestUnlock`/`flexibleRequestUnlock` entry points — and the position was allocated
-immediately at the registry's current counter. No other operation can touch the
-UnlockToken registry. Note: `claimUnlock` itself is not gated on `caller`, reflecting that
-a claim only ever pays the recorded NFT owner.) -/
-theorem req_vault_operator_of_unlock_token (s : State) (op : Op) (caller : Address) (s' : State)
+/-- Helper: a new apxUSD_unlock position can only be created by one of the vault's own
+unlock entry points (`requestUnlock`/`flexibleRequestUnlock`/`withdraw`/`redeem`), and it
+is always allocated in the single unlock registry at its current counter. -/
+private theorem unlock_position_created_only_by_vault_ops (s : State) (op : Op) (caller : Address) (s' : State)
     (h_step : step s op caller = some s') (id : Nat) (owner : Address)
     (h_new : s.unlockTokenOwner id = none)
     (h_now : s'.unlockTokenOwner id = some owner) :
@@ -1230,6 +1336,76 @@ theorem req_vault_operator_of_unlock_token (s : State) (op : Op) (caller : Addre
       first
         | (cases Option.some.inj h_step; simp_all)
         | exact absurd h_step (by simp)
+
+/-- REQ vault-operator-of-UnlockToken: The apyUSD vault MUST be configured as the operator
+of the UnlockToken contract, allowing it to initiate redeem requests on behalf of users
+immediately. (Model: the `unlockTokenOperator` State field records which address is
+authorized to trigger a claim on behalf of the recorded position owner, and `vaultAddress`
+is the vault. (1) Configuration is permanent: no operation ever changes the operator, so a
+system configured with the vault as operator — `unlockTokenOperator = vaultAddress` —
+remains so after every step. (2) The configuration actually grants the capability: whenever
+a pending unlock position exists and its cooldown has elapsed, the vault, calling as the
+configured operator (not the owner), can immediately execute the claim on behalf of the
+recorded owner, with the payout going to the owner — for both standard and flexible
+unlocks.) -/
+theorem req_vault_operator_of_unlock_token (s : State) :
+    (∀ (op : Op) (caller : Address) (s' : State), step s op caller = some s' →
+      s'.unlockTokenOperator = s.unlockTokenOperator) ∧
+    (∀ (op : Op) (caller : Address) (s' : State), step s op caller = some s' →
+      s.unlockTokenOperator = vaultAddress → s'.unlockTokenOperator = vaultAddress) ∧
+    (s.unlockTokenOperator = vaultAddress →
+      (∀ (id : Nat) (owner : Address) (amount cooldownEnd : Nat),
+        s.unlockRequests id = some (owner, amount, cooldownEnd) →
+        s.unlockTokenOwner id = some owner →
+        cooldownEnd ≤ s.now →
+        ∃ s', step s (Op.claimUnlock id) vaultAddress = some s' ∧
+          s'.apxUSDBal owner = s.apxUSDBal owner + amount) ∧
+      (∀ (id : Nat) (owner : Address) (amount requestTime cooldownEnd : Nat),
+        s.flexibleUnlockRequests id = some (owner, amount, requestTime, cooldownEnd) →
+        s.unlockTokenOwner id = some owner →
+        requestTime + minFlexibleClaim ≤ s.now →
+        ∃ s', step s (Op.flexibleClaimUnlock id) vaultAddress = some s' ∧
+          s'.apxUSDBal owner = s.apxUSDBal owner
+            + (amount - amount * flexibleUnlockFee requestTime s.now / 10000))) := by
+  refine ⟨fun op caller s' h => step_unlockTokenOperator_unchanged _ _ _ _ h,
+          fun op caller s' h hcfg => by
+            rw [step_unlockTokenOperator_unchanged _ _ _ _ h]; exact hcfg,
+          fun hcfg => ⟨?_, ?_⟩⟩
+  · intro id owner amount cooldownEnd h_req h_owner h_time
+    refine ⟨mintApxUSD (burnUnlockNFT s id) owner amount, ?_, ?_⟩
+    · simp [step, h_req, h_owner, hcfg, Nat.not_lt.mpr h_time]
+    · simp [mintApxUSD, burnUnlockNFT]
+  · intro id owner amount requestTime cooldownEnd h_req h_owner h_time
+    refine ⟨mintApxUSD (burnUnlockNFT s id) owner
+        (amount - amount * flexibleUnlockFee requestTime s.now / 10000), ?_, ?_⟩
+    · simp [step, h_req, h_owner, hcfg, Nat.not_lt.mpr h_time]
+    · simp [mintApxUSD, burnUnlockNFT]
+
+/-- REQ singleton-unlockToken-instance: There MUST be exactly one instance of UnlockToken
+and it MUST be used exclusively by the apyUSD vault. (Model: the UnlockToken instance is
+now identified explicitly by the `unlockTokenAddress` State field, with `unlockTokenAddress`
+the designated instance's address constant. (1) Singleton: no operation ever changes the
+recorded instance identity — in particular a system configured with the designated instance
+stays on it forever — so along any execution there is exactly one UnlockToken instance and
+the model has no way to deploy, switch to, or route positions through a second one. (2)
+Exclusive use by the vault: every apxUSD_unlock position ever created is allocated in this
+single instance's registry at its current counter, and only by the vault's own unlock entry
+points (`requestUnlock`/`flexibleRequestUnlock`/`withdraw`/`redeem`); no other operation
+can create a position in the registry.) -/
+theorem req_singleton_unlock_token_instance (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') :
+    s'.unlockTokenAddress = s.unlockTokenAddress ∧
+    (s.unlockTokenAddress = unlockTokenAddress →
+      s'.unlockTokenAddress = unlockTokenAddress) ∧
+    (∀ (id : Nat) (owner : Address),
+      s.unlockTokenOwner id = none → s'.unlockTokenOwner id = some owner →
+      ((∃ a, op = Op.requestUnlock a) ∨ (∃ a, op = Op.flexibleRequestUnlock a) ∨
+       (∃ a r, op = Op.withdraw a r) ∨ (∃ sh r, op = Op.redeem sh r)) ∧
+      id = s.nextUnlockId) :=
+  ⟨step_unlockTokenAddress_unchanged _ _ _ _ h_step,
+   fun hcfg => by rw [step_unlockTokenAddress_unchanged _ _ _ _ h_step]; exact hcfg,
+   fun id owner h_new h_now =>
+     unlock_position_created_only_by_vault_ops _ _ _ _ h_step id owner h_new h_now⟩
 
 
 
