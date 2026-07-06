@@ -2266,14 +2266,22 @@ theorem req_redeem_liquidate_usdc (s : State) (amount : Nat) (caller : Address) 
   subst hs'
   constructor <;> simp [emitEvent, burnApxUSD]
 
-/-- REQ yield-distributor-credit: The YieldDistributor MUST credit converted apxUSD proceeds to the apyUSD vault. -/
-theorem req_yield_distributor_credit (s : State) (amount : Nat) (caller : Address)
-    (h1 : caller = s.yieldDistributor) :
-    step s (Op.creditYield amount) caller = some { s with
-      usdcReserve := s.usdcReserve + amount,
-      vestTotal := s.vestTotal + amount,
-      vestStart := s.now } := by
-  simp [step, h1]
+/-- REQ yield-distributor-credit: The YieldDistributor MUST credit converted apxUSD
+proceeds to the apyUSD vault. (Model: the yield distributor's credit lands in the vault's
+vesting stream — from which `totalAssets` grows — and only the yield distributor may
+credit.) -/
+theorem req_yield_distributor_credit (s : State) (amount : Nat) (caller : Address) :
+    (caller = s.yieldDistributor →
+      step s (Op.creditYield amount) caller = some { s with
+        usdcReserve := s.usdcReserve + amount,
+        vestTotal := s.vestTotal + amount,
+        vestStart := s.now }) ∧
+    (caller ≠ s.yieldDistributor → step s (Op.creditYield amount) caller = none) := by
+  constructor
+  · intro h1
+    simp [step, h1]
+  · intro h1
+    simp [step, h1]
 
 /-- REQ new-locked-receives-yield: When new apyUSD is locked, it MUST immediately begin
 receiving yield, which reduces the overall percentage yield for existing holders. (Model:
