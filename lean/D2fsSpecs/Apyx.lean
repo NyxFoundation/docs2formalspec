@@ -1229,23 +1229,45 @@ theorem req_redeem_for_min_assets_revert_if_below_min_assets (s : State)
 
 /-- REQ unlockToken-mints-apxUSD_unlock-immediately: The UnlockToken contract MUST mint
 apxUSD_unlock tokens to the user immediately after the deposit. (Model: "the deposit" is
-the user handing apxUSD to the UnlockToken contract by requesting an unlock; in the very
-same `requestUnlock` — or `flexibleRequestUnlock` — step, the freshly allocated
-apxUSD_unlock token is owned by the depositor and carries the full deposited amount.) -/
-theorem req_unlock_token_mints_apx_usd_unlock_immediately (s : State) (amount : Nat)
-    (caller : Address) :
-    (∀ s', step s (Op.requestUnlock amount) caller = some s' →
+apxUSD entering the UnlockToken contract. That happens when the vault deposits the
+withdrawn apxUSD during its `withdraw`/`redeem` operations — see REQ
+vault-deposits-apxUSD-into-UnlockToken — and when a user deposits apxUSD directly via
+`requestUnlock`/`flexibleRequestUnlock`. In every one of these cases the apxUSD_unlock
+token is minted to the user within the very same atomic step as the deposit: the freshly
+allocated position is owned by the user — the `receiver` for vault-initiated
+withdrawals/redeems, the depositing caller otherwise — and carries the full deposited
+apxUSD amount. There is no separate or delayed mint.) -/
+theorem req_unlock_token_mints_apx_usd_unlock_immediately (s : State) :
+    (∀ (assets : Nat) (receiver caller : Address) (s' : State),
+      step s (Op.withdraw assets receiver) caller = some s' →
+      s'.unlockTokenOwner s.nextUnlockId = some receiver ∧
+      s'.unlockTokenAmount s.nextUnlockId = assets) ∧
+    (∀ (shares : Nat) (receiver caller : Address) (s' : State),
+      step s (Op.redeem shares receiver) caller = some s' →
+      s'.unlockTokenOwner s.nextUnlockId = some receiver ∧
+      s'.unlockTokenAmount s.nextUnlockId = redeemAssets shares s.exchangeRate) ∧
+    (∀ (amount : Nat) (caller : Address) (s' : State),
+      step s (Op.requestUnlock amount) caller = some s' →
       s'.unlockTokenOwner s.nextUnlockId = some caller ∧
       s'.unlockTokenAmount s.nextUnlockId = amount) ∧
-    (∀ s', step s (Op.flexibleRequestUnlock amount) caller = some s' →
+    (∀ (amount : Nat) (caller : Address) (s' : State),
+      step s (Op.flexibleRequestUnlock amount) caller = some s' →
       s'.unlockTokenOwner s.nextUnlockId = some caller ∧
       s'.unlockTokenAmount s.nextUnlockId = amount) := by
-  constructor
-  · intro s' h_step
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · intro assets receiver caller s' h_step
+    obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
+    subst hs'
+    constructor <;> simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  · intro shares receiver caller s' h_step
+    obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
+    subst hs'
+    constructor <;> simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  · intro amount caller s' h_step
     obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
     subst hs'
     constructor <;> simp [createStandardUnlock, burnApxUSD]
-  · intro s' h_step
+  · intro amount caller s' h_step
     obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
     subst hs'
     constructor <;> simp [createFlexibleUnlock, burnApxUSD]
