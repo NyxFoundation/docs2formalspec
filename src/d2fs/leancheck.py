@@ -224,21 +224,70 @@ def _metrics(code: str) -> tuple[int, int, int, int]:
             len(re.findall(r"^-- BROKEN:.*\btheorem\b", code, flags=re.M)))
 
 
+def _thm_name(block: str) -> str | None:
+    m = re.search(r"^\s*theorem\s+([A-Za-z0-9_']+)", block, flags=re.M)
+    return m.group(1) if m else None
+
+
 def check_and_repair(llm: LLM, cfg: Config, module_name: str, lean_code: str,
-                     max_rounds: int = 10, max_devac_rounds: int = 2, log=print) -> CheckResult:
+                     max_rounds: int = 6, max_devac_rounds: int = 2, log=print) -> CheckResult:
+    """Per-block verification loop. Error attribution by line range is unreliable
+    (one malformed theorem cascades parse errors onto its neighbors), so each
+    theorem block is compiled INDIVIDUALLY against the model; only true failures
+    escalate (targeted repair -> sorry stub -> BROKEN kill). Verified blocks are
+    cached and skipped in later rounds."""
     model_region, theorem_region = split_theorem_region(lean_code, module_name)
     blocks = split_decls(theorem_region)
+
+    # deterministic dedup of theorem names (duplicates break the full build)
+    seen: set[str] = set()
+    for i, b in enumerate(blocks):
+        name = _thm_name(b)
+        if name:
+            if name in seen:
+                log(f"[leancheck] duplicate theorem {name} — killing later copy")
+                blocks[i] = kill_block(b)
+            else:
+                seen.add(name)
+
     fail_counts: dict[int, int] = {}
+    verified: set[int] = set()
     devac_used = 0
     attempt = 0
     text, out = lean_code, ""
     while attempt < max_rounds:
         attempt += 1
+        # 1) individual verification of unverified theorem blocks
+        pending = [i for i, b in enumerate(blocks)
+                   if i not in verified and is_theorem_block(b)]
+        for i in pending:
+            ok_i, out_i = compile_snippet(cfg, module_name, model_region, blocks[i])
+            if ok_i:
+                verified.add(i)
+                continue
+            fail_counts[i] = fail_counts.get(i, 0) + 1
+            n = fail_counts[i]
+            name = _thm_name(blocks[i]) or f"block{i}"
+            if n >= 3:
+                log(f"[leancheck]   {name}: kill (3rd failure)")
+                blocks[i] = kill_block(blocks[i])
+                verified.add(i)
+            elif n == 2:
+                log(f"[leancheck]   {name}: sorry-stub (2nd failure)")
+                blocks[i] = stub_block(blocks[i])
+                if not is_theorem_block(blocks[i]):  # stub degenerated to kill
+                    verified.add(i)
+            else:
+                log(f"[leancheck]   {name}: targeted repair (1st failure)")
+                blocks[i] = repair_decl(llm, cfg, model_region, blocks[i], out_i)
+
+        # 2) full assembly build
         text, offsets = build_file(model_region, blocks, module_name)
         _write_module(cfg, module_name, text)
         ok, out = _lake_build(cfg, module_name)
         n_sorry, n_thm, n_vac, n_kill = _metrics(text)
-        log(f"[leancheck] round {attempt}: ok={ok} theorems={n_thm} sorries={n_sorry} vacuous={n_vac} killed={n_kill}")
+        log(f"[leancheck] round {attempt}: ok={ok} theorems={n_thm} sorries={n_sorry} "
+            f"vacuous={n_vac} killed={n_kill} verified={len(verified)}")
         if ok:
             vac = find_vacuous(text)
             if vac and devac_used < max_devac_rounds:
@@ -248,41 +297,38 @@ def check_and_repair(llm: LLM, cfg: Config, module_name: str, lean_code: str,
                     names = find_vacuous(b)
                     if names:
                         fixed = strip_lean_block(devacuate_lean(llm, cfg, model_region + "\n" + b, names))
-                        # keep only the theorem part of the response
                         _, fixed_thms = split_theorem_region(fixed, module_name)
                         cand = fixed_thms.strip() or fixed.strip()
                         if "theorem" in cand:
                             blocks[i] = cand
+                            verified.discard(i)
+                            fail_counts.pop(i, None)
                 continue
             return CheckResult(True, attempt, n_sorry, n_thm, n_vac, n_kill, out, text)
 
+        # full build failed though individually-verified: model drift, non-theorem
+        # junk blocks, or block interactions. Kill non-theorem blocks with errors;
+        # invalidate verification for implicated theorem blocks.
         err_lines = _error_lines(out)
-        # boundary from actual assembly: first block's start line (build_file rstrips
-        # the model region, so counting model_region's own newlines would overshoot)
         boundary = offsets[0][0] if offsets else text.count("\n") + 1
-        model_errs = [el for el in err_lines if el < boundary]
-        if model_errs and len(model_errs) == len(err_lines):
+        if all(el < boundary for el in err_lines) and err_lines:
             log("[leancheck] model-region errors — repairing model region")
-            _, model_region = ensure_compiles(llm, cfg, module_name, model_region, max_rounds=2, log=log)
+            _, model_region = ensure_compiles(llm, cfg, module_name, model_region,
+                                              max_rounds=2, log=log)
+            verified.clear()
             continue
-
-        failing = set()
+        touched = False
         for el in err_lines:
             for i, (lo, hi) in enumerate(offsets):
                 if lo <= el <= hi:
-                    failing.add(i)
-        if not failing:
-            log("[leancheck] errors not attributable to any block — stopping")
+                    if not is_theorem_block(blocks[i]):
+                        blocks[i] = kill_block(blocks[i])
+                    else:
+                        verified.discard(i)
+                    touched = True
+        if not touched:
+            log("[leancheck] errors not attributable — stopping")
             break
-        for i in sorted(failing):
-            fail_counts[i] = fail_counts.get(i, 0) + 1
-            errs = _errors_for_range(out, *offsets[i])
-            if not is_theorem_block(blocks[i]) or fail_counts[i] >= 3:
-                blocks[i] = kill_block(blocks[i])
-            elif fail_counts[i] == 2:
-                blocks[i] = stub_block(blocks[i])
-            else:
-                blocks[i] = repair_decl(llm, cfg, model_region, blocks[i], errs)
 
     n_sorry, n_thm, n_vac, n_kill = _metrics(text)
     return CheckResult(False, attempt, n_sorry, n_thm, n_vac, n_kill, out, text)
