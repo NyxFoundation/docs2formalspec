@@ -10,7 +10,7 @@ from pathlib import Path
 from .config import Config
 from .extract import Requirement, extract_requirements, render_spec
 from .ingest import ingest
-from .leancheck import CheckResult, check_and_repair, ensure_compiles
+from .leancheck import CheckResult, check_and_repair, compile_snippet, ensure_compiles
 from .leangen import gen_lean
 from .llm import LLM
 from .review import roundtrip_review
@@ -68,13 +68,15 @@ def lean_stage(system_name: str, reqs: list[Requirement], model_summary: str,
     module_name = slugify_module(system_name)
     log(f"[lean] generating {module_name}.lean")
     gate = lambda code: ensure_compiles(llm, cfg, module_name, code, log=log)  # noqa: E731
+    bgate = lambda model, chunk: compile_snippet(cfg, module_name, model, chunk)  # noqa: E731
     lean_code = gen_lean(llm, cfg, system_name, module_name, model_summary, reqs,
-                         log=log, compile_gate=gate)
+                         log=log, compile_gate=gate, batch_gate=bgate)
     result: CheckResult = check_and_repair(llm, cfg, module_name, lean_code, log=log)
     (outdir / f"{module_name}.lean").write_text(result.lean_code)
     (outdir / "leancheck.json").write_text(json.dumps({
         "ok": result.ok, "attempts": result.attempts, "theorems": result.theorem_count,
         "sorries": result.sorry_count, "vacuous": result.vacuous_count,
+        "killed": result.killed_count,
         "proved": result.theorem_count - result.sorry_count,
     }, indent=1))
     log("[review] round-trip consistency gate")

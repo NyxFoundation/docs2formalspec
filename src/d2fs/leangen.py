@@ -114,8 +114,23 @@ def gen_model(llm: LLM, cfg: Config, system_name: str, module_name: str,
     return strip_lean_block(text)
 
 
+BATCH_FIX_SYSTEM = """\
+You fix a batch of Lean 4 (v4.31, core + Std, NO mathlib) theorems that fail to \
+compile against a model that itself compiles. Common causes: identifiers or fields \
+that do not exist in the model — replace them with the actual names from the model, \
+or restate the property using what the model provides. Keep every theorem and its \
+name; use `sorry` for proofs you cannot complete; never state `True`. Output ONLY a \
+Lean code block with the corrected theorems."""
+
+
+def _clean_chunk(text: str) -> str:
+    chunk = strip_lean_block(text)
+    # theorems are appended inside the namespace; drop stray closers/imports
+    return re.sub(r"^(import .*|namespace .*|end .*)$", "", chunk, flags=re.M).strip()
+
+
 def gen_theorems(llm: LLM, cfg: Config, model_code: str, reqs: list[Requirement],
-                 batch_size: int = 8, log=print) -> str:
+                 batch_size: int = 8, log=print, batch_gate=None) -> str:
     formalizable = [r for r in reqs if r.formalizable]
     chunks = []
     for i in range(0, len(formalizable), batch_size):
@@ -132,11 +147,28 @@ def gen_theorems(llm: LLM, cfg: Config, model_code: str, reqs: list[Requirement]
             ),
             max_tokens=12_000,
         )
-        chunk = strip_lean_block(text)
-        # theorems are appended inside the namespace; drop stray closers/imports
-        chunk = re.sub(r"^(import .*|namespace .*|end .*)$", "", chunk, flags=re.M)
-        chunks.append(chunk.strip())
-    return "\n\n".join(chunks)
+        chunk = _clean_chunk(text)
+        if batch_gate and chunk:
+            ok, errs = batch_gate(chunk)
+            if not ok:
+                log("[leangen]   batch failed pre-validation; regenerating with errors")
+                retry = llm.chat(
+                    cfg.lean_model,
+                    BATCH_FIX_SYSTEM,
+                    f"Model (compiles):\n```lean\n{model_code[:14_000]}\n```\n\n"
+                    f"Failing batch:\n```lean\n{chunk}\n```\n\nErrors:\n```\n{errs[:6000]}\n```",
+                    max_tokens=12_000,
+                )
+                fixed = _clean_chunk(retry)
+                if fixed and "theorem" in fixed:
+                    ok2, _ = batch_gate(fixed)
+                    if ok2:
+                        chunk = fixed
+                        log("[leangen]   batch fixed on retry")
+                    else:
+                        chunk = fixed  # still better odds; per-decl engine finishes the job
+        chunks.append(chunk)
+    return "\n\n".join(c for c in chunks if c)
 
 
 def assemble(module_name: str, model_code: str, theorems_code: str) -> str:
@@ -166,9 +198,11 @@ def extend_model(llm: LLM, cfg: Config, model_code: str, reqs: list[Requirement]
 
 def gen_lean(llm: LLM, cfg: Config, system_name: str, module_name: str,
              model_summary: str, reqs: list[Requirement], log=print,
-             compile_gate=None) -> str:
+             compile_gate=None, batch_gate=None) -> str:
     """compile_gate: optional (model_code) -> (ok, repaired_code); models that fail
-    the gate are still used (best effort) but extensions that fail are discarded."""
+    the gate are still used (best effort) but extensions that fail are discarded.
+    batch_gate: optional (model_code, chunk) -> (ok, errors) for immediate
+    per-batch statement validation."""
     log("[leangen] phase 1: domain model")
     model_code = gen_model(llm, cfg, system_name, module_name, model_summary, reqs)
     if compile_gate:
@@ -176,7 +210,9 @@ def gen_lean(llm: LLM, cfg: Config, system_name: str, module_name: str,
         if not ok:
             log("[leangen] WARNING: model failed compile gate; proceeding best-effort")
     log("[leangen] phase 2: theorems")
-    theorems_code = gen_theorems(llm, cfg, model_code, reqs, log=log)
+    gate_for = (lambda m: (lambda chunk: batch_gate(m, chunk))) if batch_gate else (lambda m: None)
+    theorems_code = gen_theorems(llm, cfg, model_code, reqs, log=log,
+                                 batch_gate=gate_for(model_code))
 
     # model-extension feedback round: if requirements were declared unformalizable,
     # extend the model to support them and regenerate just those theorems
@@ -190,7 +226,8 @@ def gen_lean(llm: LLM, cfg: Config, system_name: str, module_name: str,
             ext_ok, extended = compile_gate(extended)
         if ext_ok:
             model_code = extended
-            extra = gen_theorems(llm, cfg, model_code, missing, log=log)
+            extra = gen_theorems(llm, cfg, model_code, missing, log=log,
+                                 batch_gate=gate_for(model_code))
             kept = "\n".join(
                 l for l in theorems_code.splitlines()
                 if not re.match(r"\s*--\s*UNFORMALIZABLE", l)

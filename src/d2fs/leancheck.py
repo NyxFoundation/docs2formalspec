@@ -30,6 +30,7 @@ class CheckResult:
     sorry_count: int
     theorem_count: int
     vacuous_count: int
+    killed_count: int
     last_output: str
     lean_code: str
 
@@ -178,12 +179,20 @@ def repair_decl(llm: LLM, cfg: Config, model_region: str, block: str, errors: st
     text = llm.chat(
         cfg.repair_model,
         REPAIR_DECL_SYSTEM,
-        f"Model (compiles, for reference):\n```lean\n{model_region[-12_000:]}\n```\n\n"
+        f"Model (compiles, for reference):\n```lean\n{model_region[:14_000]}\n```\n\n"
         f"Failing theorem:\n```lean\n{block}\n```\n\nErrors:\n```\n{errors[:4000]}\n```",
         max_tokens=4000,
     )
     fixed = strip_lean_block(text).strip()
     return fixed if "theorem" in fixed else stub_block(block)
+
+
+def compile_snippet(cfg: Config, module_name: str, model_region: str, chunk: str
+                    ) -> tuple[bool, str]:
+    """Compile model + one theorem chunk (used as a per-batch statement gate)."""
+    text, _ = build_file(model_region, [chunk], module_name)
+    _write_module(cfg, module_name, text)
+    return _lake_build(cfg, module_name)
 
 
 # ------------------------------------------------------------------ model gate
@@ -206,10 +215,13 @@ def ensure_compiles(llm: LLM, cfg: Config, module_name: str, code: str,
 
 # ------------------------------------------------------------------- main loop
 
-def _metrics(code: str) -> tuple[int, int, int]:
-    return (len(re.findall(r"\bsorry\b", code)),
-            len(re.findall(r"^\s*theorem\b", code, flags=re.M)),
-            len(find_vacuous(code)))
+def _metrics(code: str) -> tuple[int, int, int, int]:
+    """(sorries, theorems, vacuous, killed) — counted on live (non-comment) code."""
+    live = "\n".join(l for l in code.splitlines() if not l.lstrip().startswith("--"))
+    return (len(re.findall(r"\bsorry\b", live)),
+            len(re.findall(r"^\s*theorem\b", live, flags=re.M)),
+            len(find_vacuous(live)),
+            len(re.findall(r"^-- BROKEN:.*\btheorem\b", code, flags=re.M)))
 
 
 def check_and_repair(llm: LLM, cfg: Config, module_name: str, lean_code: str,
@@ -225,8 +237,8 @@ def check_and_repair(llm: LLM, cfg: Config, module_name: str, lean_code: str,
         text, offsets = build_file(model_region, blocks, module_name)
         _write_module(cfg, module_name, text)
         ok, out = _lake_build(cfg, module_name)
-        n_sorry, n_thm, n_vac = _metrics(text)
-        log(f"[leancheck] round {attempt}: ok={ok} theorems={n_thm} sorries={n_sorry} vacuous={n_vac}")
+        n_sorry, n_thm, n_vac, n_kill = _metrics(text)
+        log(f"[leancheck] round {attempt}: ok={ok} theorems={n_thm} sorries={n_sorry} vacuous={n_vac} killed={n_kill}")
         if ok:
             vac = find_vacuous(text)
             if vac and devac_used < max_devac_rounds:
@@ -242,7 +254,7 @@ def check_and_repair(llm: LLM, cfg: Config, module_name: str, lean_code: str,
                         if "theorem" in cand:
                             blocks[i] = cand
                 continue
-            return CheckResult(True, attempt, n_sorry, n_thm, n_vac, out, text)
+            return CheckResult(True, attempt, n_sorry, n_thm, n_vac, n_kill, out, text)
 
         err_lines = _error_lines(out)
         # boundary from actual assembly: first block's start line (build_file rstrips
@@ -272,5 +284,5 @@ def check_and_repair(llm: LLM, cfg: Config, module_name: str, lean_code: str,
             else:
                 blocks[i] = repair_decl(llm, cfg, model_region, blocks[i], errs)
 
-    n_sorry, n_thm, n_vac = _metrics(text)
-    return CheckResult(False, attempt, n_sorry, n_thm, n_vac, out, text)
+    n_sorry, n_thm, n_vac, n_kill = _metrics(text)
+    return CheckResult(False, attempt, n_sorry, n_thm, n_vac, n_kill, out, text)
