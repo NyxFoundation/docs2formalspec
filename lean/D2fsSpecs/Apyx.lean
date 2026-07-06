@@ -1212,19 +1212,57 @@ theorem req_monthly_yield_rate_set (s : State) (bps : Nat) :
       by simp [step, h_month, h_bound], rfl⟩
 
 /-- REQ pay-to-non-cooldown: Yield MUST be paid to all apyUSD tokens that are not currently
-undergoing cooldown. (Model: yield is paid pro-rata through the vault exchange rate, which
-rises as credited yield vests. Every address still holding apyUSD — tokens undergoing
-cooldown were burned at request time, leaving their holders with frozen apxUSD_unlock
-positions instead — sees the apxUSD assets redeemable for its shares grow (weakly) as time
-passes, while a frozen cooldown position's payout amount receives none of the vesting
-yield.) -/
-theorem req_pay_to_non_cooldown (s : State) (holder : Address) (dt : Nat) :
-    redeemAssets (s.apyUSDBal holder) (computeExchangeRate s)
-      ≤ redeemAssets (s.apyUSDBal holder) (computeExchangeRate { s with now := s.now + dt }) ∧
-    (∀ id, ({ s with now := s.now + dt }).unlockTokenAmount id = s.unlockTokenAmount id) := by
-  constructor
-  · exact Nat.div_le_div_right (Nat.mul_le_mul_left _ (computeExchangeRate_mono_now s dt))
-  · intro id; rfl
+undergoing cooldown. (Model: paying yield is `Op.creditYield` by the authorized yield
+distributor, and it is distributed pro-rata through the vault exchange rate, so it reaches
+exactly the apyUSD tokens outstanding at the time of the credit. Tokens undergoing cooldown
+are, by construction, no longer apyUSD: requesting an unlock burns the tokens and leaves a
+fixed-amount apxUSD_unlock position in the unlock registry. The theorem states that a
+positive yield credit (a) is credited in full to the asset pool backing apyUSD — once the
+credited stream has vested, the pool backing the unchanged apyUSD supply has grown by
+exactly the credited amount; (b) is thereby paid to every current apyUSD holder: each
+address holding apyUSD keeps its exact share balance while that balance's pro-rata claim
+`bal × pool / supply` is on a strictly larger pool over the same share supply, i.e. its
+redeemable value strictly increases; and (c) reaches no cooldown position: every recorded
+unlock payout amount — standard and flexible — is completely unchanged by the credit.) -/
+theorem req_pay_to_non_cooldown (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.creditYield amount) caller = some s')
+    (h_pos : 0 < amount) :
+    -- (a) the credit lands in the vault's vesting stream: fully vested, the asset pool
+    -- backing apyUSD has grown by exactly `amount`, over an unchanged share supply
+    totalAssets { s' with now := s'.vestStart + s'.vestPeriod }
+      = (s.vaultApxUSDBal + s.vestTotal) + amount ∧
+    s'.totalSupply_apyUSD = s.totalSupply_apyUSD ∧
+    -- (b) every current apyUSD holder is paid: its share balance is untouched and its
+    -- pro-rata claim on the backing pool strictly increases
+    (∀ a, s'.apyUSDBal a = s.apyUSDBal a) ∧
+    (∀ a, 0 < s.apyUSDBal a →
+      s.apyUSDBal a * totalAssets { s' with now := s'.vestStart + s'.vestPeriod }
+        > s.apyUSDBal a * (s.vaultApxUSDBal + s.vestTotal)) ∧
+    -- (c) cooldown positions receive none of it: every unlock payout is unchanged
+    (∀ id, s'.unlockTokenAmount id = s.unlockTokenAmount id) ∧
+    (∀ id, s'.unlockRequests id = s.unlockRequests id) ∧
+    (∀ id, s'.flexibleUnlockRequests id = s.flexibleUnlockRequests id) := by
+  simp only [step] at h_step
+  split at h_step
+  · cases Option.some.inj h_step
+    have h_assets : totalAssets { ({ s with
+          usdcReserve := s.usdcReserve + amount
+          vestTotal := s.vestTotal + amount
+          vestStart := s.now }) with
+        now := s.now + s.vestPeriod }
+        = (s.vaultApxUSDBal + s.vestTotal) + amount := by
+      simp only [totalAssets, vestedAmount]
+      repeat' split
+      all_goals omega
+    refine ⟨h_assets, rfl, fun a => rfl, ?_, fun id => rfl, fun id => rfl, fun id => rfl⟩
+    intro a h_bal
+    rw [h_assets]
+    calc s.apyUSDBal a * (s.vaultApxUSDBal + s.vestTotal)
+        < s.apyUSDBal a * (s.vaultApxUSDBal + s.vestTotal) + s.apyUSDBal a * amount :=
+          Nat.lt_add_of_pos_right (Nat.mul_pos h_bal h_pos)
+      _ = s.apyUSDBal a * ((s.vaultApxUSDBal + s.vestTotal) + amount) :=
+          (Nat.mul_add _ _ _).symm
+  · exact absurd h_step (by simp)
 
 /-- REQ unlock-cooldown: The apxUSD_unlock token MAY be redeemed for apxUSD only after a
 cooldown period has elapsed: claiming strictly before the recorded deadline reverts. -/
