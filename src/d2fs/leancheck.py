@@ -245,8 +245,11 @@ def check_and_repair(llm: LLM, cfg: Config, module_name: str, lean_code: str,
             return CheckResult(True, attempt, n_sorry, n_thm, n_vac, out, text)
 
         err_lines = _error_lines(out)
-        model_end = model_region.count("\n") + 2  # marker line included
-        if any(el <= model_end for el in err_lines):
+        # boundary from actual assembly: first block's start line (build_file rstrips
+        # the model region, so counting model_region's own newlines would overshoot)
+        boundary = offsets[0][0] if offsets else text.count("\n") + 1
+        model_errs = [el for el in err_lines if el < boundary]
+        if model_errs and len(model_errs) == len(err_lines):
             log("[leancheck] model-region errors — repairing model region")
             _, model_region = ensure_compiles(llm, cfg, module_name, model_region, max_rounds=2, log=log)
             continue
