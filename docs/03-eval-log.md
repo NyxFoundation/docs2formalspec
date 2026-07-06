@@ -1,5 +1,42 @@
 # 評価ログ
 
+## Run 12 (relean, modelgen=deepseek-v4-pro) — 2026-07-06 21:20 ✅ 現時点のベスト
+
+| メトリクス | Run 8 (旧ベスト) | **Run 12** |
+|---|---|---|
+| モデルゲート | r1通過 | r2通過、**拡張もr1通過** |
+| theorems (live) / killed | 49 / 2 | 43 / 22 |
+| proved (機械証明) | 8 | 7 (auto-prove +4) |
+| vacuous (live) | 0 | 0 |
+| review full | 11 | **14**(フィードバック前9→14) |
+| review full+partial | 35/72 (49%) | 36/77 (47%) |
+
+- deepseek-v4-pro のモデルは64定理(過去最多)を引き出したが、statementの外れも増え
+  killed 22。full判定は最多で、審判フィードバック再生成の効果(+5 full)も確認。
+- **結論**: ローカルLLM構成での到達点はおよそ「コンパイル100%・忠実カバレッジ~50%・
+  機械証明~15-20%」。Verina(ICLR 2026)のフロンティアモデル値(スペック健全完全51%)
+  とほぼ同水準であり、パイプライン設計としては飽和点に到達。
+
+## 総括(12ラン)
+
+| 失敗モード | 対策 | 効果 |
+|---|---|---|
+| 空虚定理 (Run 1: 64/64) | 2段階生成+禁止則+de-vacuate | 恒久的に0 |
+| whole-file修復の定理削除 (Run 4) | per-declaration修復エンジン | 削除消滅 |
+| パースエラーのカスケード誤爆 (Run 6-7) | **ブロック単体コンパイル検証** | killed 40→2 (Run 8) |
+| statement幻覚識別子 | バッチ即時検証+リトライ | 部分的 |
+| 証明の弱さ | cheap-tactic自動証明 | +4〜6/run |
+| 要件の無言ドロップ | カバレッジ照合パス | missing 23→10 |
+| 不忠実な形式化 | Clover式review+審判フィードバック再生成 | full +5/run |
+| モデルサンプル分散 | ゲート+再サンプル+modelgen専用ロール | ゲート失敗の下流汚染を根絶 |
+
+### 次の改善候補(未実装、優先順)
+1. **few-shot exemplar**: AMM-in-Lean4 論文(arXiv:2402.06064)のイディオムを
+   MODEL_SYSTEM / THEOREM_SYSTEM に注入(PropertyGPT のRAG知見の軽量版)
+2. モデル k-sample 選抜(プローブバッチのコンパイル率でベスト選択)
+3. 証明専用パス(Goedel-Prover-V2 はOllama Cloud未提供のため要ローカルGPU)
+
+
 ## Run 9–11 — 2026-07-06 18:00–19:30
 
 | メトリクス | Run 9 | Run 10 (full) | Run 11 |

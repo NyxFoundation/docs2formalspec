@@ -32,12 +32,20 @@ ingest (URL→trafilatura→markdown | file→text)
 - lake build 成功 / 修復ラウンド数 / theorem数 / sorry数
 - 今後: 要件カバレッジ(formalizable要件のうちtheorem化された率)、vacuity check(`True`定理の検出)
 
-## TODO / 未決
-- [x] 類似研究サーベイの反映 → docs/01-related-work.md(採用決定7項目は同ファイル末尾)
-- [x] apyx プロトコルのドキュメントURL確定 → docs/02-apyx.md(llms.txt インデックス、.md直配信)
-- [x] Clover風ラウンドトリップ整合ゲート → src/d2fs/review.py(informalize→judge、full/partial/vacuous/mismatch)
-- [ ] ベースライン実行(apyx 9 docs)の品質評価 → docs/03-eval-log.md に記録予定
-- [ ] EARS風制約構文の抽出プロンプトへの導入(ベースライン評価後)
-- [ ] docsサイトのクロール(llms.txt 対応)
-- [ ] SPECAプラグイン化のインターフェース設計(docs/04-speca-plugin.md 予定)
-- [ ] 証明ディスチャージパス(cheap tactics → 将来 Goedel-Prover-V2)
+## ステータス (2026-07-06 終了時点)
+- [x] 類似研究サーベイ → docs/01-related-work.md
+- [x] apyx ドキュメント確定 → docs/02-apyx.md
+- [x] フルパイプライン実装(12ラン自己改善、詳細 docs/03-eval-log.md)
+  - per-declaration修復エンジン + ブロック単体検証(カスケード誤爆根絶)
+  - vacuityゲート / バッチ即時検証 / カバレッジ照合 / cheap-tactic自動証明
+  - Clover式ラウンドトリップreview + 審判フィードバック再生成
+  - モデル再サンプリング + modelgen専用ロール(deepseek-v4-pro)
+- [x] SPECAプラグイン → skill/SKILL.md + docs/04-speca-plugin.md
+- [x] 証明ディスチャージ(cheap tactics 実装済; Goedel-Prover-V2 はOllama Cloud未提供)
+- 到達点: apyx 82要件 → SPEC.md + コンパイル済Lean43定理(7機械証明、full+partial 47%)
+
+## 残TODO(次段の改善)
+- [ ] few-shot exemplar(AMM-in-Lean4イディオム)をモデル/定理プロンプトへ注入
+- [ ] モデル k-sample 選抜(プローブバッチ通過率でベスト採用)
+- [ ] docsサイトの自動クロール(llms.txt/sitemap対応)
+- [ ] EARS制約構文の抽出プロンプト導入

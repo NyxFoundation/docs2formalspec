@@ -1,0 +1,441 @@
+{
+ "results": [
+  {
+   "id": "deposit-mint-apxusd",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "mint-price",
+   "verdict": "full",
+   "note": "The theorem enforces a 1‑to‑1 exchange of USDC for apxUSD, implementing the $1 per unit price, and adds only additional safety preconditions without contradicting the requirement.",
+   "reading": "For any system state `s`, any destination address `to`, any natural number `amount`, and any caller address `caller`, if the following conditions all hold:\n1. `s.globalPause` is false;\n2. `caller` is not a member of `s.denylist` (i.e., `¬ member caller s.denylist`);\n3. `caller` is a member of `s.whitelist` (i.e., `member caller s.whitelist`);\n4. `amount` is greater than zero (`amount > 0`);\n5. the caller’s USDC balance in `s` is at least `amount` (`s.usdcBal caller ≥ amount`);\n\nthen the function `step s (Op.mintApxUSD to amount) caller` returns `some` state that is exactly the same as `s` except for four fields, which are updated as follows:\n- `usdcBal` is changed so that the caller’s USDC balance is decreased by `amount` (all other addresses keep their previous balance);\n- `treasuryUSDC` is increased by `amount`;\n- `totalSupplyApxUSD` is increased by `amount`;\n- `apxUSDBal` is changed so that the address `to` receives an increase of `amount` in its apxUSD balance (all other addresses keep their previous balance).\nAll other components of the state remain unchanged. The theorem makes no claim about what happens if any of the listed conditions fail, nor does it assert any other changes to the state."
+  },
+  {
+   "id": "redemption-value",
+   "verdict": "partial",
+   "note": "The theorem captures the core redemption mechanics at the current redemption value, but adds extra preconditions (pause flag, whitelist/denylist, buffer non‑decrease) that are not required by the normative MUST.",
+   "reading": "For any system state `s`, any amount `amount` (a natural number), and any caller address `caller`, if all of the following conditions hold:\n\n1. The global pause flag in `s` is false (`s.globalPause = false`).\n2. `caller` is **not** on the denylist (`¬ member caller s.denylist`).\n3. `caller` **is** on the whitelist (`member caller s.whitelist`).\n4. The requested redemption amount is positive (`amount > 0`).\n5. The caller’s apxUSD balance in `s` is at least the requested amount (`s.apxUSDBal caller ≥ amount`).\n6. Define `usdcToSend` as the integer division `(amount * s.redemptionValue) / 100`.\n7. The treasury’s USDC balance in `s` is at least `usdcToSend` (`s.treasuryUSDC ≥ usdcToSend`).\n8. Define `newTotalSupplyApxUSD` as `s.totalSupplyApxUSD - amount`.\n9. Define `newTreasuryUSDC` as `s.treasuryUSDC - usdcToSend`.\n10. Define `newTotalCollateralValue` as `s.totalCollateralValue - usdcToSend`.\n11. Define `newBuffer` as `newTotalCollateralValue - (newTotalSupplyApxUSD * s.redemptionValue)`.\n12. Define `oldBuffer` as `computeBuffer s` (the current over‑collateralisation buffer).\n13. The new buffer is at least as large as the old buffer (`newBuffer ≥ oldBuffer`).\n\nthen the state transition function `step` applied to `s` with the operation `Op.redeemApxUSD amount` performed by `caller` yields exactly the state obtained by updating `s` as follows:\n\n- The caller’s apxUSD balance is reduced by `amount` (all other addresses keep their previous apxUSD balances).\n- The total supply of apxUSD is set to `newTotalSupplyApxUSD`.\n- The treasury’s USDC balance is set to `newTreasuryUSDC`.\n- The total collateral value is set to `newTotalCollateralValue`.\n- The caller’s USDC balance is increased by `usdcToSend` (all other addresses keep their previous USDC balances).\n- All other fields of the state remain unchanged.\n\nIn other words, under the listed premises the redemption operation succeeds and produces the precisely described updated state. The theorem makes no claim about what happens if any of the premises fail, nor does it assert any properties about fields other than those explicitly updated."
+  },
+  {
+   "id": "no-rehypothecation",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "yield-distribution-period",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "lock-apxusd",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "apyusd-value-increase",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "price-may-include-spreads",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "rebalance-overcollateralization",
+   "verdict": "full",
+   "note": "The theorem states that a successful admin‑initiated rebalance yields a state where total collateral ≥ totalSupply × redemptionValue, which directly encodes the over‑collateralization requirement.",
+   "reading": "Assume we have a system state `s`, two natural numbers `newTotalCollateralValue` and `newBuffer`, and an address `caller`. If `caller` is a member of the state's `adminList`, then performing the `rebalance` operation with those two numbers, initiated by `caller`, must succeed (i.e., `step s (Op.rebalance newTotalCollateralValue newBuffer) caller` returns `some s'` for a new state `s'`). Moreover, in that resulting state `s'` the total collateral value is at least as large as the product of the total supply of `apxUSD` and the redemption value: `s'.totalCollateralValue ≥ s'.totalSupplyApxUSD * s'.redemptionValue`. The theorem does not say anything about what happens when `caller` is not an admin, nor does it guarantee any particular relationship between the input numbers and the new state's fields beyond the stated inequality, nor does it assert anything about other fields of the state."
+  },
+  {
+   "id": "redeem-liquidate-usdc",
+   "verdict": "mismatch",
+   "note": "The theorem proves balance updates for redemption but never mentions liquidating preferred‑share collateral to USDC, which is the core normative requirement.",
+   "reading": "For any system state `s`, any natural number `amount`, and any address `caller`, let `usdcToSend` be defined as `(amount * s.redemptionValue) / 100`. If all of the following conditions are satisfied:\n\n1. The caller’s `apxUSDBal` in state `s` is at least `amount` (`s.apxUSDBal caller ≥ amount`).\n2. The treasury’s USDC balance in state `s` is at least `usdcToSend` (`s.treasuryUSDC ≥ usdcToSend`).\n3. The global pause flag is false (`¬s.globalPause`).\n4. The caller is **not** on the denylist (`¬member caller s.denylist`).\n5. The caller **is** on the whitelist (`member caller s.whitelist`).\n6. The requested `amount` is positive (`amount > 0`).\n\nthen, when the `redeemApxUSD amount` operation is executed by `caller` on state `s` via the `step` function, the result is a `some` value (i.e., the operation succeeds) and the mapped predicate on the resulting state `s'` evaluates to `true`. Specifically, the resulting state `s'` satisfies both of the following equalities:\n\n- The treasury USDC balance has been decreased by exactly `usdcToSend`: `s'.treasuryUSDC = s.treasuryUSDC - usdcToSend`.\n- The caller’s `apxUSDBal` has been decreased by exactly `amount`: `s'.apxUSDBal caller = s.apxUSDBal caller - amount`.\n\nThus the theorem asserts that under the listed pre‑conditions, the `redeemApxUSD` operation succeeds and produces a state where only those two balances have been updated as described. It does **not** assert anything about any other fields of the resulting state, nor does it claim anything about what happens when the pre‑conditions are not met."
+  },
+  {
+   "id": "redeem-no-share-transfer",
+   "verdict": "mismatch",
+   "note": "The theorem talks about preserving the caller's apyUSDBal after redeemApxUSD, but the requirement concerns preventing transfer of preferred shares, which the theorem does not address.",
+   "reading": "For any system state `s`, any amount `amount`, and any caller address `caller`, consider the result of performing the operation `Op.redeemApxUSD amount` by `caller` on `s` (i.e., `let result := step s (Op.redeemApxUSD amount) caller`). The theorem states that:\n\n- If this operation succeeds and produces a new state `s'` (i.e., `result` is `some s'`), then the caller’s `apyUSDBal` in the new state is exactly the same as it was in the original state: `s'.apyUSDBal caller = s.apyUSDBal caller`.\n- If the operation does not succeed and yields `none`, the statement is trivially true (it asserts `True`).\n\nThus, the theorem asserts that a successful `redeemApxUSD` operation does not change the caller’s `apyUSDBal`. It makes no claim about any other fields of the state, about other users’ balances, about the value of `amount`, or about what happens when the operation fails beyond the trivial truth.\n"
+  },
+  {
+   "id": "redemption-settlement-value",
+   "verdict": "full",
+   "note": "The theorem directly states that a successful redemption credits the caller with USDC equal to the redemption amount multiplied by the current redemption value, matching the requirement that redemptions be settled at the redemption value.",
+   "reading": "For any system state `s`, any amount `amount`, and any address `caller`, consider the result of applying the operation `Op.redeemApxUSD amount` to `s` as performed by `caller` (i.e., `let result := step s (Op.redeemApxUSD amount) caller`). The theorem makes a case distinction on this result:\n\n* If the result is `some s'` (meaning the redemption operation succeeds and produces a new state `s'`), then define `usdcToSend` as `(amount * s.redemptionValue) / 100`. In that case the theorem asserts that the caller’s USDC balance in the new state `s'` is exactly the caller’s USDC balance in the original state `s` plus `usdcToSend`:\n  `s'.usdcBal caller = s.usdcBal caller + usdcToSend`.\n\n* If the result is `none` (meaning the operation fails), the theorem asserts only `True`—i.e., it imposes no condition at all in this branch.\n\nThus the theorem guarantees that whenever the redemption operation succeeds, the caller’s USDC balance increases by the amount computed from the original state's `redemptionValue`; it says nothing else about the failure case or about any other fields of the state."
+  },
+  {
+   "id": "mint-access-whitelist",
+   "verdict": "partial",
+   "note": "The theorem only enforces the whitelist condition, omitting the required eligibility and jurisdiction checks (and any other constraints), so it captures only a fragment of the normative requirement.",
+   "reading": "For any contract state `s`, any destination address `to`, any amount `amount`, and any caller address `caller`, if we let `result` be the outcome of executing the operation `mintApxUSD to amount` from `caller` on state `s` (i.e., `result = step s (Op.mintApxUSD to amount) caller`), then whenever `result` is not `none` (meaning the operation succeeds and produces a new state), it must be the case that `member caller s.whitelist = true`—in other words, the caller is a member of the whitelist. The theorem makes no other claims (it does not assert that being on the whitelist guarantees success, nor does it assert anything about other conditions such as pauses, denylist, or the values of `to` and `amount`)."
+  },
+  {
+   "id": "redeem-access-whitelist",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "issuance-price-one",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "deposit-permissionless",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "token-no-rebase",
+   "verdict": "partial",
+   "note": "The theorem limits balance changes to a specific set of ops and participants, but omits allowed mint/burn/transfer cases from the requirement and adds unrelated ops, so it only partially captures the no‑rebase constraint.",
+   "reading": "Assume we have an initial state `s`, an operation `op`, a caller address `caller`, and a resulting state `s'` such that executing the operation succeeds—that is, `step s op caller` returns `some s'`. Then, for every address `a`, if the apy‑USD balance of `a` in the new state differs from its balance in the original state (i.e., `s'.apyUSDBal a ≠ s.apyUSDBal a`), the following must be true: the operation `op` must be one of the listed cases, and the address `a` must be one of the permitted participants for that case. Specifically:\n\n- If `op` is `Op.deposit _ receiver` (a deposit of assets to a receiver), then `a` is either the caller or the receiver.\n- If `op` is `Op.mint _ receiver` (a mint of shares to a receiver), then `a` is either the caller or the receiver.\n- If `op` is `Op.requestUnlock _` (a standard unlock request), then `a` is the caller.\n- If `op` is `Op.requestFlexibleUnlock _` (a flexible unlock request), then `a` is the caller.\n- If `op` is `Op.lockApxUSD _` (locking apxUSD), then `a` is the caller.\n- For any other operation, the condition is `False`, meaning that no address can have a changed apy‑USD balance.\n\nIn other words, the theorem asserts that the only addresses whose `apyUSDBal` can change as a result of a successful operation are exactly the caller (and possibly a designated receiver) for the specific operations listed; it does not claim that any change actually occurs, nor does it say anything about other fields of the state or about operations that are not among those cases."
+  },
+  {
+   "id": "exchange-rate-non-decreasing",
+   "verdict": "full",
+   "note": "The theorem exactly states that any allowed state transition cannot lower the exchangeRate, matching the non‑decreasing requirement; it need not address disallowed steps.",
+   "reading": "For any initial state `s`, any operation `op`, any caller address `caller`, and any resulting state `s'`, if the system’s transition function `step` applied to `s` with `op` and `caller` succeeds and returns `some s'` (i.e., the operation is allowed and produces a new state), then the `exchangeRate` value in the new state `s'` is greater than or equal to the `exchangeRate` value in the original state `s`. The theorem makes no claim about cases where `step` returns `none`, nor does it claim the exchange rate must strictly increase or any other property."
+  },
+  {
+   "id": "redemption-exchange-rate-multiplier",
+   "verdict": "mismatch",
+   "note": "The theorem concerns a claimUnlock operation and adds the token amount directly to the balance, without relating it to a redemption of apyUSD or multiplying by the exchange rate; it does not capture the required transfer logic.",
+   "reading": "The theorem states the following. Let s be a State, tokenId a natural number, caller an address, and s' a State. Assume four conditions: (1) running the operation `claimUnlock tokenId` on s by caller succeeds and yields the new state s' (i.e., `step s (.claimUnlock tokenId) caller = some s'`); (2) in the original state s the unlock token identified by tokenId is owned by caller (`s.unlockTokenOwner tokenId = caller`); (3) in s that token’s type is `standard` (`s.unlockTokenType tokenId = UnlockType.standard`); and (4) the current timestamp in s is at least the caller’s standard‑unlock cooldown end (`s.now ≥ s.cooldownEndStandard caller`). Define `amount` to be the amount recorded for that token in s (`s.unlockTokenAmount tokenId`) and define `exRate` to be the exchange rate stored in s (`s.exchangeRate`). Under these hypotheses the theorem guarantees two facts: (a) in the resulting state s' the caller’s `apxUSDBal` equals the caller’s previous `apxUSDBal` plus `amount` (`s'.apxUSDBal caller = s.apxUSDBal caller + amount`); and (b) the exchange rate `exRate` in the original state is at least 1 × 10^27 (`exRate ≥ 1000000000000000000000000000`). The theorem makes no other claims about any other fields, about the value of `exRate` in the new state, or about any converse statements."
+  },
+  {
+   "id": "redemption-async-process",
+   "verdict": "partial",
+   "note": "The theorem captures the request and cooldown phases of the redemption process but does not address the final claim step required by the normative requirement.",
+   "reading": "For any system state `s`, any natural number `amount`, and any address `caller`, assume two conditions hold: (1) `amount` is strictly positive, and (2) the caller’s `apyUSDBal` in `s` is at least `amount`. Define `s'` to be the state obtained by applying `updateVesting` to `s`; define `newTotalSupplyApyUSD` to be `s'.totalSupplyApyUSD` minus `amount`; and define `existingAmount` to be the caller’s `standardUnlockAmount` in `s'`. Under these assumptions the theorem asserts the following two statements, and both must be true together:\n\n1. **If the caller already has a pending standard unlock** (i.e., `existingAmount > 0`), then performing the operation `requestUnlock amount` by `caller` on the original state `s` yields `some` new state that is exactly `s'` updated with the following changes only:\n   - The caller’s `apyUSDBal` is reduced by `amount` (all other addresses’ balances stay the same).\n   - `totalSupplyApyUSD` becomes `newTotalSupplyApyUSD`.\n   - The caller’s `standardUnlockAmount` becomes `existingAmount + amount` (all other addresses’ amounts stay the same).\n   - The caller’s `standardUnlockRequestTime` becomes `s'.now` (all other request times stay the same).\n   - The caller’s `cooldownEndStandard` becomes `s'.now + 20*86400` (all other cooldowns stay the same).\n   No other fields of the state are changed; they remain exactly as they were in `s'`.\n\n2. **If the caller has no pending standard unlock** (i.e., `existingAmount = 0`), let `tokenId` be `s'.nextUnlockTokenId`. Then performing the same operation `requestUnlock amount` by `caller` on `s` yields `some` new state that is exactly `s'` updated with the following changes only:\n   - The caller’s `apyUSDBal` is reduced by `amount` (all other addresses’ balances stay the same).\n   - `totalSupplyApyUSD` becomes `newTotalSupplyApyUSD`.\n   - The caller’s `standardUnlockAmount` becomes `amount` (all other addresses’ amounts stay the same).\n   - The caller’s `standardUnlockRequestTime` becomes `s'.now` (all other request times stay the same).\n   - The caller’s `cooldownEndStandard` becomes `s'.now + 20*86400` (all other cooldowns stay the same).\n   - The unlock token with identifier `tokenId` gets its `owner` set to `caller`.\n   - The unlock token with identifier `tokenId` gets its `amount` set to `amount`.\n   - The unlock token with identifier `tokenId` gets its `requestTime` set to `s'.now`.\n   - The unlock token with identifier `tokenId` gets its `type` set to `UnlockType.standard`.\n   - `nextUnlockTokenId` is incremented to `tokenId + 1`.\n   All other fields of the state remain exactly as they were in `s'`.\n\nThe theorem does **not** claim anything about cases where `amount` is zero, where the caller’s `apyUSDBal` is insufficient, or about any other possible outcomes of `step`. It only asserts the two conditional equalities described above, and that both hold simultaneously under the given hypotheses."
+  },
+  {
+   "id": "redemption-cooldown-period",
+   "verdict": "partial",
+   "note": "The theorem only guarantees that a claim succeeds after the 20‑day cooldown, but it does not assert that claims are rejected before the cooldown, which is the core enforcement requirement.",
+   "reading": "For any system state `s`, any token identifier `tokenId`, and any address `caller`: if the unlock token identified by `tokenId` is of the standard type, and that token is owned by `caller`, and if we let `requestTime` be the time recorded for that token’s request, and define `cooldownEnd` as `requestTime` plus twenty days (20 × 86,400 seconds), and if the current time `s.now` is at least `cooldownEnd` (i.e., the cooldown period has passed), then performing the operation `claimUnlock tokenId` as `caller` on state `s` does not fail – the `step` function returns `some` new state rather than `none`. The theorem makes no claim about what happens when any of these conditions are false (e.g., the token is not standard, not owned by the caller, or the cooldown has not elapsed), nor does it specify what the resulting state is; it only guarantees that the step is defined (not `none`)."
+  },
+  {
+   "id": "single-pending-redemption-per-user",
+   "verdict": "full",
+   "note": "The theorem shows that a request either creates or updates a single pending redemption (standardUnlockAmount) and resets the cooldown timer to now, matching the requirement’s at‑most‑one request and timer‑reset clauses.",
+   "reading": "Assume we have an initial system state `s`, a positive natural number `amount`, a caller address `caller`, and a resulting state `s'`. Suppose three conditions hold: (1) executing the operation `requestUnlock amount` by `caller` on state `s` via the `step` function succeeds and yields the state `s'` (i.e., `step s (.requestUnlock amount) caller = some s'`); (2) `amount` is greater than zero; and (3) the caller’s `apyUSDBal` in the original state is at least `amount` (`s.apyUSDBal caller ≥ amount`). Define `existingAmount` to be the caller’s `standardUnlockAmount` in the original state (`s.standardUnlockAmount caller`). Then the theorem asserts two conditional facts, both of which must hold:\n\n- If `existingAmount` is positive (`existingAmount > 0`), then in the new state `s'` the caller’s `standardUnlockAmount` equals the old amount plus the newly requested amount (`s'.standardUnlockAmount caller = existingAmount + amount`), the caller’s `standardUnlockRequestTime` is exactly the new state’s current timestamp (`s'.standardUnlockRequestTime caller = s'.now`), and the caller’s `cooldownEndStandard` is set to the current timestamp plus twenty days (`s'.cooldownEndStandard caller = s'.now + 20 * 86400`).\n\n- If `existingAmount` is zero (`existingAmount = 0`), then in the new state `s'` the caller’s `standardUnlockAmount` is set to the requested amount (`s'.standardUnlockAmount caller = amount`), the `standardUnlockRequestTime` is again the new state’s current timestamp (`s'.standardUnlockRequestTime caller = s'.now`), and the `cooldownEndStandard` is set to the current timestamp plus twenty days (`s'.cooldownEndStandard caller = s'.now + 20 * 86400`).\n\nThe theorem makes no claim about any other fields of `s'`, about what happens if `existingAmount` is neither greater than zero nor equal to zero (which cannot occur for natural numbers), nor about the behavior of `step` when the three premises are not satisfied. It also does not assert any properties of token IDs, balances, or other aspects of the system beyond the three equalities listed for each case."
+  },
+  {
+   "id": "cooldown-no-yield",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "flexible-redemption-claim-minimum",
+   "verdict": "partial",
+   "note": "The theorem proves that a flexible claim succeeds after 3 days but does not assert that it must fail before 3 days, so it omits the ‘only after’ prohibition.",
+   "reading": "For any system state `s`, any token identifier `tokenId`, and any address `caller`: if the unlock token with identifier `tokenId` in state `s` is of type `flexible`, and if the owner of that token in state `s` is exactly `caller`, and if the current timestamp `s.now` is at least three days (3 × 86 400 seconds) after the token’s request timestamp `s.unlockTokenRequestTime tokenId`, then invoking the operation `claimUnlock tokenId` by `caller` on state `s` does **not** produce `none`—that is, the `step` function returns a `some` state (the claim succeeds). The theorem makes no claim about what the resulting state is, nor does it say anything about cases where the token is not flexible, the caller is not the owner, or less than three days have passed."
+  },
+  {
+   "id": "flexible-redemption-early-fee",
+   "verdict": "full",
+   "note": "The theorem precisely encodes a 3.5% start (350 bps) linearly decreasing to 0.1% (10 bps) over twenty days, matching the requirement.",
+   "reading": "For every request time `reqTime`, current time `now`, and amount (the amount is not used in the statement), define `elapsed` as `now - reqTime`, define `twentyDays` as `20 * 86400` (the number of seconds in twenty days), and define `feeBps` by the expression `if elapsed ≥ twentyDays then 10 else 350 - (elapsed * 340) / twentyDays`. The theorem asserts two things simultaneously: (1) if `elapsed` is strictly less than `twentyDays`, then `feeBps` is equal to the value `350 - (elapsed * 340) / twentyDays`; and (2) if `elapsed` is greater than or equal to `twentyDays`, then `feeBps` is equal to `10`. No other properties are claimed: the theorem does not say anything about the `amount`, about the sign or range of `elapsed`, about the correctness of the arithmetic beyond these two cases, or about any other variables."
+  },
+  {
+   "id": "flexible-redemption-multiple-requests",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "overcollateralization-limit",
+   "verdict": "partial",
+   "note": "The theorem ensures minted value ≤ collateral value but omits the required over‑collateralisation margin, so it weakens the normative requirement.",
+   "reading": "For any system state `s`, the total amount of apxUSD tokens in existence (given by `s.totalSupplyApxUSD`) multiplied by the redemption price per token (`s.redemptionValue`, expressed in cents) is less than or equal to the total collateral value recorded in the state (`s.totalCollateralValue`, also in cents). In other words, the value of all outstanding apxUSD tokens does not exceed the value of the collateral backing them. The theorem does not claim a strict inequality, equality, or any relationship involving other fields of the state."
+  },
+  {
+   "id": "buffer-preservation",
+   "verdict": "full",
+   "note": "The theorem guarantees that after a successful redemption the buffer is not reduced (computeBuffer s' ≥ computeBuffer s), matching the requirement that the buffer must be preserved during routine redemption operations.",
+   "reading": "The theorem says that for any system state `s`, any natural number `amount`, any resulting state `s'`, and any address `caller`, if all of the following hold:\n\n1. `s.globalPause` is false (the contract is not globally paused);\n2. `caller` is not a member of `s.denylist` (the caller is not denied);\n3. `caller` is a member of `s.whitelist` (the caller is whitelisted);\n4. `amount` is not zero;\n5. the caller’s apxUSD balance in `s` is at least `amount` (`s.apxUSDBal caller ≥ amount`);\n6. the treasury USDC balance in `s` is at least `(amount * s.redemptionValue) / 100` (`s.treasuryUSDC ≥ (amount * s.redemptionValue) / 100`);\n7. executing the operation `redeemApxUSD amount` in state `s` by `caller` succeeds, i.e. `step s (.redeemApxUSD amount) caller = some s'`.\n\nthen the over‑collateralisation buffer computed from the new state `s'` is **greater than or equal to** the buffer computed from the original state `s` (`computeBuffer s' ≥ computeBuffer s`).\n\nThe theorem makes no claim about what happens if any of the listed conditions fail, it does not assert that the buffer strictly increases, and it does not say anything about other operations or states."
+  },
+  {
+   "id": "mint-redeem-at-redemption-value",
+   "verdict": "partial",
+   "note": "The theorem proves redemption occurs at the redemption value, but it omits any statement about minting transactions, so it only partially captures the requirement.",
+   "reading": "Assume a system state `s`, a non‑zero natural number `amount`, and an address `caller`. Suppose the following conditions all hold: the global pause flag in `s` is false; `caller` is not listed in `s.denylist`; `caller` is listed in `s.whitelist`; `caller`’s apxUSD balance in `s` is at least `amount`; and the treasury’s USDC balance in `s` is at least `(amount * s.redemptionValue) / 100`. Define `usdcToSend` to be `(amount * s.redemptionValue) / 100`. Then the state transition function `step` applied to `s` with the operation `redeemApxUSD amount` performed by `caller` returns `some` new state that is exactly `s` except for the following updates: the caller’s apxUSD balance is decreased by `amount`; the total supply of apxUSD is decreased by `amount`; the treasury’s USDC balance is decreased by `usdcToSend`; the total collateral value is decreased by `usdcToSend`; and the caller’s USDC balance is increased by `usdcToSend`. No other fields are changed. The theorem makes no claim about what happens if any of the listed hypotheses fail, nor does it assert anything about fields of the state other than those explicitly updated."
+  },
+  {
+   "id": "buffer-non-decreasing",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "arbitrage-mint-access",
+   "verdict": "partial",
+   "note": "The theorem provides a necessary whitelist condition (and extra checks) for a successful mint, but omits the required price condition (apxUSD > $1) and adds unrelated constraints, so it only partially captures the requirement.",
+   "reading": "For every state `s`, every address `caller`, and every natural number `amount`, either the call to `step` with the operation `Op.mintApxUSD caller amount` made by `caller` fails (i.e., returns `none`), or all of the following hold: `caller` is a member of `s.whitelist`, the global pause flag `s.globalPause` is false, `caller` is not a member of `s.denylist`, `amount` is not zero, and the USDC balance of `caller` in state `s` (`s.usdcBal caller`) is at least `amount`. The theorem does not claim the converse (that these conditions guarantee success) nor does it assert anything about other aspects of the state."
+  },
+  {
+   "id": "arbitrage-redeem-access",
+   "verdict": "partial",
+   "note": "The theorem shows whitelist participants can redeem when price < $1 (and other technical conditions), but it does not assert that non‑whitelist participants are prohibited, so it omits the \"only\" part of the requirement.",
+   "reading": "For any system state `s`, any caller address `caller`, and any amount `amount`, if all of the following conditions hold:\n1. The global pause flag in `s` is false (`s.globalPause = false`).\n2. `caller` is **not** a member of `s.denylist` (`¬ member caller s.denylist`).\n3. `caller` **is** a member of `s.whitelist` (`member caller s.whitelist`).\n4. The amount is strictly positive (`amount > 0`).\n5. The caller’s apxUSD balance in `s` is at least the amount (`s.apxUSDBal caller ≥ amount`).\n6. The redemption value in `s` is less than 100 cents (`s.redemptionValue < 100`), meaning apxUSD is trading for less than $1.00.\n\nthen the operation `redeemApxUSD amount` invoked by `caller` is **not** rejected by the contract: the function `step s (.redeemApxUSD amount) caller` returns a value different from `none` (i.e., it returns `some newState`).\n\nThe theorem makes no claim about what the resulting state is, about any other conditions, or about the behavior when any of the listed premises are false."
+  },
+  {
+   "id": "yield-distributor-credit",
+   "verdict": "partial",
+   "note": "The theorem captures the crediting of the vault when the YieldDistributor performs a distributeYield, but it restricts to amount>0 and globalPause=false, omitting the unconditional credit requirement of the RFC.",
+   "reading": "For any system state `s`, any address `caller`, and any natural number `amount`, the theorem says the following: if (1) `caller` is exactly the address stored in `s.yieldDistributor`, (2) `amount` is greater than zero, (3) the caller’s `apxUSDBal` in state `s` is at least `amount`, and (4) the global pause flag `s.globalPause` is false, then when we apply the `step` function to state `s` with the operation `distributeYield amount` performed by `caller`, the result cannot be `none`; it must be `some s'` for a new state `s'`. Moreover, in that resulting state the vault balance `vaultApxUSDBal` is exactly the original vault balance plus `amount` (i.e., `s'.vaultApxUSDBal = s.vaultApxUSDBal + amount`). The theorem makes no claim about any other fields of the state, and it says nothing when any of the four assumptions fail."
+  },
+  {
+   "id": "linear-vest-implementation",
+   "verdict": "partial",
+   "note": "The theorem only shows that vested amount is non‑decreasing over time, which is a fragment of a linear vesting mechanism, but it omits the core linear proportionality and the connection to yield credited to the apyUSD vault.",
+   "reading": "For every system state `s` and every natural number `elapsed`, let `s'` be the state obtained by first setting `s.now` to `s.now + elapsed` and then applying `updateVesting` to that modified state. The theorem asserts that the `linearVestVestedAmount` field of `s'` is greater than or equal to the `linearVestVestedAmount` field of the original state `s`. It does not claim the reverse inequality, strict inequality, or any property about other fields of the states."
+  },
+  {
+   "id": "continuous-stream",
+   "verdict": "partial",
+   "note": "The theorem captures the linear (continuous) calculation of vested amount over a configurable period, but it does not assert that no lump‑sum distribution can occur or that streaming is enforced at every moment.",
+   "reading": "For any system state `s` and any natural number `elapsed`, let `s'` be the state that is identical to `s` except that its `now` timestamp is set to `s.linearVestLastUpdate + elapsed`. Define `newVested` to be the smaller of (i) the total amount deposited for linear vesting (`s.linearVestTotalDeposited`) and (ii) the previously vested amount (`s.linearVestVestedAmount`) plus the amount that should vest over the elapsed time, computed as `(elapsed * s.linearVestTotalDeposited) / s.vestPeriod`. The theorem asserts that after applying the `updateVesting` function to `s'`, the `linearVestVestedAmount` field of the resulting state is exactly equal to `newVested`. No other properties of the states or of `updateVesting` are claimed."
+  },
+  {
+   "id": "monthly-yield-rate-set",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "yield-rate-dollar-terms",
+   "verdict": "vacuous",
+   "note": "The theorem merely states a trivial truth under a conditional and does not enforce that the yield rate be expressed in dollar terms, nor does it relate to the normative requirement.",
+   "reading": "For any system state `s` and any natural number `rate`, if performing the `setYieldRate` operation with that `rate` by the address that is the first element of `s.adminList` results in the new state `some { s with yieldRateMonth := rate }`, then the proposition `True` holds. In other words, assuming that the step function updates the `yieldRateMonth` field to `rate` under those conditions, the theorem concludes only the trivially true statement `True`. It does not assert that the premise actually holds, nor does it assert any further facts beyond this implication."
+  },
+  {
+   "id": "pay-to-non-cooldown",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "new-locked-receives-yield",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "cooldown-removal",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "configurable-vesting-period",
+   "verdict": "partial",
+   "note": "The theorem only shows that some other state can have a different vestPeriod, but it does not guarantee a controllable/configurable mechanism to set the vesting period as required.",
+   "reading": "For every possible State s, there exists some State s' such that the vestPeriod field of s' is not equal to the vestPeriod field of s."
+  },
+  {
+   "id": "redemption-value-uniform",
+   "verdict": "full",
+   "note": "The theorem guarantees that the redemption value never changes across state transitions, which ensures it is the same for all participants regardless of market conditions, matching the requirement.",
+   "reading": "For every state `s`, operation `op`, and caller address `caller`, either the `step` function applied to these arguments returns `none` (meaning the operation is rejected), or, if `step` returns a new state `s'`, then the `redemptionValue` field of `s'` is exactly the same as the `redemptionValue` field of the original state `s`. The theorem makes no claim about any other fields, nor does it guarantee that `step` succeeds; it only guarantees that when it does succeed, the redemption value does not change."
+  },
+  {
+   "id": "buffer-not-consumed",
+   "verdict": "partial",
+   "note": "The theorem proves the buffer never decreases for any accepted operation, but it omits the required condition that the operation be a routine redemption.",
+   "reading": "For any system state `s`, any operation `op`, and any caller address `caller`, either the `step` function rejects the operation (i.e., `step s op caller` equals `none`), or, if the operation is accepted and `step s op caller` yields a new state, then the over‑collateralisation buffer computed by `computeBuffer` in that new state is at least as large as the buffer in the original state. In other words, whenever `step` produces a successor state, the value `computeBuffer` never decreases; the theorem does not assert anything about cases where `step` returns `none`, nor does it claim a strict increase or any other property."
+  },
+  {
+   "id": "catastrophic-backstop",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "governance-deploy-buffer",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "rfq-redemption-allowed",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "deposit-immediate",
+   "verdict": "partial",
+   "note": "The theorem only ensures that a successful deposit does not reduce the receiver's balance, but it permits the operation to fail and does not guarantee that shares are actually delivered immediately.",
+   "reading": "For any system state `s`, any natural number `assets`, any address `receiver`, and any address `caller`, one of the following must be true: either the `step` function applied to `s` with the operation `deposit assets receiver` performed by `caller` yields `none` (meaning the operation fails or is not allowed), or there exists some state `s'` such that `step s (.deposit assets receiver) caller` yields `some s'` (the operation succeeds and produces a new state) and, in that new state `s'`, the balance `apyUSDBal` of `receiver` is greater than or equal to its balance `apyUSDBal` in the original state `s`. The theorem makes no claim about any other outcomes, about the values of other fields, about whether the operation succeeds, or about the relationship of other balances; it only guarantees that if the deposit succeeds, the receiver's `apyUSDBal` does not decrease."
+  },
+  {
+   "id": "mint-immediate",
+   "verdict": "partial",
+   "note": "The theorem allows the mint to be rejected and only guarantees a non‑decrease in balance if it succeeds, missing the requirement that mint must complete immediately and deliver shares.",
+   "reading": "For any system state `s`, any natural number `shares`, any address `receiver`, and any address `caller`, one of the following must hold: either calling the `step` function with the operation `mint shares receiver` performed by `caller` on state `s` yields `none` (meaning the operation is rejected or cannot be performed), or there exists some state `s'` such that `step s (.mint shares receiver) caller` yields `some s'` (meaning the operation succeeds and produces a new state) and, in that new state, the `apyUSDBal` balance of `receiver` is greater than or equal to its `apyUSDBal` balance in the original state `s`. The theorem does not claim that the operation must succeed, nor that the receiver’s balance strictly increases, nor does it make any statements about other fields of the state or about the caller’s balance."
+  },
+  {
+   "id": "synchronous-withdraw-return-token",
+   "verdict": "vacuous",
+   "note": "The theorem merely states True for all inputs, providing no guarantee about synchronous withdrawals or token returns, thus it does not capture the requirement.",
+   "reading": "For every possible state `s`, operation `op`, and caller address `caller`, the theorem asserts the proposition `True`. In other words, it simply states that `True` holds for all inputs, without claiming any specific property about the `step` function or any other aspect of the system."
+  },
+  {
+   "id": "unlock-cooldown",
+   "verdict": "partial",
+   "note": "The theorem enforces the cooldown condition for standard‑type unlock tokens owned by the caller, but it omits any guarantee for non‑standard tokens or other ownership cases, so it only captures a fragment of the requirement.",
+   "reading": "Assume we have a system state `s`, a token identifier `tokenId`, and an address `caller`. If the unlock token with identifier `tokenId` is of the standard type (i.e., `s.unlockTokenType tokenId = UnlockType.standard`) and the owner of that token is exactly `caller` (i.e., `s.unlockTokenOwner tokenId = caller`), then define `cooldownEnd` to be the caller’s standard‑unlock request time plus twenty days (`s.standardUnlockRequestTime caller + 20 * 86400`). Under these assumptions, for every state `s'` such that performing the operation `Op.claimUnlock tokenId` by `caller` in state `s` succeeds and yields the new state `s'` (that is, `step s (Op.claimUnlock tokenId) caller = some s'`), it must be the case that the current timestamp in the original state `s` is at least `cooldownEnd` (i.e., `s.now ≥ cooldownEnd`). The theorem makes no claim about what happens if the token is not of standard type, if the caller is not the owner, if the step function returns `none`, or about any other properties of the resulting state `s'` beyond the timestamp condition."
+  },
+  {
+   "id": "depositforminshares-slippage",
+   "verdict": "full",
+   "note": "The theorem exactly encodes the required revert condition when minted shares are below minShares and imposes no extra obligations, matching the RFC 2119 requirement.",
+   "reading": "For any system state `s`, any non‑negative numbers `assets` and `minShares`, any receiver address, and any caller address, define the operation `op` to be a deposit of `assets` to `receiver`. Also define `shares` to be the quantity `(assets * 1e27) / computeExchangeRate (updateVesting s)`. The theorem asserts that if the computed `shares` is strictly less than `minShares`, then the result of applying `step s op caller` must be `none` (i.e., the deposit operation is rejected). If `shares` is not less than `minShares` (i.e., `shares ≥ minShares`), the theorem imposes no condition whatsoever—it merely states `True`. In particular, the theorem does not claim that the operation succeeds when `shares ≥ minShares`, nor does it assert any other properties about `step` or the state."
+  },
+  {
+   "id": "mintformaxassets-slippage",
+   "verdict": "full",
+   "note": "The theorem asserts that when the required assets exceed maxAssets the mint operation fails (step returns none), which is exactly the normative requirement; it imposes no extra obligations for the other case, matching the specification.",
+   "reading": "For every state `s`, every natural number of `shares`, every natural number `maxAssets`, every `receiver` address, and every `caller` address, define `op` to be the mint operation `Op.mint shares receiver` and define `assets` to be the ceiling of `(shares * computeExchangeRate (updateVesting s)) / 10^27` (i.e., `(shares * computeExchangeRate (updateVesting s) + 10^27 - 1) / 10^27`). The theorem asserts the following conditional statement: **If** `assets` is strictly greater than `maxAssets`, **then** the result of applying `step` to the state `s` with operation `op` and caller `caller` is `none` (the operation fails). **Otherwise** (i.e., if `assets` is not greater than `maxAssets`), the theorem asserts only `True`, which imposes no further condition on `step s op caller`. In particular, the theorem does not claim anything about the value of `step s op caller` when `assets ≤ maxAssets`."
+  },
+  {
+   "id": "totalAssets-includes-vault-balance-and-vested",
+   "verdict": "mismatch",
+   "note": "The theorem only defines a sum and relates it to an exchange rate condition, without asserting that the vault's totalAssets() function actually returns that sum, so it does not capture the required inclusion of both balances.",
+   "reading": "For any system state `s`, define `totalAssets` to be the sum of `s.vaultApxUSDBal` and `s.linearVestVestedAmount`. The theorem asserts that one of the following must hold: either the exchange rate computed from `s` (`computeExchangeRate s`) is exactly equal to `(totalAssets * 1,000,000,000,000,000,000,000,000,000) / s.totalSupplyApyUSD`, or the total supply of APY‑USD in `s` (`s.totalSupplyApyUSD`) is zero. No other relationship is claimed; in particular, the theorem does not assert that the equality holds whenever `s.totalSupplyApyUSD` is non‑zero, nor does it assert any specific value for `computeExchangeRate s` when `s.totalSupplyApyUSD` is zero, nor any facts about other fields of `s`."
+  },
+  {
+   "id": "withdrawal-pulls-vested",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "global-pause-blocks-deposit",
+   "verdict": "partial",
+   "note": "The theorem blocks the specific depositUSDC and mintApxUSD operations under global pause, but does not cover other possible deposit or mint transactions required by the normative statement.",
+   "reading": "For any system state `s`, any amount, any destination address `to`, and any caller address `caller`: if the `globalPause` flag in `s` is true, then the `step` function applied to `s` with the operation `Op.depositUSDC amount` and the given `caller` yields `none`, and likewise `step` applied to `s` with the operation `Op.mintApxUSD to amount` and the same `caller` also yields `none`. In other words, when the global pause is active, both a USDC deposit and an apxUSD mint are blocked (produce no resulting state). The theorem makes no claim about what happens when `globalPause` is false or about any other operations."
+  },
+  {
+   "id": "denylist-blocks-deposit",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "deposit-emits-event",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "mint-emits-event",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "erc4626-compliance",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "unlock-token-redeemable-1to1-after-20d",
+   "verdict": "partial",
+   "note": "The theorem proves 1:1 redemption after the cooldown end, but it does not encode the specific 20‑day duration nor forbid redemption before that time.",
+   "reading": "Assume we have a system state `s`, a token identifier `tokenId`, and an address `caller`. Suppose three conditions hold: (1) the token’s type in state `s` is `UnlockType.standard`; (2) the token’s owner in state `s` is exactly `caller`; and (3) the current timestamp `s.now` is greater than or equal to the caller’s standard‑unlock cooldown end time `s.cooldownEndStandard caller`. Define `amount` to be the amount associated with `tokenId` in state `s` (`s.unlockTokenAmount tokenId`). Define `s'` to be the result of applying the operation `claimUnlock tokenId` by `caller` to state `s` via the `step` function. Under these hypotheses the theorem asserts that `s'` is the `some` option containing a new state that is identical to `s` except for the following fields:\n\n- The owner of `tokenId` is set to `0` (no owner).\n- The amount of `tokenId` is set to `0`.\n- The caller’s `standardUnlockAmount` is set to `0`.\n- The caller’s `standardUnlockRequestTime` is set to `0`.\n- The caller’s `cooldownEndStandard` is set to `0`.\n- The total supply of `apxUSD` (`totalSupplyApxUSD`) is increased by `amount`.\n- The caller’s `apxUSDBal` is increased by `amount` (all other addresses’ balances are unchanged).\n- The global pool of `apxUSD` backing unlock tokens (`unlockTokenApxUSDBal`) is decreased by `amount`.\n\nAll other components of the state remain exactly as they were in `s`. The theorem does not claim anything about any other fields, about fees, about the existence of the token beyond the given equalities, or about the case where the conditions are not satisfied."
+  },
+  {
+   "id": "unlock-token-nontransferable",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "unlock-token-no-yield",
+   "verdict": "full",
+   "note": "The theorem guarantees that the unlock token amount never changes with time, directly enforcing the ‘must not earn yield’ requirement.",
+   "reading": "For any system state `s`, any token identifier `tokenId`, any natural numbers `amount` and `requestTime`, if in `s` the amount recorded for `tokenId` (i.e., `s.unlockTokenAmount tokenId`) equals `amount` and the request time recorded for `tokenId` (i.e., `s.unlockTokenRequestTime tokenId`) equals `requestTime`, then for every possible timestamp `t` the amount recorded for `tokenId` is unchanged after we replace `s.now` with `t` and run `updateVesting` on the resulting state. In other words, under those hypotheses the equality\n\n```\ns.unlockTokenAmount tokenId = (updateVesting {s with now := t}).unlockTokenAmount tokenId\n```\nholds for all `t`. The theorem makes no claim about the request time after the update, nor about any other fields of the state, nor about any relationship between `amount` and `requestTime` beyond the given equalities."
+  },
+  {
+   "id": "unlock-receipt-nft-mint",
+   "verdict": "partial",
+   "note": "The theorem includes the minting of the Unlock Receipt NFT but only under specific preconditions (amount>0 and sufficient balance) and adds extra state changes not required by the requirement, so it captures a fragment of the normative content.",
+   "reading": "For any system state `s`, any positive amount `amount`, and any caller address `caller`, assume two conditions hold: (1) `amount` is greater than zero, and (2) the caller’s `apyUSDBal` in `s` is at least `amount`. Define `s'` to be the state obtained by applying `updateVesting` to `s`, and let `tokenId` be the current `nextUnlockTokenId` in `s'`. Construct a new state `expectedState` by starting from `s'` and making the following updates: \n- Decrease the caller’s `apyUSDBal` by `amount` (all other accounts’ balances stay the same). \n- Decrease `totalSupplyApyUSD` by `amount`. \n- Prepend the triple `(tokenId, amount, s'.now)` to the caller’s `flexibleUnlockRequests` list (all other callers’ request lists stay the same). \n- Set the owner of unlock token `tokenId` to `caller` (all other token owners stay the same). \n- Set the amount of unlock token `tokenId` to `amount` (all other token amounts stay the same). \n- Set the request time of unlock token `tokenId` to `s'.now` (all other token request times stay the same). \n- Set the type of unlock token `tokenId` to `UnlockType.flexible` (all other token types stay the same). \n- Increment `nextUnlockTokenId` to `tokenId + 1` (all other fields of `s'` remain unchanged). \nThe theorem asserts that when the `step` function is invoked on the original state `s` with the operation `requestFlexibleUnlock amount` performed by `caller`, the result is exactly `some expectedState`. In other words, under the stated preconditions, the `step` function succeeds and produces a state that matches the described updates. The theorem makes no claim about any other situations (e.g., when `amount` is zero or the caller’s balance is insufficient) or about any fields of the state that are not listed in the update."
+  },
+  {
+   "id": "unlock-claimable-after-3d",
+   "verdict": "partial",
+   "note": "The theorem only guarantees claimability under extra ownership and type conditions, whereas the requirement mandates claimability for all unlocks after three days.",
+   "reading": "If, in a given system state `s`, a particular unlock token identified by `tokenId` is owned by the address `caller`, the token’s type is `flexible`, and the current timestamp `s.now` is at least three days (3 × 86,400 seconds) after the token’s request time `s.unlockTokenRequestTime tokenId`, then performing the operation `claimUnlock tokenId` as `caller` does not fail: the `step` function applied to `s`, that operation, and `caller` yields a result that is not `none` (i.e., it produces some new state). The theorem makes no claim about any other conditions, about the contents of the resulting state, or about what happens if any of the three premises are not satisfied."
+  },
+  {
+   "id": "early-unlock-fee-linear-decline",
+   "verdict": "full",
+   "note": "The theorem encodes the exact linear decline from 3.5% to 0.1% over 20 days and computes the fee amount accordingly, matching the requirement.",
+   "reading": "For any request time `requestTime`, any current time `now`, and any amount `amount`, let `feeAmount` be the first component returned by the function `earlyClaimFee requestTime now amount`. Define `elapsed` as `now - requestTime`, define `twentyDays` as `20 * 86400`, and define `feeBps` to be `10` if `elapsed` is at least `twentyDays`, otherwise `350 - (elapsed * 340) / twentyDays`. The theorem states that, under these definitions, `feeAmount` is exactly equal to `(amount * feeBps) / 10000`. No other properties (such as bounds on `feeAmount`, the value of the second component of `earlyClaimFee`, or any relationship between `requestTime` and `now`) are asserted."
+  },
+  {
+   "id": "unlock-cannot-be-cancelled",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "unlock-conversion-after-cooldown",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "multiple-unlocks-reset-cooldown",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "withdrawForMaxShares-revert-if-exceeds-maxShares",
+   "verdict": "full",
+   "note": "The theorem asserts that whenever the required shares exceed maxShares the operation is rejected (returns none), which directly matches the MUST‑revert requirement; it does not need to specify behavior in other cases.",
+   "reading": "For any system state `s` and any four addresses (which are natural numbers) called `assets`, `maxShares`, `receiver` and `caller`, define `s'` to be the state obtained by applying `updateVesting` to `s`, define `exRate` to be the exchange rate computed from `s'`, and define `sharesNeeded` to be the ceiling of `(assets × 1e27) / exRate` (implemented as `(assets * 1000000000000000000000000000 + exRate - 1) / exRate`). The theorem states that if `sharesNeeded` is strictly greater than `maxShares`, then executing the operation `Op.withdrawForMaxShares assets maxShares receiver` in state `s` by the caller `caller` results in `step s (Op.withdrawForMaxShares assets maxShares receiver) caller` returning `none` (i.e., the operation is rejected). The theorem makes no claim about what happens when `sharesNeeded` is less than or equal to `maxShares`, nor does it assert anything about other possible reasons for rejection; it only guarantees the rejection in the case that the required shares exceed the supplied maximum."
+  },
+  {
+   "id": "redeemForMinAssets-revert-if-below-minAssets",
+   "verdict": "full",
+   "note": "The theorem asserts that the operation reverts exactly when the computed assets are less than minAssets, matching the requirement's normative condition.",
+   "reading": "For any system state `s` and any four addresses called `shares`, `minAssets`, `receiver` and `caller`, first compute a new state `s'` by applying `updateVesting` to `s`. Then compute the exchange rate `exRate` from `s'` with `computeExchangeRate`. Define `assets` as the integer division of `shares * exRate` by 1 000 000 000 000 000 000 000 000 000 (i.e., `1e27`). The theorem states that if this computed `assets` value is strictly less than the given `minAssets` value, then executing the operation `Op.redeemForMinAssets shares minAssets receiver` in state `s` by the caller `caller` results in `step s (Op.redeemForMinAssets …) caller` returning `none`—that is, the operation reverts. The theorem makes no claim about what happens when `assets` is greater than or equal to `minAssets`, nor does it assert any other properties of the state or the operation."
+  },
+  {
+   "id": "vault-pulls-vested-yield-before-withdraw",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "vault-burns-apyUSD-shares-immediately",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "vault-deposits-apxUSD-into-UnlockToken",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "unlockToken-mints-apxUSD_unlock-immediately",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "unlockToken-redeem-after-cooldown",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "singleton-unlockToken-instance",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "vault-operator-of-UnlockToken",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  }
+ ],
+ "counts": {
+  "missing": 25,
+  "full": 14,
+  "partial": 22,
+  "unformalizable": 10,
+  "mismatch": 4,
+  "vacuous": 2
+ },
+ "coverage_full": 0.18181818181818182,
+ "coverage_full_or_partial": 0.4675324675324675
+}
