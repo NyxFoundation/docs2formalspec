@@ -1,5 +1,25 @@
 # 評価ログ
 
+## Run 8 (relean, ブロック単体検証) — 2026-07-06 17:45 ✅ 構造的ブレークスルー
+
+| メトリクス | Run 7 | **Run 8** |
+|---|---|---|
+| コンパイル | ✅ r4(キル40の空洞) | **✅ r3** |
+| theorems 生存 | 13/53 | **49/50**(キル2のみ) |
+| proved / sorries | 3 / 10 | 8 / 41 |
+| vacuous | 0 | 0 |
+| review full/partial/mismatch | 5/5/1 | **11**/24/11 |
+
+ブロック単体コンパイル検証がカスケード誤爆を根絶。収束も速い(3ラウンド)。
+
+### 残課題 → Run 9 の変更(実装済)
+1. proved 8/49 → **cheap-tactic自動証明パス**(LLM不要): sorryスタブに
+   simp[step]/simp_all/unfold+split/omega/decide を順に試し、通れば採用
+2. 真の欠落23要件(バッチ再生成時の無言ドロップ)→ **カバレッジ照合パス**:
+   定理もUNFORMALIZABLE宣言も無い要件を検出して追加バッチ生成(≤2周)
+3. (次回) review mismatch/vacuous 判定の修復ループへのフィードバック
+
+
 ## Run 7 (relean, バッチ即時検証) — 2026-07-06 17:25
 
 結果: ✅コンパイル(r4)だが theorems 13 / proved 3 / **killed 40**。バッチ再生成の成功は 3/13。

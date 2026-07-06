@@ -81,8 +81,27 @@ def lean_stage(system_name: str, reqs: list[Requirement], model_summary: str,
     }, indent=1))
     log("[review] round-trip consistency gate")
     review = roundtrip_review(llm, cfg, reqs, result.lean_code)
-    (outdir / "review.json").write_text(json.dumps(review, ensure_ascii=False, indent=1))
     log(f"[review] verdicts={review['counts']} full-coverage={review['coverage_full']:.0%}")
+
+    # feedback pass: regenerate mismatch/vacuous theorems with the judge's note
+    from .review import regen_flagged
+
+    new_code, changed = regen_flagged(llm, cfg, reqs, result.lean_code, review,
+                                      module_name, log=log)
+    if changed:
+        log(f"[review] {changed} theorems regenerated from judge feedback; re-checking")
+        result = check_and_repair(llm, cfg, module_name, new_code, log=log)
+        (outdir / f"{module_name}.lean").write_text(result.lean_code)
+        review = roundtrip_review(llm, cfg, reqs, result.lean_code)
+        log(f"[review] post-feedback verdicts={review['counts']} "
+            f"full-coverage={review['coverage_full']:.0%}")
+        (outdir / "leancheck.json").write_text(json.dumps({
+            "ok": result.ok, "attempts": result.attempts, "theorems": result.theorem_count,
+            "sorries": result.sorry_count, "vacuous": result.vacuous_count,
+            "killed": result.killed_count,
+            "proved": result.theorem_count - result.sorry_count,
+        }, indent=1))
+    (outdir / "review.json").write_text(json.dumps(review, ensure_ascii=False, indent=1))
 
     log(f"[done] ok={result.ok} theorems={result.theorem_count} sorries={result.sorry_count}")
     return {

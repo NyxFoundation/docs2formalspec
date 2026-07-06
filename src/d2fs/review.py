@@ -28,6 +28,60 @@ Be skeptical: a theorem about the wrong operation or missing the key condition i
 "full". Output JSON only."""
 
 
+REGEN_SYSTEM = """\
+You rewrite ONE Lean 4 (v4.31, core + Std, NO mathlib) theorem whose formalization \
+was judged inadequate against its RFC 2119 requirement. You receive the requirement, \
+the judge's note explaining the inadequacy, the model (which compiles), and the old \
+theorem. Return ONLY the corrected theorem (same name, with docstring) in one Lean \
+code block. The statement must constrain the model's `step`/functions per the \
+requirement; never `True`; use `sorry` for the proof if needed."""
+
+
+def regen_flagged(llm: LLM, cfg: Config, reqs: list[Requirement], lean_code: str,
+                  review: dict, module_name: str, log=print) -> tuple[str, int]:
+    """Regenerate theorems judged mismatch/vacuous, keeping only compiling fixes."""
+    from .leancheck import (_thm_name, build_file, compile_snippet, split_decls,
+                            split_theorem_region)
+    from .leangen import strip_lean_block
+
+    flagged = {x["id"]: x for x in review["results"]
+               if x.get("verdict") in ("mismatch", "vacuous")}
+    if not flagged:
+        return lean_code, 0
+    model_region, region = split_theorem_region(lean_code, module_name)
+    blocks = split_decls(region)
+    req_by_id = {r.id: r for r in reqs}
+    changed = 0
+    for i, b in enumerate(blocks):
+        name = _thm_name(b)
+        if not name:
+            continue
+        rid = name.removeprefix("req_").replace("_", "-")
+        if rid not in flagged or rid not in req_by_id:
+            continue
+        r = req_by_id[rid]
+        note = flagged[rid].get("note", "")
+        log(f"[review] regenerating {name} ({flagged[rid]['verdict']})")
+        text = llm.chat(
+            cfg.lean_model,
+            REGEN_SYSTEM,
+            f"Requirement {r.id}: {r.statement}\n\nJudge's note: {note}\n\n"
+            f"Model (compiles):\n```lean\n{model_region[:14_000]}\n```\n\n"
+            f"Old theorem:\n```lean\n{b}\n```",
+            max_tokens=4000,
+        )
+        cand = strip_lean_block(text).strip()
+        if "theorem" in cand:
+            ok, _ = compile_snippet(cfg, module_name, model_region, cand)
+            if ok:
+                blocks[i] = cand
+                changed += 1
+    if not changed:
+        return lean_code, 0
+    new_code, _ = build_file(model_region, blocks, module_name)
+    return new_code, changed
+
+
 def _split_theorems(lean_code: str) -> dict[str, str]:
     """Map theorem name -> full theorem text (docstring excluded)."""
     thms = {}
