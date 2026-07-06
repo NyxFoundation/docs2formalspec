@@ -25,6 +25,55 @@ Use Nat for amounts. Model access control as State fields (e.g. `admins : List A
 because those make safety properties unprovable or vacuous. Prefer List/Function maps \
 (`Address -> Nat`) over HashMap for provability. Output ONLY a Lean code block."""
 
+# Condensed idiom from published Lean 4 AMM formalizations (arXiv:2402.06064 style):
+# state record + total step function + guard conditions, written to be provable by simp.
+EXEMPLAR = """\
+Example of the expected style (a toy vault — adapt, don't copy):
+```lean
+namespace ToyVault
+abbrev Address := Nat
+abbrev Amount := Nat
+
+structure State where
+  paused : Bool
+  admins : List Address
+  cap : Amount
+  supply : Amount
+  bal : Address → Amount
+
+inductive Op
+  | deposit (amt : Amount) (to : Address)
+  | pause
+
+def step (s : State) (op : Op) (caller : Address) : Option State :=
+  match op with
+  | .deposit amt to =>
+    if s.paused ∨ amt = 0 ∨ s.supply + amt > s.cap then none
+    else some { s with supply := s.supply + amt,
+                       bal := fun a => if a = to then s.bal a + amt else s.bal a }
+  | .pause =>
+    if s.admins.contains caller then some { s with paused := true } else none
+
+/-- REQ pause-blocks-deposit: WHEN paused the vault MUST reject deposits. -/
+theorem req_pause_blocks_deposit (s : State) (amt : Amount) (to c : Address)
+    (h : s.paused = true) : step s (.deposit amt to) c = none := by
+  simp [step, h]
+
+/-- REQ supply-cap: total supply MUST NOT exceed the cap. -/
+theorem req_supply_cap (s s' : State) (amt : Amount) (to c : Address)
+    (hc : s.supply ≤ s.cap) (h : step s (.deposit amt to) c = some s') :
+    s'.supply ≤ s'.cap := by
+  simp [step] at h
+  obtain ⟨⟨_, _, hle⟩, rfl⟩ := h
+  simpa using hle
+end ToyVault
+```
+Note how guards are plain `if` conditions on State fields, updates are function
+overrides, and theorems quantify over pre/post states linked by `step ... = some s'`.
+After `simp [step] at h` the guard becomes a conjunction: destructure it with
+`obtain ⟨⟨...⟩, rfl⟩ := h` and close with `simpa`/`omega`."""
+
+
 MODEL_USER_TMPL = """\
 System: {system_name}
 
@@ -45,6 +94,8 @@ Write the MODEL ONLY (no theorems) for file `{module_name}.lean`:
 - do NOT close the namespace (theorems will be appended)
 Balance maps as functions: `bal : Address -> Nat`, updated via
 `fun a => if a = receiver then bal a + amt else bal a`.
+
+{exemplar}
 """
 
 THEOREM_SYSTEM = """\
@@ -74,6 +125,8 @@ Model file (already compiles, your theorems are appended INSIDE the namespace):
 
 Formalize each of these requirements as one theorem (JSON):
 {reqs_json}
+
+{exemplar}
 """
 
 REPAIR_SYSTEM = """\
@@ -108,7 +161,8 @@ def gen_model(llm: LLM, cfg: Config, system_name: str, module_name: str,
         cfg.modelgen_model,
         MODEL_SYSTEM,
         MODEL_USER_TMPL.format(system_name=system_name, module_name=module_name,
-                               model_summary=model_summary, themes=themes[:12_000]),
+                               model_summary=model_summary, themes=themes[:12_000],
+                               exemplar=EXEMPLAR),
         max_tokens=16_000,
     )
     return strip_lean_block(text)
@@ -141,6 +195,7 @@ def gen_theorems(llm: LLM, cfg: Config, model_code: str, reqs: list[Requirement]
             THEOREM_SYSTEM,
             THEOREM_USER_TMPL.format(
                 model_code=model_code,
+                exemplar=EXEMPLAR,
                 reqs_json=json.dumps(
                     [{"id": r.id, "category": r.category, "statement": r.statement}
                      for r in batch], ensure_ascii=False, indent=1),
