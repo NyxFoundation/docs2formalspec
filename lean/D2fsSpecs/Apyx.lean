@@ -2656,9 +2656,6 @@ theorem req_mint_emits_event (s s' : State) (to : Address) (amount : Nat) (calle
   subst hs'
   exact ⟨caller, to, to, amount, amount, by simp [emitEvent]⟩
 
--- BROKEN: /-- REQ unlock-cannot-be-cancelled: The system MUST NOT allow an unlocking request to be cancelled once it has been initiated. -/
--- BROKEN: -- UNFORMALIZABLE req_unlock_cannot_be_cancelled: The model does not define any operation for cancelling unlock requests, so this requirement is implicitly satisfied but cannot be stated as a theorem.
-
 -- BROKEN: /-- REQ unlock-conversion-after-cooldown: Conversion of apxUSD_unlock to apxUSD MUST only be possible after the cooldown period has elapsed. -/
 -- BROKEN: theorem req_unlock_conversion_after_cooldown (s : State) (requestId : Nat) (caller : Address)
 -- BROKEN:     (h1 : s.unlockRequests requestId = some (caller, 0, 0))
@@ -2985,5 +2982,104 @@ theorem req_no_rehypothecation (s : State) (op : Op) (caller : Address) (s' : St
     obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
     subst hs'
     simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+
+/-- REQ unlock-cannot-be-cancelled: The system MUST NOT allow an unlocking request to be
+cancelled once it has been initiated. (Model: an initiated unlocking request is a live
+apxUSD_unlock position — `unlockTokenOwner id = some owner`. Total case analysis over the
+closed `Op` inductive shows the only steps after which the position no longer exists are
+the two legitimate claim settlements of that very position: `claimUnlock id`, which is
+gated on the full cooldown having elapsed and mints the owner the full recorded amount,
+and `flexibleClaimUnlock id`, which is gated on the minimum claim delay and mints the
+owner the recorded amount net of the published early-exit fee. There is no cancel
+operation and no other path that can clear a pending request — in particular nothing can
+make a request vanish early without paying out.) -/
+theorem req_unlock_cannot_be_cancelled (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') (id : Nat) (owner : Address)
+    (h_live : s.unlockTokenOwner id = some owner)
+    (h_gone : s'.unlockTokenOwner id = none) :
+    (op = Op.claimUnlock id ∧
+      ∃ amount cooldownEnd, s.unlockRequests id = some (owner, amount, cooldownEnd) ∧
+        cooldownEnd ≤ s.now ∧
+        s'.apxUSDBal owner = s.apxUSDBal owner + amount) ∨
+    (op = Op.flexibleClaimUnlock id ∧
+      ∃ amount requestTime cooldownEnd,
+        s.flexibleUnlockRequests id = some (owner, amount, requestTime, cooldownEnd) ∧
+        requestTime + minFlexibleClaim ≤ s.now ∧
+        s'.apxUSDBal owner = s.apxUSDBal owner
+          + (amount - amount * flexibleUnlockFee requestTime s.now / 10000)) := by
+  cases op
+  case claimUnlock rid =>
+    obtain ⟨o, am, ce, hreq, howner, _, htime, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
+    subst hs'
+    by_cases hid : id = rid
+    · subst hid
+      have ho : o = owner := by rw [howner] at h_live; exact Option.some.inj h_live
+      subst ho
+      exact Or.inl ⟨rfl, am, ce, hreq, htime, by simp [mintApxUSD, burnUnlockNFT]⟩
+    · simp [mintApxUSD, burnUnlockNFT, hid, h_live] at h_gone
+  case flexibleClaimUnlock rid =>
+    obtain ⟨o, am, rt, ce, hreq, howner, _, htime, hs'⟩ :=
+      step_flexibleClaimUnlock_some _ _ _ _ h_step
+    subst hs'
+    by_cases hid : id = rid
+    · subst hid
+      have ho : o = owner := by rw [howner] at h_live; exact Option.some.inj h_live
+      subst ho
+      exact Or.inr ⟨rfl, am, rt, ce, hreq, htime, by simp [mintApxUSD, burnUnlockNFT]⟩
+    · simp [mintApxUSD, burnUnlockNFT, hid, h_live] at h_gone
+  case requestUnlock a =>
+    obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
+    subst hs'
+    by_cases hid : id = s.nextUnlockId
+    · subst hid
+      simp [createStandardUnlock, burnApxUSD] at h_gone
+    · simp [createStandardUnlock, burnApxUSD, hid, h_live] at h_gone
+  case flexibleRequestUnlock a =>
+    obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
+    subst hs'
+    by_cases hid : id = s.nextUnlockId
+    · subst hid
+      simp [createFlexibleUnlock, burnApxUSD] at h_gone
+    · simp [createFlexibleUnlock, burnApxUSD, hid, h_live] at h_gone
+  case withdraw a r =>
+    obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
+    subst hs'
+    by_cases hid : id = s.nextUnlockId
+    · subst hid
+      simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD] at h_gone
+    · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD, hid, h_live] at h_gone
+  case redeem sh r =>
+    obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
+    subst hs'
+    by_cases hid : id = s.nextUnlockId
+    · subst hid
+      simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD] at h_gone
+    · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD, hid, h_live] at h_gone
+  case depositUSDC a =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, mintApxUSD, h_live] at h_gone
+  case mintApxUSD t a =>
+    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, mintApxUSD, h_live] at h_gone
+  case lockApxUSD a =>
+    obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD, h_live] at h_gone
+  case redeemApxUSD a =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, burnApxUSD, h_live] at h_gone
+  case executeRFQRedemption u am =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+    subst hs'
+    simp [burnApxUSD, h_live] at h_gone
+  all_goals
+    simp only [step] at h_step
+    split at h_step <;>
+      first
+        | (cases Option.some.inj h_step; simp_all)
+        | exact absurd h_step (by simp)
 
 end Apyx
