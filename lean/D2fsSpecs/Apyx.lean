@@ -10,6 +10,10 @@ def day : Nat := 86400
 def cooldownPeriod : Nat := 20 * day
 def minFlexibleClaim : Nat := 3 * day
 
+/-- One month of the yield-rate-setting cadence: the rate for the following month may only
+be set once a full month has elapsed since the previous setting. -/
+def monthPeriod : Nat := 30 * day
+
 def vaultAddress : Address := 0
 
 /-- The address identifying the single UnlockToken contract instance (cf. `vaultAddress`). -/
@@ -39,6 +43,14 @@ structure State where
   redemptionValue : Nat
   overcollateralizationBuffer : Nat
   yieldRateMonth : Nat
+  /-- The time at which the monthly yield rate was last set (`Op.setYieldRate` cadence
+  anchor: the next setting only succeeds once `monthPeriod` has elapsed since this). -/
+  lastRateSetTime : Nat
+  /-- The prior month's collateral-base yield figure recorded at the last monthly rate
+  setting: the excess of the collateral basket's value over the aggregate redemption
+  obligation, i.e. the dollar yield the collateral base has generated. The next month's
+  yield rate must be derived from (bounded by) this figure. -/
+  collateralYieldBase : Nat
   vestStart : Nat
   vestTotal : Nat
   vestPeriod : Nat
@@ -389,7 +401,17 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     if caller == s.admin then some { s with denylist := fun a => if a = addr then false else s.denylist a }
     else none
   | Op.setYieldRate bps =>
-    if caller == s.admin then some { s with yieldRateMonth := bps }
+    -- Monthly cadence: only the admin, only once a full month has elapsed since the last
+    -- setting, and the new rate must be derived from (bounded by) the recorded prior
+    -- month's collateral-base yield. On success the cadence anchor advances to `now` and
+    -- the collateral-base yield figure is refreshed from the current collateral state,
+    -- becoming the basis for the following month's setting.
+    if caller = s.admin ∧ s.lastRateSetTime + monthPeriod ≤ s.now
+        ∧ bps ≤ s.collateralYieldBase then
+      some { s with
+        yieldRateMonth := bps
+        lastRateSetTime := s.now
+        collateralYieldBase := overcollateralizationBuffer s }
     else none
   | Op.creditYield amount =>
     if caller == s.yieldDistributor then
@@ -1147,11 +1169,47 @@ theorem req_continuous_stream (s : State) (h : 0 < s.vestPeriod) :
     all_goals first | rfl | (exfalso; omega)
 
 /-- REQ monthly-yield-rate-set: Each month, the system MUST set the yield rate for the
-following month based on the prior month's collateral-base yield. (Model: the admin sets
-the month's yield rate via `setYieldRate`, and the configured value is stored verbatim.) -/
+following month based on the prior month's collateral-base yield. (Model:
+`s.lastRateSetTime` anchors the monthly cadence and `s.collateralYieldBase` records the
+prior month's collateral-base yield — the excess of the collateral basket's value over the
+aggregate redemption obligation at the last setting. (1) Cadence: setting the rate before
+a full month (`monthPeriod = 30 * day`) has elapsed since the last setting reverts, for
+every caller. (2) Derivation: any successful setting was performed by the admin, at least
+a month after the previous one, and the newly configured rate for the following month is
+bounded by the recorded prior-month collateral-base yield; the cadence anchor advances to
+the current time and the collateral-base yield figure is refreshed from the current
+collateral state, becoming the basis for the following month's setting. (3) Liveness: once
+a month has elapsed, the admin can actually set any rate within that bound.) -/
 theorem req_monthly_yield_rate_set (s : State) (bps : Nat) :
-    ∃ s', step s (Op.setYieldRate bps) s.admin = some s' ∧ s'.yieldRateMonth = bps :=
-  ⟨{ s with yieldRateMonth := bps }, by simp [step], rfl⟩
+    (s.now < s.lastRateSetTime + monthPeriod →
+      ∀ caller, step s (Op.setYieldRate bps) caller = none) ∧
+    (∀ caller s', step s (Op.setYieldRate bps) caller = some s' →
+      caller = s.admin ∧
+      s.lastRateSetTime + monthPeriod ≤ s.now ∧
+      bps ≤ s.collateralYieldBase ∧
+      s'.yieldRateMonth = bps ∧
+      s'.lastRateSetTime = s.now ∧
+      s'.collateralYieldBase = overcollateralizationBuffer s) ∧
+    (s.lastRateSetTime + monthPeriod ≤ s.now → bps ≤ s.collateralYieldBase →
+      ∃ s', step s (Op.setYieldRate bps) s.admin = some s' ∧
+        s'.yieldRateMonth = bps) := by
+  refine ⟨?_, ?_, ?_⟩
+  · intro h_early caller
+    simp [step, Nat.not_le.mpr h_early]
+  · intro caller s' h_step
+    simp only [step] at h_step
+    split at h_step
+    · rename_i hcond
+      obtain ⟨hcaller, hmonth, hbound⟩ := hcond
+      cases Option.some.inj h_step
+      exact ⟨hcaller, hmonth, hbound, rfl, rfl, rfl⟩
+    · exact absurd h_step (by simp)
+  · intro h_month h_bound
+    exact ⟨{ s with
+        yieldRateMonth := bps
+        lastRateSetTime := s.now
+        collateralYieldBase := overcollateralizationBuffer s },
+      by simp [step, h_month, h_bound], rfl⟩
 
 /-- REQ pay-to-non-cooldown: Yield MUST be paid to all apyUSD tokens that are not currently
 undergoing cooldown. (Model: yield is paid pro-rata through the vault exchange rate, which
