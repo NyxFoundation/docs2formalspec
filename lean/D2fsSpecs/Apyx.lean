@@ -2817,8 +2817,6 @@ theorem req_withdrawal_pulls_vested (s : State) (assets : Nat) (receiver : Addre
 
 -- BROKEN: /-- UNFORMALIZABLE req_erc4626_compliance: The model does not fully implement ERC-4626 interface - only selected functions are modeled. --/
 
--- BROKEN: /-- UNFORMALIZABLE req_unlock_token_nontransferable: The model does not include unlock token transfer operations to constrain. --/
-
 /-- REQ withdrawForMaxShares_revert_if_exceeds_maxShares: withdrawForMaxShares(uint256 assets, uint256 maxShares, address receiver) MUST revert if the number of apyUSD shares required to withdraw the assets exceeds maxShares. -/
 theorem req_withdrawForMaxShares_revert_if_exceeds_maxShares (s : State) (assets : Nat) (maxShares : Nat) (receiver : Address) (caller : Address) :
     (previewWithdraw s assets > maxShares →
@@ -3080,6 +3078,132 @@ theorem req_unlock_cannot_be_cancelled (s : State) (op : Op) (caller : Address) 
     split at h_step <;>
       first
         | (cases Option.some.inj h_step; simp_all)
+        | exact absurd h_step (by simp)
+
+/-- REQ unlock-token-nontransferable: apxUSD_unlock tokens MUST NOT be transferable.
+(Model: an apxUSD_unlock token is a registry position `unlockTokenOwner id`. The theorem
+captures non-transferability as: across every operation of the closed `Op` inductive, a
+position's recorded owner can never be reassigned to a different address — after any step
+it is either still `some owner` (untouched) or `none` (settled via the claim path, cf.
+`req_unlock_cannot_be_cancelled`), never `some owner'` for another `owner'`. The model has
+no transfer operation, and this proves no other operation smuggles a transfer in. The
+freshness hypothesis — ids at or above the registry counter are unallocated — is the
+registry's counter invariant; the first conjunct shows every step preserves it, so it
+holds along any execution from a well-formed initial state.) -/
+theorem req_unlock_token_nontransferable (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s')
+    (h_fresh : ∀ i, s.nextUnlockId ≤ i → s.unlockTokenOwner i = none) :
+    (∀ i, s'.nextUnlockId ≤ i → s'.unlockTokenOwner i = none) ∧
+    (∀ id owner, s.unlockTokenOwner id = some owner →
+      s'.unlockTokenOwner id = some owner ∨ s'.unlockTokenOwner id = none) := by
+  cases op
+  case requestUnlock a =>
+    obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
+    subst hs'
+    constructor
+    · intro i hi
+      simp only [createStandardUnlock, burnApxUSD] at hi ⊢
+      rw [if_neg (by omega)]
+      exact h_fresh i (by omega)
+    · intro id owner h_own
+      have hid : id ≠ s.nextUnlockId := fun h => by
+        rw [h, h_fresh s.nextUnlockId (Nat.le_refl _)] at h_own; cases h_own
+      exact Or.inl (by simp [createStandardUnlock, burnApxUSD, hid, h_own])
+  case flexibleRequestUnlock a =>
+    obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
+    subst hs'
+    constructor
+    · intro i hi
+      simp only [createFlexibleUnlock, burnApxUSD] at hi ⊢
+      rw [if_neg (by omega)]
+      exact h_fresh i (by omega)
+    · intro id owner h_own
+      have hid : id ≠ s.nextUnlockId := fun h => by
+        rw [h, h_fresh s.nextUnlockId (Nat.le_refl _)] at h_own; cases h_own
+      exact Or.inl (by simp [createFlexibleUnlock, burnApxUSD, hid, h_own])
+  case withdraw a r =>
+    obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
+    subst hs'
+    constructor
+    · intro i hi
+      simp only [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD,
+        pullVestedYield_nextUnlockId, pullVestedYield_unlockTokenOwner] at hi ⊢
+      rw [if_neg (by omega)]
+      exact h_fresh i (by omega)
+    · intro id owner h_own
+      have hid : id ≠ s.nextUnlockId := fun h => by
+        rw [h, h_fresh s.nextUnlockId (Nat.le_refl _)] at h_own; cases h_own
+      exact Or.inl (by
+        simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD, hid, h_own])
+  case redeem sh r =>
+    obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
+    subst hs'
+    constructor
+    · intro i hi
+      simp only [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD,
+        pullVestedYield_nextUnlockId, pullVestedYield_unlockTokenOwner] at hi ⊢
+      rw [if_neg (by omega)]
+      exact h_fresh i (by omega)
+    · intro id owner h_own
+      have hid : id ≠ s.nextUnlockId := fun h => by
+        rw [h, h_fresh s.nextUnlockId (Nat.le_refl _)] at h_own; cases h_own
+      exact Or.inl (by
+        simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD, hid, h_own])
+  case claimUnlock rid =>
+    obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
+    subst hs'
+    constructor
+    · intro i hi
+      simp only [mintApxUSD, burnUnlockNFT] at hi ⊢
+      by_cases hic : i = rid <;> simp [hic, h_fresh i (by simpa using hi)]
+    · intro id owner h_own
+      by_cases hid : id = rid
+      · exact Or.inr (by simp [mintApxUSD, burnUnlockNFT, hid])
+      · exact Or.inl (by simp [mintApxUSD, burnUnlockNFT, hid, h_own])
+  case flexibleClaimUnlock rid =>
+    obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
+    subst hs'
+    constructor
+    · intro i hi
+      simp only [mintApxUSD, burnUnlockNFT] at hi ⊢
+      by_cases hic : i = rid <;> simp [hic, h_fresh i (by simpa using hi)]
+    · intro id owner h_own
+      by_cases hid : id = rid
+      · exact Or.inr (by simp [mintApxUSD, burnUnlockNFT, hid])
+      · exact Or.inl (by simp [mintApxUSD, burnUnlockNFT, hid, h_own])
+  case depositUSDC a =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
+    subst hs'
+    exact ⟨fun i hi => h_fresh i (by simpa [emitEvent, mintApxUSD] using hi),
+      fun id owner h_own => Or.inl (by simpa [emitEvent, mintApxUSD] using h_own)⟩
+  case mintApxUSD t a =>
+    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    subst hs'
+    exact ⟨fun i hi => h_fresh i (by simpa [emitEvent, mintApxUSD] using hi),
+      fun id owner h_own => Or.inl (by simpa [emitEvent, mintApxUSD] using h_own)⟩
+  case lockApxUSD a =>
+    obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
+    subst hs'
+    exact ⟨fun i hi =>
+        h_fresh i (by simpa [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD] using hi),
+      fun id owner h_own =>
+        Or.inl (by simpa [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD] using h_own)⟩
+  case redeemApxUSD a =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    subst hs'
+    exact ⟨fun i hi => h_fresh i (by simpa [emitEvent, burnApxUSD] using hi),
+      fun id owner h_own => Or.inl (by simpa [emitEvent, burnApxUSD] using h_own)⟩
+  case executeRFQRedemption u am =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+    subst hs'
+    exact ⟨fun i hi => h_fresh i (by simpa [burnApxUSD] using hi),
+      fun id owner h_own => Or.inl (by simpa [burnApxUSD] using h_own)⟩
+  all_goals
+    simp only [step] at h_step
+    split at h_step <;>
+      first
+        | (cases Option.some.inj h_step;
+           exact ⟨fun i hi => h_fresh i hi, fun id owner h_own => Or.inl h_own⟩)
         | exact absurd h_step (by simp)
 
 end Apyx
