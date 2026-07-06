@@ -887,77 +887,12 @@ theorem req_token_no_rebase (s : State) (op : Op) (caller : Address) (s' : State
     exact absurd (apyUSDBal_unchanged_of_non_share_op _ _ _ _ h_step
       (fun _ => nofun) (fun _ _ => nofun) (fun _ _ => nofun) a) h_changed
 
-/-- REQ singleton-unlockToken-instance: There MUST be exactly one instance of UnlockToken
-and it MUST be used exclusively by the apyUSD vault. (Model: all unlock positions live in
-one global registry keyed by the single `nextUnlockId` counter, and every vault operation
-allocates at most one fresh id from it — no operation ever creates ids elsewhere.) -/
-theorem req_singleton_unlock_token_instance (s : State) (op : Op) (caller : Address) (s' : State)
-    (h_step : step s op caller = some s') :
-    s'.nextUnlockId = s.nextUnlockId ∨ s'.nextUnlockId = s.nextUnlockId + 1 := by
-  cases op
-  case requestUnlock a =>
-    obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
-    subst hs'
-    right
-    simp [createStandardUnlock, burnApxUSD]
-  case flexibleRequestUnlock a =>
-    obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
-    subst hs'
-    right
-    simp [createFlexibleUnlock, burnApxUSD]
-  case withdraw a r =>
-    obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
-    subst hs'
-    right
-    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-  case redeem sh r =>
-    obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
-    subst hs'
-    right
-    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-  case depositUSDC a =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
-    subst hs'
-    left
-    simp [emitEvent, mintApxUSD]
-  case mintApxUSD t a =>
-    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
-    subst hs'
-    left
-    simp [emitEvent, mintApxUSD]
-  case lockApxUSD a =>
-    obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
-    subst hs'
-    left
-    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
-  case claimUnlock id =>
-    obtain ⟨o, am, ce, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
-    subst hs'
-    left
-    simp [mintApxUSD, burnUnlockNFT]
-  case flexibleClaimUnlock id =>
-    obtain ⟨o, am, rt, ce, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
-    subst hs'
-    left
-    simp [mintApxUSD, burnUnlockNFT]
-  case redeemApxUSD a =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
-    subst hs'
-    left
-    simp [emitEvent, burnApxUSD]
-  case executeRFQRedemption u am =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
-    subst hs'
-    left
-    simp [burnApxUSD]
-  all_goals
-    left
-    simp only [step] at h_step
-    split at h_step <;>
-      first
-        | (cases Option.some.inj h_step; rfl)
-        | exact absurd h_step (by simp)
-
+-- UNFORMALIZABLE req_singleton-unlockToken-instance: "exactly one instance of UnlockToken
+-- exists and is used exclusively by the apyUSD vault" is a deployment/architecture fact
+-- about contract instances; the model folds every contract into a single global `State`
+-- with one implicit unlock registry, so instance counting cannot be stated as a
+-- state-machine property (the exclusivity half is covered by
+-- req_vault_operator_of_unlock_token).
 
 /-- REQ redeem-no-share-transfer: The system MUST NOT transfer preferred shares directly to
 a participant who redeems apxUSD. (Model: preferred shares are held as `governanceTokenBal`;
