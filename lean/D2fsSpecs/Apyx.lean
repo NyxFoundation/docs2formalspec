@@ -2301,21 +2301,26 @@ theorem req_redeem_liquidate_usdc (s : State) (amount : Nat) (caller : Address) 
   constructor <;> simp [emitEvent, burnApxUSD]
 
 /-- REQ yield-distributor-credit: The YieldDistributor MUST credit converted apxUSD
-proceeds to the apyUSD vault. (Model: the yield distributor's credit lands in the vault's
-vesting stream — from which `totalAssets` grows — and only the yield distributor may
-credit.) -/
-theorem req_yield_distributor_credit (s : State) (amount : Nat) (caller : Address) :
-    (caller = s.yieldDistributor →
-      step s (Op.creditYield amount) caller = some { s with
-        usdcReserve := s.usdcReserve + amount,
-        vestTotal := s.vestTotal + amount,
-        vestStart := s.now }) ∧
-    (caller ≠ s.yieldDistributor → step s (Op.creditYield amount) caller = none) := by
-  constructor
-  · intro h1
-    simp [step, h1]
-  · intro h1
-    simp [step, h1]
+proceeds to the apyUSD vault. (Model: only the yield distributor may credit; a credit adds
+the full converted amount to the vault's linear vest stream (`vestTotal`), which flows into
+the vault's apxUSD asset base `totalAssets` (= `vaultApxUSDBal` plus the vested portion):
+once the stream has fully vested, the vault's assets include the entire credited amount on
+top of its previous holdings.) -/
+theorem req_yield_distributor_credit (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.creditYield amount) caller = some s') :
+    caller = s.yieldDistributor ∧
+    s'.vestTotal = s.vestTotal + amount ∧
+    totalAssets { s' with now := s'.vestStart + s'.vestPeriod }
+      = s.vaultApxUSDBal + (s.vestTotal + amount) := by
+  simp only [step] at h_step
+  split at h_step
+  · rename_i hcaller
+    cases Option.some.inj h_step
+    refine ⟨by simpa using hcaller, rfl, ?_⟩
+    simp only [totalAssets, vestedAmount]
+    repeat' split
+    all_goals omega
+  · exact absurd h_step (by simp)
 
 /-- REQ new-locked-receives-yield: When new apyUSD is locked, it MUST immediately begin
 receiving yield, which reduces the overall percentage yield for existing holders. (Model:
