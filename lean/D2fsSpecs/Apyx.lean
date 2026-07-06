@@ -815,11 +815,9 @@ private theorem step_executeRFQRedemption_some (s : State) (user : Address) (amo
 
 /- ================= requirement theorems ================= -/
 
-/-- REQ token-no-rebase: The apyUSD token MUST NOT rebase its balances; balances may change
-only via transfers, minting, or burning. (Model: every operation other than the explicit
-share-minting (`lockApxUSD`) and share-burning (`withdraw`/`redeem`) operations leaves all
-apyUSD balances untouched.) -/
-theorem req_token_no_rebase (s : State) (op : Op) (caller : Address) (s' : State)
+/-- Helper: every operation other than the explicit share-minting (`lockApxUSD`) and
+share-burning (`withdraw`/`redeem`) operations leaves all apyUSD balances untouched. -/
+private theorem apyUSDBal_unchanged_of_non_share_op (s : State) (op : Op) (caller : Address) (s' : State)
     (h_step : step s op caller = some s')
     (h_not_mint : ∀ a, op ≠ Op.lockApxUSD a)
     (h_not_withdraw : ∀ a r, op ≠ Op.withdraw a r)
@@ -868,6 +866,26 @@ theorem req_token_no_rebase (s : State) (op : Op) (caller : Address) (s' : State
       first
         | (cases Option.some.inj h_step; rfl)
         | exact absurd h_step (by simp)
+
+/-- REQ token-no-rebase: The apyUSD token MUST NOT rebase its balances; balances may change
+only via transfers, minting, or burning. (Model: whenever any address's apyUSD balance
+changes across a step, that step was an explicit mint (`lockApxUSD`) or burn
+(`withdraw`/`redeem`) of apyUSD shares — never an implicit rebase. Peer-to-peer apyUSD
+transfers are not modeled as a separate operation, so minting and burning are the model's
+only legitimate balance-changing events.) -/
+theorem req_token_no_rebase (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s')
+    (a : Address) (h_changed : s'.apyUSDBal a ≠ s.apyUSDBal a) :
+    (∃ x, op = Op.lockApxUSD x) ∨
+    (∃ x r, op = Op.withdraw x r) ∨
+    (∃ x r, op = Op.redeem x r) := by
+  cases op
+  case lockApxUSD x => exact Or.inl ⟨x, rfl⟩
+  case withdraw x r => exact Or.inr (Or.inl ⟨x, r, rfl⟩)
+  case redeem x r => exact Or.inr (Or.inr ⟨x, r, rfl⟩)
+  all_goals
+    exact absurd (apyUSDBal_unchanged_of_non_share_op _ _ _ _ h_step
+      (fun _ => nofun) (fun _ _ => nofun) (fun _ _ => nofun) a) h_changed
 
 /-- REQ singleton-unlockToken-instance: There MUST be exactly one instance of UnlockToken
 and it MUST be used exclusively by the apyUSD vault. (Model: all unlock positions live in
