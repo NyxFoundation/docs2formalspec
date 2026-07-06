@@ -942,15 +942,16 @@ theorem req_singleton_unlock_token_instance (s : State) (op : Op) (caller : Addr
 
 
 /-- REQ redeem-no-share-transfer: The system MUST NOT transfer preferred shares directly to
-a participant who redeems apxUSD. (Model: a redemption pays out USDC only; the preferred
-share collateral pool `totalCollateralValue` is untouched.) -/
+a participant who redeems apxUSD. (Model: preferred shares are held as `governanceTokenBal`;
+a redemption of apxUSD pays out USDC only and leaves every preferred-share balance —
+in particular the redeemer's — completely unchanged.) -/
 theorem req_redeem_no_share_transfer (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.redeemApxUSD amount) caller = some s') :
-    s'.totalCollateralValue = s.totalCollateralValue ∧
-    s'.usdcBal caller = s.usdcBal caller + (amount * s.redemptionValue) / ray := by
+    ∀ a, s'.governanceTokenBal a = s.governanceTokenBal a := by
   obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
   subst hs'
-  constructor <;> simp [emitEvent, burnApxUSD]
+  intro a
+  simp [emitEvent, burnApxUSD]
 
 /-- REQ exchange-rate-non-decreasing: The exchange rate between apyUSD and apxUSD MUST be
 non-decreasing over time. (Model: passing time only vests more yield into `totalAssets`,
