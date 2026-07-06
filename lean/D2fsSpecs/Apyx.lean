@@ -2141,11 +2141,21 @@ theorem req_lock_apxusd (s : State) (amount : Nat) (caller : Address)
   · exact absurd ho (by simp [step, h1, Nat.not_lt.mpr h2])
   · exact ⟨s', rfl⟩
 
--- BROKEN: /-- REQ price-may-include-spreads: The protocol MAY reflect spreads and offchain execution expenses in the price during minting and redemption. -/
--- BROKEN: -- UNFORMALIZABLE req_price_may_include_spreads: The model does not explicitly model spreads or offchain execution expenses.
+-- /-- REQ price-may-include-spreads: The protocol MAY reflect spreads and offchain execution expenses in the price during minting and redemption. -/
+-- UNFORMALIZABLE req_price_may_include_spreads: Re-examined against the current model and
+-- still not expressible: the mint paths (depositUSDC/mintApxUSD) are hard-coded strictly
+-- 1:1 with no spread or fee parameter, and the redemption price (redemptionValue) models
+-- the value of the underlying basket - not execution spreads (updateRedemptionValue is a
+-- placeholder no-op). A MAY-permission to price in spreads has no mechanism in the model
+-- to witness, and no faithful theorem can assert a capability the model lacks.
 
--- BROKEN: /-- REQ rebalance-overcollateralization: The system SHALL rebalance the collateral basket so that apxUSD remains over‑collateralized. -/
--- BROKEN: -- UNFORMALIZABLE req_rebalance_overcollateralization: The model does not specify rebalancing mechanisms or constraints on collateral basket composition.
+-- /-- REQ rebalance-overcollateralization: The system SHALL rebalance the collateral basket so that apxUSD remains over‑collateralized. -/
+-- UNFORMALIZABLE req_rebalance_overcollateralization: Re-examined against the current
+-- model and still not expressible: the collateral basket has no composition - only an
+-- aggregate totalCollateralValue that no operation rebalances (it changes only via
+-- handleStressEvent, an exogenous loss). The passive invariant that operations preserve
+-- overcollateralization is already covered by req_overcollateralization_limit; the active
+-- rebalancing mechanism this requirement mandates is not modeled.
 -- BROKEN: 
 -- BROKEN: open Nat
 -- BROKEN: 
