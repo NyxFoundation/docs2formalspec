@@ -28,6 +28,10 @@ class Config:
     # code models; repair needs fast iteration on compiler errors.
     extract_model: str = os.environ.get("D2FS_EXTRACT_MODEL", "gpt-oss:120b")
     lean_model: str = os.environ.get("D2FS_LEAN_MODEL", "qwen3-coder:480b")
+    # domain-model generation is one call where quality dominates latency;
+    # allows a slower/stronger model than the batch/repair workhorse
+    modelgen_model: str = os.environ.get("D2FS_MODELGEN_MODEL",
+                                         os.environ.get("D2FS_LEAN_MODEL", "qwen3-coder:480b"))
     repair_model: str = os.environ.get("D2FS_REPAIR_MODEL", "qwen3-coder:480b")
     review_model: str = os.environ.get("D2FS_REVIEW_MODEL", "gpt-oss:120b")
     temperature: float = 0.1

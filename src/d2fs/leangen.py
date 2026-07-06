@@ -105,7 +105,7 @@ def gen_model(llm: LLM, cfg: Config, system_name: str, module_name: str,
               model_summary: str, reqs: list[Requirement]) -> str:
     themes = "\n".join(f"- [{r.category}] {r.id}: {r.statement}" for r in reqs if r.formalizable)
     text = llm.chat(
-        cfg.lean_model,
+        cfg.modelgen_model,
         MODEL_SYSTEM,
         MODEL_USER_TMPL.format(system_name=system_name, module_name=module_name,
                                model_summary=model_summary, themes=themes[:12_000]),
@@ -186,7 +186,7 @@ def find_unformalizable(theorems_code: str) -> list[str]:
 
 def extend_model(llm: LLM, cfg: Config, model_code: str, reqs: list[Requirement]) -> str:
     text = llm.chat(
-        cfg.lean_model,
+        cfg.modelgen_model,
         EXTEND_SYSTEM,
         "Current model:\n```lean\n" + model_code + "\n```\n\nUnformalizable requirements:\n"
         + json.dumps([{"id": r.id, "category": r.category, "statement": r.statement}
