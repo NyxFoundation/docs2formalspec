@@ -2812,8 +2812,6 @@ theorem req_withdrawal_pulls_vested (s : State) (assets : Nat) (receiver : Addre
 -- BROKEN:   · intro h1 h2 h3
 -- BROKEN:     have : s.denylist caller ∨ s.denylist caller := sorry
 
--- BROKEN: /-- UNFORMALIZABLE req_erc4626_compliance: The model does not fully implement ERC-4626 interface - only selected functions are modeled. --/
-
 /-- REQ withdrawForMaxShares_revert_if_exceeds_maxShares: withdrawForMaxShares(uint256 assets, uint256 maxShares, address receiver) MUST revert if the number of apyUSD shares required to withdraw the assets exceeds maxShares. -/
 theorem req_withdrawForMaxShares_revert_if_exceeds_maxShares (s : State) (assets : Nat) (maxShares : Nat) (receiver : Address) (caller : Address) :
     (previewWithdraw s assets > maxShares →
@@ -3243,5 +3241,62 @@ theorem req_cooldown_removal (s : State) :
     refine ⟨?_, ?_, fun y hpos => Nat.div_le_div_left (Nat.sub_le _ _) hpos⟩
     · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
     · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+
+/-- REQ erc4626-compliance: The apyUSD vault contract MUST implement the ERC-4626
+tokenized vault interface. (Model: the interface surface is modeled by
+`convertToShares`/`convertToAssets`, the four `preview*` functions, the four `max*`
+functions, and the deposit/mint/withdraw/redeem flows (`lockApxUSD`, `withdraw`,
+`redeem`, plus the slippage wrappers). This theorem proves the standard's core
+consistency guarantees hold of that surface: (1) each `preview*` function reports exactly
+the conversion the corresponding operation uses; (2) `convertToShares`/`convertToAssets`
+are mutually consistent under the current exchange rate — round-tripping in either
+direction never credits value (ERC-4626's rounding mandate: conversions round against
+the user); (3) `previewWithdraw` rounds up relative to `previewDeposit`'s rounding down,
+so withdrawing never burns fewer shares than an equal-sized deposit mints; and (4) the
+`max*` limits correctly reflect the vault's pause gating — zero while paused, and the
+owner's full balance-derived capacity when live.) -/
+theorem req_erc4626_compliance (s : State) :
+    -- (1) previews report exactly the conversions the operations use
+    (∀ assets, previewDeposit s assets = convertToShares s assets) ∧
+    (∀ shares, previewMint s shares = convertToAssets s shares) ∧
+    (∀ assets, previewWithdraw s assets = withdrawShares assets s.exchangeRate) ∧
+    (∀ shares, previewRedeem s shares = convertToAssets s shares) ∧
+    -- (2) conversions are mutually consistent: round-trips never credit value
+    (∀ assets, convertToAssets s (convertToShares s assets) ≤ assets) ∧
+    (∀ shares, convertToShares s (convertToAssets s shares) ≤ shares) ∧
+    -- (3) withdrawing rounds against the user relative to depositing
+    (∀ assets, previewDeposit s assets ≤ previewWithdraw s assets) ∧
+    -- (4) max* limits reflect pause gating and the owner's balances
+    (s.globalPause = true → ∀ a,
+      maxDeposit s a = 0 ∧ maxMint s a = 0 ∧ maxWithdraw s a = 0 ∧ maxRedeem s a = 0) ∧
+    (s.globalPause = false → ∀ a,
+      maxDeposit s a = s.apxUSDBal a ∧
+      maxMint s a = convertToShares s (s.apxUSDBal a) ∧
+      maxWithdraw s a = convertToAssets s (s.apyUSDBal a) ∧
+      maxRedeem s a = s.apyUSDBal a) := by
+  have hray : 0 < ray := Nat.pow_pos (by decide)
+  refine ⟨fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl, ?_, ?_, ?_, ?_, ?_⟩
+  · intro assets
+    unfold convertToAssets convertToShares redeemAssets lockShares
+    calc assets * ray / s.exchangeRate * s.exchangeRate / ray
+        ≤ assets * ray / ray := Nat.div_le_div_right (Nat.div_mul_le_self _ _)
+      _ = assets := Nat.mul_div_cancel assets hray
+  · intro shares
+    unfold convertToShares convertToAssets lockShares redeemAssets
+    rcases Nat.eq_zero_or_pos s.exchangeRate with h0 | hpos
+    · simp [h0]
+    · calc shares * s.exchangeRate / ray * ray / s.exchangeRate
+          ≤ shares * s.exchangeRate / s.exchangeRate :=
+            Nat.div_le_div_right (Nat.div_mul_le_self _ _)
+        _ = shares := Nat.mul_div_cancel shares hpos
+  · intro assets
+    unfold previewDeposit previewWithdraw convertToShares lockShares withdrawShares
+    rcases Nat.eq_zero_or_pos s.exchangeRate with h0 | hpos
+    · simp [h0]
+    · exact Nat.div_le_div_right (by omega)
+  · intro h a
+    simp [maxDeposit, maxMint, maxWithdraw, maxRedeem, h]
+  · intro h a
+    simp [maxDeposit, maxMint, maxWithdraw, maxRedeem, h]
 
 end Apyx
