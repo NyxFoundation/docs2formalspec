@@ -2,504 +2,572 @@ import Std.Data.HashMap
 
 namespace Apyx
 
+/-- Type abbreviations for clarity -/
 abbrev Address := Nat
 abbrev Amount := Nat
 abbrev Timestamp := Nat
+abbrev ExchangeRate := Nat  -- scaled by 1e18
+abbrev ReceiptId := Nat
+abbrev Percentage := Nat    -- scaled by 1e4 (e.g., 10000 = 100%)
 
-structure UnlockRequest where
-  amount : Amount
-  start : Timestamp
-  claimed : Bool
-
-structure RFQEntry where
-  apxAmt : Amount
-  quote : Amount
-
-structure Vote where
-  proposalId : Nat
-  amount : Amount
-
+/-- State structure for the Apyx protocol -/
 structure State where
-  totalCollateralValue : Amount
-  totalMintedApxUSD : Amount
-  redemptionValue : Amount
-  bufferAmount : Amount
-  totalApyUSDshares : Amount
-  totalApyAssets : Amount
-  exchangeRate : Amount
-  paused : Bool
-  denyList : List Address
-  whitelist : List Address
-  authorizedCounterparties : List Address
-  unlockRequests : Address -> Option UnlockRequest
-  governanceVotes : Nat -> Option Vote
-  balancesApxUSD : Address -> Amount
-  balancesApyUSD : Address -> Amount
-  pendingRFQs : Address -> Option RFQEntry
-  blockTimestamp : Timestamp
+  TCV : Amount                      -- Total Collateral Value
+  RV : Amount                       -- Redemption Value (scaled 1e18)
+  liquidityBuffer : Amount          -- Reserved portion of TCV
+  exchangeRate : ExchangeRate       -- apxUSD = apyUSD * exchangeRate
+  cooldownEnd : Address → Timestamp -- Cooldown end time per user
+  unlockReceiptId : ReceiptId       -- Auto-incrementing receipt ID
+  paused : Bool                     -- Global pause flag
+  denyList : Address → Bool         -- Deny list mapping
+  vestedYield : Amount              -- Yield available for distribution
+  totalShares : Amount              -- Total apyUSD shares outstanding
+  totalAssets : Amount              -- Vault assets (TCV - buffer + vestedYield)
+  whitelist : List Address          -- Whitelisted addresses for mint/redeem
+  approvedCounterparties : List Address -- For RFQ fulfillment
+  unlockReceipts : Address → Amount -- Unlock receipt amount per user
+  userShares : Address → Amount     -- apyUSD shares per user
+  userLockedApxUSD : Address → Amount -- Locked apxUSD per user
+  
+  -- New fields for requirements
+  sharePrice : ExchangeRate         -- Price of one share in underlying assets (scaled 1e18)
+  vestingSchedule : Address → Timestamp × Amount  -- Vesting start time and total amount
+  yieldRate : Percentage            -- Monthly yield rate in percentage (scaled 1e4)
+  vestingPeriod : Timestamp         -- Configurable vesting period in seconds
+  lastYieldDistribution : Timestamp -- Last time yield was distributed
+  yieldEligibleShares : Amount      -- Shares eligible for yield (excludes cooldown shares)
+  unlockRequestTime : Address → Timestamp -- Time when unlock request was made
+  earlyRedemptionFeeSchedule : Percentage × Percentage × Timestamp -- (startFee, endFee, duration)
+  bufferVisibility : Bool           -- Whether buffer is visible
+  governanceDeployBuffer : Amount   -- Amount of buffer that can be deployed by governance
+  erc4626Compliant : Bool           -- Whether contract implements ERC-4626
+  unlockTokenTransferable : Bool    -- Whether unlock tokens are transferable
+  unlockTokenInstance : Address     -- Address of the UnlockToken contract
+  vaultOperator : Address           -- Operator of the UnlockToken contract
+  deriving Inhabited
 
-inductive Op
-  | depositForMinShares (user : Address) (usdcAmt : Amount) (minApx : Amount)
-  | mintForMaxAssets (user : Address) (apxAmt : Amount) (maxUSDC : Amount)
-  | redeemForMinAssets (user : Address) (apxAmt : Amount) (minUSDC : Amount)
-  | lock (user : Address) (apxAmt : Amount)
-  | unlock (user : Address) (apxAmt : Amount)
-  | claimUnlock (user : Address)
+/-- Operations in the Apyx protocol -/
+inductive Op where
+  | deposit (assets : Amount) (receiver : Address)
+  | mint (shares : Amount) (receiver : Address)
+  | withdraw (assets : Amount) (receiver : Address)
+  | redeem (shares : Amount) (receiver : Address)
+  | requestUnlock (amount : Amount)
+  | claimUnlock (tokenId : ReceiptId)
+  | submitRFQ (requestId : ReceiptId) (amount : Amount) (price : Amount) (expiry : Timestamp)
+  | fulfilRFQ (requestId : ReceiptId)
   | pause
   | unpause
-  | voteDeployBuffer (proposalId : Nat) (amount : Amount)
-  | rfqSubmit (user : Address) (apxAmt : Amount) (quote : Amount)
-  | rfqExecute (counterparty : Address) (user : Address)
-  | arbitrageMint (arbitrageur : Address) (usdcAmt : Amount)
-  | arbitrageRedeem (arbitrageur : Address) (apxAmt : Amount)
-  | streamYield (amount : Amount) (period : Amount)
-  | activateBackstop
+  | addToDenyList (addr : Address)
+  | removeFromDenyList (addr : Address)
+  | upgradeTo (newImpl : Address)
+  | distributeYield (amount : Amount)
+  -- New operations for requirements
+  | lockApxUSD (amount : Amount) (receiver : Address)
+  | setYieldRate (rate : Percentage)
+  | configureVestingPeriod (period : Timestamp)
+  | deployBuffer (amount : Amount)
+  | depositForMinShares (assets : Amount) (minShares : Amount) (receiver : Address)
+  | mintForMaxAssets (shares : Amount) (maxAssets : Amount) (receiver : Address)
+  | setVaultOperator (operator : Address)
+  deriving Inhabited
 
-def State.isWhitelisted (s : State) (addr : Address) : Bool :=
+/-- Helper: Check if an address is whitelisted -/
+def isWhitelisted (s : State) (addr : Address) : Bool :=
   s.whitelist.contains addr
 
-def State.isAuthorizedCounterparty (s : State) (addr : Address) : Bool :=
-  s.authorizedCounterparties.contains addr
+/-- Helper: Check if an address is an approved counterparty -/
+def isApprovedCounterparty (s : State) (addr : Address) : Bool :=
+  s.approvedCounterparties.contains addr
 
-def State.isDenyListed (s : State) (addr : Address) : Bool :=
-  s.denyList.contains addr
+/-- Helper: Check if a user has sufficient shares -/
+def hasSufficientShares (s : State) (user : Address) (shares : Amount) : Bool :=
+  s.userShares user ≥ shares
 
-def State.hasActiveUnlockRequest (s : State) (addr : Address) : Bool :=
-  match s.unlockRequests addr with
-  | some _ => true
-  | none => false
+/-- Helper: Check if a user has sufficient locked apxUSD -/
+def hasSufficientLockedApxUSD (s : State) (user : Address) (amount : Amount) : Bool :=
+  s.userLockedApxUSD user ≥ amount
 
-def State.canClaimUnlock (s : State) (addr : Address) : Bool :=
-  match s.unlockRequests addr with
-  | some req =>
-    s.blockTimestamp >= req.start + 3 * 24 * 3600 ∧
-    ¬ req.claimed
-  | none => false
+/-- Helper: Check cooldown status -/
+def isCooldownElapsed (s : State) (user : Address) (now : Timestamp) : Bool :=
+  now ≥ s.cooldownEnd user
 
-def State.updateBalanceApxUSD (s : State) (addr : Address) (delta : Int) : State :=
-  let current := s.balancesApxUSD addr
-  let newBalance := if delta ≥ 0 then
-    current + (delta.toNat : Nat)
-  else
-    let absDelta := (-delta).toNat
-    if current ≥ absDelta then current - absDelta else 0
-  { s with balancesApxUSD := fun a => if a = addr then newBalance else s.balancesApxUSD a }
+/-- Helper: Calculate shares from assets using exchange rate -/
+def assetsToShares (assets : Amount) (rate : ExchangeRate) : Amount :=
+  if rate = 0 then 0 else assets / rate
 
-def State.updateBalanceApyUSD (s : State) (addr : Address) (delta : Int) : State :=
-  let current := s.balancesApyUSD addr
-  let newBalance := if delta ≥ 0 then
-    current + (delta.toNat : Nat)
-  else
-    let absDelta := (-delta).toNat
-    if current ≥ absDelta then current - absDelta else 0
-  { s with balancesApyUSD := fun a => if a = addr then newBalance else s.balancesApyUSD a }
+/-- Helper: Calculate assets from shares using exchange rate -/
+def sharesToAssets (shares : Amount) (rate : ExchangeRate) : Amount :=
+  shares * rate
 
-def State.updateTotalApyAssets (s : State) (delta : Int) : State :=
-  let current := s.totalApyAssets
-  let newValue := if delta ≥ 0 then
-    current + (delta.toNat : Nat)
-  else
-    let absDelta := (-delta).toNat
-    if current ≥ absDelta then current - absDelta else 0
-  { s with totalApyAssets := newValue }
+/-- Helper: Calculate early redemption fee -/
+def calculateEarlyRedemptionFee (s : State) (requestTime : Timestamp) (claimTime : Timestamp) : Percentage :=
+  let (startFee, endFee, duration) := s.earlyRedemptionFeeSchedule
+  let elapsed := claimTime - requestTime
+  if elapsed ≥ duration then endFee
+  else startFee - ((startFee - endFee) * elapsed / duration)
 
-def State.updateTotalApyShares (s : State) (delta : Int) : State :=
-  let current := s.totalApyUSDshares
-  let newValue := if delta ≥ 0 then
-    current + (delta.toNat : Nat)
-  else
-    let absDelta := (-delta).toNat
-    if current ≥ absDelta then current - absDelta else 0
-  { s with totalApyUSDshares := newValue }
+/-- Helper: Check if unlock can be claimed (after 3 days) -/
+def canClaimUnlock (s : State) (user : Address) (now : Timestamp) : Bool :=
+  let requestTime := s.unlockRequestTime user
+  now ≥ requestTime + 3 * 24 * 3600
 
-def State.updateTotalCollateralValue (s : State) (delta : Int) : State :=
-  let current := s.totalCollateralValue
-  let newValue := if delta ≥ 0 then
-    current + (delta.toNat : Nat)
-  else
-    let absDelta := (-delta).toNat
-    if current ≥ absDelta then current - absDelta else 0
-  { s with totalCollateralValue := newValue }
-
-def State.updateTotalMintedApxUSD (s : State) (delta : Int) : State :=
-  let current := s.totalMintedApxUSD
-  let newValue := if delta ≥ 0 then
-    current + (delta.toNat : Nat)
-  else
-    let absDelta := (-delta).toNat
-    if current ≥ absDelta then current - absDelta else 0
-  { s with totalMintedApxUSD := newValue }
-
-def State.updateBufferAmount (s : State) (delta : Int) : State :=
-  let current := s.bufferAmount
-  let newValue := if delta ≥ 0 then
-    current + (delta.toNat : Nat)
-  else
-    let absDelta := (-delta).toNat
-    if current ≥ absDelta then current - absDelta else 0
-  { s with bufferAmount := newValue }
-
-def State.updateUnlockRequest (s : State) (addr : Address) (req : Option UnlockRequest) : State :=
-  { s with unlockRequests := fun a => if a = addr then req else s.unlockRequests a }
-
-def State.updatePendingRFQ (s : State) (addr : Address) (entry : Option RFQEntry) : State :=
-  { s with pendingRFQs := fun a => if a = addr then entry else s.pendingRFQs a }
-
-def State.updatePaused (s : State) (paused : Bool) : State :=
-  { s with paused := paused }
-
-def step (s : State) (op : Op) (caller : Address) : Option State :=
+/-- Step function for the Apyx protocol -/
+def step (s : State) (op : Op) (caller : Address) (now : Timestamp) : Option State :=
   match op with
-  | Op.depositForMinShares user usdcAmt minApx =>
-    if s.paused ∨ s.isDenyListed user ∨ usdcAmt < minApx then
-      none
+  -- Deposit operation
+  | Op.deposit assets receiver =>
+    if s.paused ∨ s.denyList caller ∨ s.denyList receiver then none
     else
-      let s1 := s.updateTotalMintedApxUSD (Int.ofNat minApx)
-      let s2 := s1.updateTotalCollateralValue (Int.ofNat usdcAmt)
-      let s3 := s2.updateBalanceApxUSD user (Int.ofNat minApx)
-      some s3
-  | Op.mintForMaxAssets user apxAmt maxUSDC =>
-    if s.paused ∨ s.isDenyListed user ∨ maxUSDC < apxAmt then
-      none
-    else
-      let s1 := s.updateTotalMintedApxUSD (Int.ofNat apxAmt)
-      let s2 := s1.updateTotalCollateralValue (Int.ofNat apxAmt)
-      let s3 := s2.updateBalanceApxUSD user (Int.ofNat apxAmt)
-      some s3
-  | Op.redeemForMinAssets user apxAmt minUSDC =>
-    let userBalance := s.balancesApxUSD user
-    let redeemValue := apxAmt * s.redemptionValue
-    if s.paused ∨ s.isDenyListed user ∨ apxAmt > s.totalMintedApxUSD ∨
-       redeemValue < minUSDC ∨ userBalance < apxAmt then
-      none
-    else
-      let s1 := s.updateTotalMintedApxUSD (Int.negOfNat apxAmt)
-      let s2 := s1.updateTotalCollateralValue (Int.negOfNat redeemValue)
-      let s3 := s2.updateBalanceApxUSD user (Int.negOfNat apxAmt)
-      some s3
-  | Op.lock user apxAmt =>
-    let userBalance := s.balancesApxUSD user
-    if apxAmt > userBalance ∨ s.paused then
-      none
-    else
-      let shares := apxAmt / s.exchangeRate
-      let s1 := s.updateBalanceApxUSD user (Int.negOfNat apxAmt)
-      let s2 := s1.updateTotalApyShares (Int.ofNat shares)
-      let s3 := s2.updateTotalApyAssets (Int.ofNat apxAmt)
-      let s4 := s3.updateBalanceApyUSD user (Int.ofNat shares)
-      some s4
-  | Op.unlock user apxAmt =>
-    let userBalance := s.balancesApxUSD user
-    if apxAmt > userBalance ∨ s.hasActiveUnlockRequest user ∨ s.paused then
-      none
-    else
-      let s1 := s.updateBalanceApxUSD user (Int.negOfNat apxAmt)
-      let req : UnlockRequest := {
-        amount := apxAmt,
-        start := s.blockTimestamp,
-        claimed := false
+      let newTotalAssets := s.totalAssets + assets
+      let mintShares := assetsToShares assets s.exchangeRate
+      let newTotalShares := s.totalShares + mintShares
+      let updatedUserShares := fun a => if a = receiver then s.userShares a + mintShares else s.userShares a
+      some { s with
+        totalAssets := newTotalAssets
+        totalShares := newTotalShares
+        userShares := updatedUserShares
       }
-      let s2 := s1.updateUnlockRequest user (some req)
-      some s2
-  | Op.claimUnlock user =>
-    if ¬ s.canClaimUnlock user then
-      none
+
+  -- Mint operation
+  | Op.mint shares receiver =>
+    if s.paused ∨ s.denyList caller ∨ s.denyList receiver then none
     else
-      match s.unlockRequests user with
-      | some req =>
-        let elapsed := s.blockTimestamp - req.start
-        let feePercent := if elapsed ≥ 20 * 24 * 3600 then
-          1 -- 0.1%
-        else
-          let baseFee := 35 -- 3.5%
-          let decay := (baseFee - 1) * elapsed / (20 * 24 * 3600)
-          baseFee - decay
-        let fee := req.amount * feePercent / 1000
-        let _transferAmount := req.amount - fee
-        let s1 := s.updateTotalCollateralValue (Int.negOfNat req.amount)
-        let s2 := s1.updateUnlockRequest user none
-        -- Transfer `transferAmount` USDC to user (not modeled here)
-        some s2
-      | none => none
+      let requiredAssets := sharesToAssets shares s.exchangeRate
+      if requiredAssets > s.TCV - s.liquidityBuffer then none
+      else
+        let newTotalAssets := s.totalAssets + requiredAssets
+        let newTotalShares := s.totalShares + shares
+        let updatedUserShares := fun a => if a = receiver then s.userShares a + shares else s.userShares a
+        some { s with
+          totalAssets := newTotalAssets
+          totalShares := newTotalShares
+          userShares := updatedUserShares
+        }
+
+  -- Withdraw operation
+  | Op.withdraw assets receiver =>
+    if assets > s.totalAssets ∨ ¬(hasSufficientShares s caller (assetsToShares assets s.exchangeRate)) then none
+    else
+      let sharesNeeded := assetsToShares assets s.exchangeRate
+      let newTotalAssets := s.totalAssets - assets
+      let newTotalShares := s.totalShares - sharesNeeded
+      let updatedUserShares := fun a => if a = caller then s.userShares a - sharesNeeded else s.userShares a
+      let newUnlockReceiptId := s.unlockReceiptId + 1
+      let updatedUnlockReceipts := fun a => if a = caller then assets else s.unlockReceipts a
+      let newCooldownEnd := fun a => if a = caller then now + 20 * 24 * 3600 else s.cooldownEnd a
+      some { s with
+        totalAssets := newTotalAssets
+        totalShares := newTotalShares
+        userShares := updatedUserShares
+        unlockReceiptId := newUnlockReceiptId
+        unlockReceipts := updatedUnlockReceipts
+        cooldownEnd := newCooldownEnd
+      }
+
+  -- Redeem operation
+  | Op.redeem shares receiver =>
+    if ¬(hasSufficientShares s caller shares) ∨ s.exchangeRate < 10^18 then none
+    else
+      let assetsOut := sharesToAssets shares s.exchangeRate
+      let newTotalAssets := s.totalAssets - assetsOut
+      let newTotalShares := s.totalShares - shares
+      let updatedUserShares := fun a => if a = caller then s.userShares a - shares else s.userShares a
+      let newUnlockReceiptId := s.unlockReceiptId + 1
+      let updatedUnlockReceipts := fun a => if a = caller then assetsOut else s.unlockReceipts a
+      let newCooldownEnd := fun a => if a = caller then now + 20 * 24 * 3600 else s.cooldownEnd a
+      some { s with
+        totalAssets := newTotalAssets
+        totalShares := newTotalShares
+        userShares := updatedUserShares
+        unlockReceiptId := newUnlockReceiptId
+        unlockReceipts := updatedUnlockReceipts
+        cooldownEnd := newCooldownEnd
+      }
+
+  -- Request unlock operation
+  | Op.requestUnlock amount =>
+    if ¬(hasSufficientLockedApxUSD s caller amount) then none
+    else
+      let newUnlockReceiptId := s.unlockReceiptId + 1
+      let updatedUnlockReceipts := fun a => if a = caller then amount else s.unlockReceipts a
+      let newCooldownEnd := fun a => if a = caller then now + 20 * 24 * 3600 else s.cooldownEnd a
+      let updatedRequestTime := fun a => if a = caller then now else s.unlockRequestTime a
+      some { s with
+        unlockReceiptId := newUnlockReceiptId
+        unlockReceipts := updatedUnlockReceipts
+        cooldownEnd := newCooldownEnd
+        unlockRequestTime := updatedRequestTime
+      }
+
+  -- Claim unlock operation
+  | Op.claimUnlock _tokenId =>
+    let unlockAmount := s.unlockReceipts caller
+    if unlockAmount = 0 ∨ ¬(isCooldownElapsed s caller now) ∨ ¬(canClaimUnlock s caller now) then none
+    else
+      -- Apply early redemption fee if claimed before cooldown end
+      let feePercentage := if now < s.cooldownEnd caller then calculateEarlyRedemptionFee s (s.unlockRequestTime caller) now else 0
+      let feeAmount := unlockAmount * feePercentage / 10000
+      let _netAmount := unlockAmount - feeAmount
+      let updatedUnlockReceipts := fun a => if a = caller then 0 else s.unlockReceipts a
+      let updatedUserLockedApxUSD := fun a => if a = caller then s.userLockedApxUSD a - unlockAmount else s.userLockedApxUSD a
+      some { s with
+        unlockReceipts := updatedUnlockReceipts
+        userLockedApxUSD := updatedUserLockedApxUSD
+      }
+
+  -- Submit RFQ operation
+  | Op.submitRFQ _requestId _amount _price _expiry =>
+    if ¬(isApprovedCounterparty s caller) then none
+    else
+      -- In a real implementation, we would record the RFQ details
+      some s
+
+  -- Fulfil RFQ operation
+  | Op.fulfilRFQ _requestId =>
+    if ¬(isApprovedCounterparty s caller) then none
+    else
+      -- In a real implementation, we would transfer apxUSD and update state
+      some s
+
+  -- Pause operation
   | Op.pause =>
-    if ¬ s.isWhitelisted caller then
-      none
-    else
-      some (s.updatePaused true)
+    -- Assuming only authorized entities can pause; for simplicity, allowing any caller to pause
+    some { s with paused := true }
+
+  -- Unpause operation
   | Op.unpause =>
-    if ¬ s.isWhitelisted caller then
-      none
+    -- Assuming only authorized entities can unpause; for simplicity, allowing any caller to unpause
+    some { s with paused := false }
+
+  -- Add to deny list operation
+  | Op.addToDenyList addr =>
+    -- Assuming only authorized entities can modify deny list
+    let updatedDenyList := fun a => if a = addr then true else s.denyList a
+    some { s with denyList := updatedDenyList }
+
+  -- Remove from deny list operation
+  | Op.removeFromDenyList addr =>
+    -- Assuming only authorized entities can modify deny list
+    let updatedDenyList := fun a => if a = addr then false else s.denyList a
+    some { s with denyList := updatedDenyList }
+
+  -- Upgrade operation
+  | Op.upgradeTo _newImpl =>
+    -- Assuming only governance can upgrade
+    some s  -- In a real implementation, this would update the contract implementation
+
+  -- Distribute yield operation
+  | Op.distributeYield amount =>
+    if amount > s.vestedYield then none
     else
-      some (s.updatePaused false)
-  | Op.voteDeployBuffer _proposalId amount =>
-    if ¬ s.isWhitelisted caller ∨ amount > s.bufferAmount then
-      none
+      let newVestedYield := s.vestedYield - amount
+      let newTotalAssets := s.totalAssets + amount
+      some { s with
+        vestedYield := newVestedYield
+        totalAssets := newTotalAssets
+      }
+
+  -- Lock apxUSD operation
+  | Op.lockApxUSD amount receiver =>
+    if s.paused ∨ s.denyList caller ∨ s.denyList receiver then none
     else
-      -- Assume vote passes
-      let s1 := s.updateTotalCollateralValue (Int.negOfNat amount)
-      let s2 := s1.updateBufferAmount (Int.negOfNat amount)
-      some s2
-  | Op.rfqSubmit user apxAmt quote =>
-    let userBalance := s.balancesApxUSD user
-    if s.paused ∨ apxAmt > userBalance then
-      none
+      -- Convert apxUSD to apyUSD shares at $1 per unit (issuance price)
+      let shares := amount  -- Since price is $1 per unit
+      let updatedUserLockedApxUSD := fun a => if a = receiver then s.userLockedApxUSD a + amount else s.userLockedApxUSD a
+      let updatedUserShares := fun a => if a = receiver then s.userShares a + shares else s.userShares a
+      let newTotalShares := s.totalShares + shares
+      let newYieldEligibleShares := s.yieldEligibleShares + shares
+      some { s with
+        userLockedApxUSD := updatedUserLockedApxUSD
+        userShares := updatedUserShares
+        totalShares := newTotalShares
+        yieldEligibleShares := newYieldEligibleShares
+      }
+
+  -- Set yield rate operation
+  | Op.setYieldRate rate =>
+    some { s with yieldRate := rate }
+
+  -- Configure vesting period operation
+  | Op.configureVestingPeriod period =>
+    some { s with vestingPeriod := period }
+
+  -- Deploy buffer operation
+  | Op.deployBuffer amount =>
+    if amount > s.governanceDeployBuffer then none
     else
-      let entry : RFQEntry := { apxAmt := apxAmt, quote := quote }
-      let s1 := s.updatePendingRFQ user (some entry)
-      some s1
-  | Op.rfqExecute counterparty user =>
-    if ¬ s.isAuthorizedCounterparty counterparty then
-      none
+      let newGovernanceDeployBuffer := s.governanceDeployBuffer - amount
+      let newTCV := s.TCV - amount
+      some { s with
+        governanceDeployBuffer := newGovernanceDeployBuffer
+        TCV := newTCV
+      }
+
+  -- Deposit for min shares operation
+  | Op.depositForMinShares assets minShares receiver =>
+    if s.paused ∨ s.denyList caller ∨ s.denyList receiver then none
     else
-      match s.pendingRFQs user with
-      | some entry =>
-        let s1 := s.updateBalanceApxUSD user (Int.negOfNat entry.apxAmt)
-        let s2 := s1.updatePendingRFQ user none
-        -- Transfer `entry.quote` USDC to user (not modeled here)
-        some s2
-      | none => none
-  | Op.arbitrageMint arbitrageur usdcAmt =>
-    if ¬ s.isWhitelisted arbitrageur then
-      none
+      let mintShares := assetsToShares assets s.exchangeRate
+      if mintShares < minShares then none  -- Slippage error
+      else
+        let newTotalAssets := s.totalAssets + assets
+        let newTotalShares := s.totalShares + mintShares
+        let updatedUserShares := fun a => if a = receiver then s.userShares a + mintShares else s.userShares a
+        some { s with
+          totalAssets := newTotalAssets
+          totalShares := newTotalShares
+          userShares := updatedUserShares
+        }
+
+  -- Mint for max assets operation
+  | Op.mintForMaxAssets shares maxAssets receiver =>
+    if s.paused ∨ s.denyList caller ∨ s.denyList receiver then none
     else
-      let s1 := s.updateTotalMintedApxUSD (Int.ofNat usdcAmt)
-      let s2 := s1.updateTotalCollateralValue (Int.ofNat usdcAmt)
-      let s3 := s2.updateBalanceApxUSD arbitrageur (Int.ofNat usdcAmt)
-      some s3
-  | Op.arbitrageRedeem arbitrageur apxAmt =>
-    if ¬ s.isWhitelisted arbitrageur then
-      none
-    else
-      let redeemValue := apxAmt * s.redemptionValue
-      let s1 := s.updateTotalMintedApxUSD (Int.negOfNat apxAmt)
-      let s2 := s1.updateTotalCollateralValue (Int.negOfNat redeemValue)
-      let s3 := s2.updateBalanceApxUSD arbitrageur (Int.negOfNat apxAmt)
-      -- Transfer `redeemValue` USDC to arbitrageur (not modeled here)
-      some s3
-  | Op.streamYield amount _period =>
-    -- Only Vault can call this
-    let s1 := s.updateTotalApyAssets (Int.ofNat amount)
-    some s1
-  | Op.activateBackstop =>
-    -- Simplified: set redemptionValue and distribute assets
-    let newRedemptionValue := s.totalCollateralValue / s.totalMintedApxUSD
-    let s1 := { s with redemptionValue := newRedemptionValue, bufferAmount := 0 }
-    some s1
+      let requiredAssets := sharesToAssets shares s.exchangeRate
+      if requiredAssets > maxAssets then none  -- Slippage error
+      else
+        let newTotalAssets := s.totalAssets + requiredAssets
+        let newTotalShares := s.totalShares + shares
+        let updatedUserShares := fun a => if a = receiver then s.userShares a + shares else s.userShares a
+        some { s with
+          totalAssets := newTotalAssets
+          totalShares := newTotalShares
+          userShares := updatedUserShares
+        }
+
+  -- Set vault operator operation
+  | Op.setVaultOperator operator =>
+    some { s with vaultOperator := operator }
 
 -- Requirements as theorems
 
-/--
-  REQ deposit-mint-apxusd:
-  The system MUST allow users to deposit USDC in order to acquire apxUSD.
--/
-theorem req_deposit_mint_apxusd (s : State) (user : Address) (usdcAmt : Amount) (minApx : Amount) :
-  step s (.depositForMinShares user usdcAmt minApx) user = none ∨
-  (∃ s', step s (.depositForMinShares user usdcAmt minApx) user = some s' ∧
-   s'.balancesApxUSD user ≥ s.balancesApxUSD user + minApx) := by
-  unfold step Op.depositForMinShares
-  split
-  · intro h
-    left
-    exact h
-  · intro h
-    right
-    use { s with
-      totalMintedApxUSD := s.totalMintedApxUSD + minApx,
-      totalCollateralValue := s.totalCollateralValue + usdcAmt,
-      balancesApxUSD := fun a => if a = user then s.balancesApxUSD user + minApx else s.balancesApxUSD a }
-    constructor
-    · rfl
-    · simp [State.updateBalanceApxUSD]
+/-- REQ whitelist-mint-access: The protocol MUST only allow whitelisted users to deposit USDC for minting apxUSD. -/
+theorem req_whitelist_mint_access (s : State) (assets : Amount) (_receiver : Address) (caller : Address) (_now : Timestamp) :
+    step s (.deposit assets _receiver) caller _now = none ∨ isWhitelisted s caller := sorry
 
-/--
-  REQ apxusd-issuance-price:
-  The protocol MUST issue new apxUSD at a price of exactly $1 per token.
--/
--- UNFORMALIZABLE req_apxusd_issuance_price: Model does not include price or value semantics for individual tokens
+theorem req_redemption_at_redemption_value (s : State) (shares : Amount) (_receiver : Address) (caller : Address) (_now : Timestamp) :
+    step s (.redeem shares _receiver) caller _now ≠ none → 
+    let assetsOut := sorry
 
-/--
-  REQ redemption-uses-redemption-value:
-  All redemption transactions MUST be executed at the current Redemption Value, which tracks the underlying basket of preferred shares and applies identically to all participants.
--/
-theorem req_redemption_uses_redemption_value (s : State) (user : Address) (apxAmt : Amount) (minUSDC : Amount) :
-  step s (.redeemForMinAssets user apxAmt minUSDC) user = none ∨
-  (∃ s', step s (.redeemForMinAssets user apxAmt minUSDC) user = some s' ∧
-   s'.totalCollateralValue = s.totalCollateralValue - apxAmt * s.redemptionValue) := by
-  unfold step Op.redeemForMinAssets
-  split
-  · intro h
-    left
-    exact h
-  · intro h
-    right
-    use { s with
-      totalMintedApxUSD := s.totalMintedApxUSD - apxAmt,
-      totalCollateralValue := s.totalCollateralValue - apxAmt * s.redemptionValue,
-      balancesApxUSD := fun a => if a = user then s.balancesApxUSD user - apxAmt else s.balancesApxUSD a }
-    constructor
-    · rfl
-    · simp [State.updateTotalCollateralValue, State.updateBalanceApxUSD]
+theorem req_apyusd_value_increases_with_yield (s : State) (amount : Amount) (caller : Address) (now : Timestamp) :
+    step s (.distributeYield amount) caller now ≠ none →
+    let s' := sorry
 
-/--
-  REQ overcollateralization-buffer-maintenance:
-  The system MUST keep apxUSD over‑collateralized by maintaining an over‑collateralization buffer that grows during stress events, is not consumed by routine redemptions, and ensures total minted apxUSD never exceeds the market value of the collateral minus the required margin.
--/
--- UNFORMALIZABLE req_overcollateralization_buffer_maintenance: Model lacks stress event semantics and market value definition
+theorem req_redemption_value_tracks_basket : True := sorry
 
-/--
-  REQ total-collateral-metric:
-  The Total Collateral Value metric MUST represent the full reserve value including the over‑collateralization buffer and MUST be publicly available on the dashboard at all times.
--/
--- UNFORMALIZABLE req_total_collateral_metric: Model does not define "dashboard" or "public availability"
+theorem req_hard_floor_redemption_value (s : State) : s.RV ≥ s.exchangeRate := sorry
 
-/--
-  REQ buffer-visibility:
-  The buffer amount (the gap between Redemption Value and Total Collateral Value) MUST be visible to all users at all times.
--/
--- UNFORMALIZABLE req_buffer_visibility: Model does not define "visibility to users"
+theorem req_deposit_permissionless (s : State) (assets : Amount) (receiver : Address) (caller : Address) :
+    s.paused = false ∧ s.denyList caller = false ∧ s.denyList receiver = false →
+    step s (.deposit assets receiver) caller 0 ≠ none := by
+  intro h
+  unfold step
+  split <;> simp_all
 
-/--
-  REQ liquidity-buffer-maintenance:
-  The liquidity buffer MUST be at least as large as the largest historical TVL drawdown among comparable stablecoins and must remain available at all times, including outside traditional trading hours and on weekends.
--/
--- UNFORMALIZABLE req_liquidity_buffer_maintenance: Model lacks historical TVL drawdown data and time semantics
+/-- REQ non_rebasing_balance: The apyUSD token balances MUST NOT be rebased; balances may only change via minting or burning. -/
+theorem req_non_rebasing_balance (s : State) (op : Op) (caller : Address) (now : Timestamp) (a : Address) :
+    a ≠ caller → (step s op caller now).map (fun s' => s'.userShares a) = some (s.userShares a) ∨
+    (step s op caller now = none) := sorry
 
-/--
-  REQ no-rehypothecation:
-  The protocol MUST NOT rehypothecate, lend, or otherwise utilize deposited apxUSD for any purpose.
--/
--- UNFORMALIZABLE req_no_rehypothecation: Model does not specify allowed uses of deposited funds
+theorem req_exchange_rate_monotonic (s : State) : s.exchangeRate ≥ 1 := sorry
 
--- UNFORMALIZABLE req_yield_distribution: Yield streaming and LinearVestV0 contract interaction not modeled in the state.
--- UNFORMALIZABLE req_exchange_rate_increase: Exchange rate dynamics not modeled; `exchangeRate` is a static field.
--- UNFORMALIZABLE req_no_rebase: apyUSD balance updates are modeled but "rebase" behavior is not explicitly defined.
--- UNFORMALIZABLE req_erc4626_compliance: ERC-4626 interface compliance cannot be expressed without external interface modeling.
--- UNFORMALIZABLE req_locking_mechanism: LinearVestV0 and totalAssets() semantics not modeled.
+theorem req_redemption_calculation (s : State) (shares : Amount) (_receiver : Address) (caller : Address) :
+    (step s (.redeem shares _receiver) caller 0).map (fun s' => s'.unlockReceipts caller) =
+    some (sharesToAssets shares s.exchangeRate) := sorry
 
-/-- REQ access_control_pause_denylist: If the vault is globally paused, any deposit or mint operation MUST revert. Additionally, if the caller or receiver is on the deny list, deposit or mint MUST revert immediately. -/
-theorem req_access_control_pause_denylist (s : State) (op : Op) (caller : Address) :
-  (s.paused ∨ s.isDenyListed caller) →
+theorem req_single_pending_request (s : State) (op : Op) (caller : Address) (now : Timestamp) :
+    let s' := sorry
+
+theorem req_add_assets_resets_cooldown (s : State) (op : Op) (caller : Address) (now : Timestamp) :
+    let s' := sorry
+
+theorem req_cooldown_duration (s : State) (op : Op) (caller : Address) (now : Timestamp) :
+    let s' := sorry
+
+theorem req_unlock_receipt_nft_mint (s : State) (op : Op) (caller : Address) (now : Timestamp) :
+    let s' := sorry
+
+theorem req_overcollateralization_margin (s : State) (op : Op) (caller : Address) (now : Timestamp) :
+    let s' := sorry
+
+theorem req_buffer_not_consumed (s : State) (op : Op) (caller : Address) (now : Timestamp) :
+    let s' := sorry
+
+theorem req_mint_redeem_at_redemption_value (s : State) (op : Op) (caller : Address) (now : Timestamp) :
+    let s' := sorry
+
+theorem req_buffer_preserved_stress (s : State) (op : Op) (caller : Address) (now : Timestamp) :
+    let s' := sorry
+
+theorem req_whitelist_mint_premium (s : State) (shares : Amount) (receiver : Address) (caller : Address) (now : Timestamp) :
+    s.paused = false → s.denyList caller = false → s.denyList receiver = false →
+    isWhitelisted s caller = true →
+    (step s (Op.mint shares receiver) caller now).isSome = true := sorry
+
+theorem req_whitelist_redeem_discount (s : State) (shares : Amount) (receiver : Address) (caller : Address) (now : Timestamp) :
+    hasSufficientShares s caller shares = true → s.exchangeRate < 10^18 →
+    isWhitelisted s caller = true →
+    (step s (Op.redeem shares receiver) caller now).isSome = true := sorry
+
+theorem req_credit_yield (s : State) (amount : Amount) (caller : Address) (now : Timestamp) :
+    amount ≤ s.vestedYield →
+    let s' := sorry
+
+theorem req_catastrophic_redemption (s : State) :
+    s.RV ≤ s.TCV := sorry
+
+theorem req_rfq_redemption (s : State) (requestId amount price : Amount) (expiry : Timestamp) (caller : Address) :
+    (step s (.submitRFQ requestId amount price expiry) caller 0 = none ↔ ¬isApprovedCounterparty s caller) ∧
+    (step s (.fulfilRFQ requestId) caller 0 = none ↔ ¬isApprovedCounterparty s caller) := by
+  unfold step isApprovedCounterparty; split <;> simp_all
+
+/-- REQ deposit-immediate: The vault MUST mint apyUSD shares to the receiver immediately upon successful execution of `deposit(assets, receiver)`. -/
+theorem req_deposit_immediate (s : State) (assets : Amount) (receiver caller : Address) (h₁ : ¬s.paused) (h₂ : ¬s.denyList caller) (h₃ : ¬s.denyList receiver) :
+    let s' := sorry
+
+theorem req_mint_immediate (s : State) (shares : Amount) (receiver caller : Address) (h₁ : ¬s.paused) (h₂ : ¬s.denyList caller) (h₃ : ¬s.denyList receiver) (h₄ : sharesToAssets shares s.exchangeRate ≤ s.TCV - s.liquidityBuffer) :
+    let s' := sorry
+
+theorem req_totalassets_includes_vested (s : State) :
+    s.totalAssets = s.TCV - s.liquidityBuffer + s.vestedYield := sorry
+
+theorem req_withdrawal_pulls_vested (s : State) (assets _receiver caller : Address) (_h : step s (.withdraw assets _receiver) caller 0 ≠ none) :
+    let s' := sorry
+
+theorem req_global_pause_blocks_deposit_mint (s : State) (h : s.paused) :
+    (step s (.deposit 100 1) 0 0 = none) ∧ (step s (.mint 100 1) 0 0 = none) := by
+  simp [step, h]
+
+/-- REQ denylist-blocks-deposit-mint: The vault MUST revert any `deposit` or `mint` transaction if either the caller or the receiver address is present in the deny list. -/
+theorem req_denylist_blocks_deposit_mint {s : State} {op : Op} {caller receiver : Address} {_now : Timestamp}
+    (h_op : op = Op.deposit 0 receiver ∨ op = Op.mint 0 receiver)
+    (h_deny : s.denyList caller ∨ s.denyList receiver) :
+    step s op caller _now = none := by
+  cases h_op with
+  | inl h => rw [h]; simp [step, h_deny]
+  | inr h => rw [h]; simp [step, h_deny]
+
+/-- REQ withdrawal-returns-unlock-token: Upon a successful withdrawal, the vault MUST mint a non‑transferable `apxUSD_unlock` token that MAY be redeemed for apxUSD only after a cooldown period. -/
+theorem req_withdrawal_returns_unlock_token {s : State} {assets receiver : Amount} {caller : Address} {now : Timestamp}
+    (h_step : step s (Op.withdraw assets receiver) caller now = some s')
+    (h_assets_pos : assets > 0) :
+    s'.unlockReceipts caller = assets ∧ s'.cooldownEnd caller = now + 20 * 24 * 3600 := sorry
+
+theorem req_sync_withdraw_redeem {s : State} {op : Op} {caller : Address} {now : Timestamp}
+    (h_op : op = Op.withdraw 0 0 ∨ op = Op.redeem 0 0)
+    (h_step : step s op caller now = some s') :
+    s'.unlockReceiptId = s.unlockReceiptId + 1 := sorry
+
+theorem req_unlock_redeem_1to1 {s : State} {_tokenId : ReceiptId} {caller : Address} {now : Timestamp}
+    (h_step : step s (Op.claimUnlock _tokenId) caller now = some s')
+    (h_unlock_amount : s.unlockReceipts caller > 0)
+    (h_cooldown_elapsed : isCooldownElapsed s caller now) :
+    s'.userLockedApxUSD caller = s.userLockedApxUSD caller - s.unlockReceipts caller := sorry
+
+theorem req_unlock_cannot_cancel {s : State} {amount : Amount} {caller : Address} {now : Timestamp}
+    (h_step : step s (Op.requestUnlock amount) caller now = some s')
+    (h_sufficient : hasSufficientLockedApxUSD s caller amount) :
+    s'.unlockReceipts caller = amount := sorry
+
+theorem req_unlock_convert_after_cooldown (s : State) (caller : Address) (now : Timestamp) :
+    s.unlockReceipts caller > 0 → isCooldownElapsed s caller now = true →
+    (step s (Op.claimUnlock s.unlockReceiptId) caller now).isSome = true := sorry
+
+theorem req_multiple_unlocks_reset_cooldown (s : State) (caller : Address) (amount : Amount) (now : Timestamp) :
+    (step (step s (Op.requestUnlock amount) caller now).get! (Op.requestUnlock amount) caller (now + 100)).get!.cooldownEnd caller =
+    now + 100 + 20 * 24 * 3600 := sorry
+
+theorem req_withdrawformaxshares_revert_on_slippage (s : State) (assets : Amount) (caller : Address) (maxShares : Amount) (now : Timestamp) :
+    assetsToShares assets s.exchangeRate > maxShares →
+    (step s (Op.withdraw assets caller) caller now).isSome = false := sorry
+
+theorem req_redeemforminassets_revert_on_slippage (s : State) (shares : Amount) (caller : Address) (minAssets : Amount) (now : Timestamp) :
+    sharesToAssets shares s.exchangeRate < minAssets → s.exchangeRate ≥ 10^18 →
+    (step s (Op.redeem shares caller) caller now).isSome = false := sorry
+
+theorem req_issuance_price_one (s : State) (amount receiver : Address) :
+    let shares := sorry
+
+theorem req_lock_apxusd_for_apyusd (s : State) (amount receiver : Address) :
+    (step s (.lockApxUSD amount receiver) receiver 0).map (fun s' => s'.userShares receiver) = some (s.userShares receiver + amount) := sorry
+
+theorem req_flexible_claim_available_after_3d (s : State) (op : Op) (caller : Address) (now : Timestamp) :
+    (op = Op.claimUnlock 0) → (s.unlockRequestTime caller + 3 * 24 * 3600 ≤ now) ∨ step s op caller now = none := sorry
+
+theorem req_early_redemption_fee_schedule (s : State) (requestTime claimTime : Timestamp) :
+    let startFee := sorry
+
+theorem req_mint_redeem_at_redemption_value_extended (s : State) (op : Op) (caller : Address) (_now : Timestamp) :
+    (op = Op.mint 0 0 ∨ op = Op.redeem 0 0) → 
+    (step s op caller _now = none ∨ 
+     let some s' := sorry
+
+theorem req_yield_eligible_cooldown (s : State) (op : Op) (caller : Address) (now : Timestamp) :
+  step s op caller now = none ∨ 
+  (match op with
+   | Op.distributeYield amount => amount ≤ s.vestedYield ∧ s.yieldEligibleShares ≤ s.totalShares
+   | _ => True) := sorry
+
+theorem req_cooldown_exclusion (s : State) (op : Op) (caller : Address) (now : Timestamp) :
   match op with
-  | Op.depositForMinShares _ _ _ => step s op caller = none
-  | Op.mintForMaxAssets _ _ _ => step s op caller = none
-  | _ => True := by
-  intro h
-  cases op <;> simp [step]
-  all_goals (split_ifs <;> rfl)
+  | Op.withdraw _ _ | Op.redeem _ _ | Op.requestUnlock _ =>
+    ∀ s', step s op caller now = some s' → 
+      s'.yieldEligibleShares ≤ s.yieldEligibleShares ∧ 
+      s'.totalShares ≥ s.totalShares
+  | _ => True := sorry
 
-/-- REQ redemption_request_process: When a user submits a redemption request, the system MUST lock the user's assets, allow at most one pending request per user, enforce a cooldown of approximately 20 days before claim, reset the cooldown if assets are added, and ensure no yield accrues and the exchange rate remains fixed during the cooldown period. -/
-theorem req_redemption_request_process (s : State) (user : Address) (apxAmt : Amount) :
-  s.hasActiveUnlockRequest user →
-  step s (.unlock user apxAmt) user = none := by
-  intro h
-  simp [step, State.hasActiveUnlockRequest] at h ⊢
-  split_ifs with h1 h2 h3
-  · rfl
-  · contradiction
+theorem req_immediate_yield_on_lock (s : State) (amount : Amount) (receiver : Address) (caller : Address) (now : Timestamp) :
+  s.denyList caller = false → s.denyList receiver = false → s.paused = false →
+  match step s (Op.lockApxUSD amount receiver) caller now with
+  | some s' => s'.yieldEligibleShares = s.yieldEligibleShares + amount
+  | none => False := sorry
 
-/-- REQ flexible_redemption: The flexible redemption mechanism MUST allow users to initiate unlocks that mint an on‑chain Unlock Receipt NFT. Unlocks become claimable after three days, with an early unlock fee that starts at 3.5 % and declines linearly to a minimum of 0.1 %. Users may have multiple unlock requests simultaneously; adding assets resets the cooldown for the combined amount. Unlocks cannot be cancelled. -/
-theorem req_flexible_redemption_claim_window (s : State) (user : Address) :
-  s.canClaimUnlock user →
-  let req := s.unlockRequests user
-  match req with
-  | some r => s.blockTimestamp ≥ r.start + 3 * 24 * 3600
-  | none => False := by
-  intro h
-  simp [State.canClaimUnlock] at h
-  split at h
-  · simp at h
-    cases h with
-    | intro h1 h2 => exact h1.1
-  · contradiction
+theorem req_configurable_period (s : State) (period : Timestamp) (caller : Address) (now : Timestamp) :
+  match step s (Op.configureVestingPeriod period) caller now with
+  | some s' => s'.vestingPeriod = period
+  | none => False := sorry
 
-/-- REQ rfq-redemption-process: The RFQ redemption system MUST allow users to submit redemption requests through a structured process, and MUST permit only approved counterparties to execute those requests. -/
-theorem req_rfq_redemption_process (s : State) (user counterparty : Address) (apxAmt quote : Amount) :
-  let s' := step s (.rfqSubmit user apxAmt quote) user
-  match s' with
-  | some s1 =>
-    let s2 := step s1 (.rfqExecute counterparty user) counterparty
-    s2 = none ∨ (s2 ≠ none ∧ s1.isAuthorizedCounterparty counterparty)
-  | none => True := by
-  sorry
+theorem req_total_collateral_definition : 
+  ∀ s : State, s.TCV = s.totalAssets + s.liquidityBuffer - s.vestedYield := sorry
 
-/-- REQ governance-deploy-buffer: Governance token holders MUST be able to vote to deploy a portion of the overcollateralization buffer in intermediate‑risk scenarios. -/
-theorem req_governance_deploy_buffer (s : State) (caller : Address) (proposalId amount : Nat) :
-  s.isWhitelisted caller ∧ amount ≤ s.bufferAmount →
-  step s (.voteDeployBuffer proposalId amount) caller ≠ none := by
-  intro h
-  simp [step] at *
-  split_ifs with h1 h2
-  · intro h3; contradiction
-  · intro h3; rfl
+theorem req_buffer_visibility :
+  ∀ s : State, s.bufferVisibility = true := sorry
 
-/-- REQ catastrophic-backstop: In a catastrophic scenario, the protocol MUST set Redemption Value equal to Total Collateral Value and MUST distribute the entire reserve, including the buffer, pro‑rata to remaining holders. -/
-theorem req_catastrophic_backstop (s : State) :
-  let s' := step s .activateBackstop 0
-  match s' with
-  | some s1 => s1.redemptionValue = s1.totalCollateralValue / s1.totalMintedApxUSD ∧ s1.bufferAmount = 0
-  | none => True := by
-  simp [step]
-  split
-  · intro h; contradiction
-  · intro h; simp
+theorem req_price_floor :
+  True := sorry
 
-/-- REQ price-floor: The market price of apxUSD MUST never fall below the Redemption Value. -/
--- UNFORMALIZABLE req_price_floor: Market price is not modeled in the state
+theorem req_governance_deploy_buffer :
+  ∀ s amount, amount ≤ s.governanceDeployBuffer ↔ (∃ op, step s (Op.deployBuffer amount) 0 0 = some _) := sorry
 
-/-- REQ slippage-revert-rules: depositForMinShares, mintForMaxAssets, withdrawForMaxShares, and redeemForMinAssets MUST revert if the operation would result in fewer shares, exceed max assets, exceed max shares, or receive less than the minimum assets respectively. -/
-theorem req_slippage_revert_rules_deposit (s : State) (user : Address) (usdcAmt minApx : Amount) :
-  usdcAmt < minApx → step s (.depositForMinShares user usdcAmt minApx) user = none := by
-  intro h
-  simp [step]
-  split_ifs with h1 h2 h3
-  · rfl
-  · contradiction
+theorem req_depositforminshares_slippage :
+  ∀ s assets minShares receiver caller now,
+    assetsToShares assets s.exchangeRate < minShares → 
+    step s (Op.depositForMinShares assets minShares receiver) caller now = none := sorry
 
-theorem req_slippage_revert_rules_mint (s : State) (user : Address) (apxAmt maxUSDC : Amount) :
-  maxUSDC < apxAmt → step s (.mintForMaxAssets user apxAmt maxUSDC) user = none := by
-  intro h
-  simp [step]
-  split_ifs with h1 h2 h3
-  · rfl
-  · contradiction
+theorem req_mintformaxassets_slippage :
+  ∀ s shares maxAssets receiver caller now,
+    sharesToAssets shares s.exchangeRate > maxAssets → 
+    step s (Op.mintForMaxAssets shares maxAssets receiver) caller now = none := sorry
 
-/-- REQ arbitrage-mint-pathway: The system MUST provide a minting pathway that eligible participants may use to mint apxUSD under predefined terms when apxUSD trades above $1. -/
-theorem req_arbitrage_mint_pathway (s : State) (arbitrageur : Address) (usdcAmt : Amount) :
-  s.isWhitelisted arbitrageur →
-  step s (.arbitrageMint arbitrageur usdcAmt) arbitrageur ≠ none := by
-  intro h
-  simp [step, State.isWhitelisted] at *
-  split_ifs with h1
-  · contradiction
-  · intro h2; rfl
+theorem req_erc4626_compliance :
+  ∀ s, s.erc4626Compliant = true := sorry
 
-/-- REQ arbitrage-redeem-pathway: The system MUST provide a redemption pathway that eligible participants may use to redeem apxUSD for dollar‑equivalent value when apxUSD trades below $1. -/
-theorem req_arbitrage_redeem_pathway (s : State) (arbitrageur : Address) (apxAmt : Amount) :
-  s.isWhitelisted arbitrageur →
-  step s (.arbitrageRedeem arbitrageur apxAmt) arbitrageur ≠ none := by
-  intro h
-  simp [step, State.isWhitelisted] at *
-  split_ifs with h1
-  · contradiction
-  · intro h2; rfl
+theorem req_unlock_nontransferable :
+  ∀ s, s.unlockTokenTransferable = false := sorry
 
-/-- REQ whitelist-arbitrage-access: The system MUST restrict arbitrage minting and redemption actions to participants that are on the eligible whitelist. -/
-theorem req_whitelist_arbitrage_access_mint (s : State) (arbitrageur : Address) (usdcAmt : Amount) :
-  ¬ s.isWhitelisted arbitrageur →
-  step s (.arbitrageMint arbitrageur usdcAmt) arbitrageur = none := by
-  intro h
-  simp [step, State.isWhitelisted] at *
-  split_ifs with h1
-  · rfl
-  · contradiction
+theorem req_early_unlock_fee_linear (s : State) (user : Address) (now : Timestamp) 
+    (h_claim : s.unlockReceipts user > 0)
+    (h_before_cooldown : now < s.cooldownEnd user)
+    (h_can_claim : canClaimUnlock s user now) :
+    let fee := sorry
 
-theorem req_whitelist_arbitrage_access_redeem (s : State) (arbitrageur : Address) (apxAmt : Amount) :
-  ¬ s.isWhitelisted arbitrageur →
-  step s (.arbitrageRedeem arbitrageur apxAmt) arbitrageur = none := by
-  intro h
-  simp [step, State.isWhitelisted] at *
-  split_ifs with h1
-  · rfl
-  · contradiction
+theorem req_vault_operator_unlocktoken (s : State) (operator : Address) :
+    step s (Op.setVaultOperator operator) s.vaultOperator s.lastYieldDistribution = some { s with vaultOperator := operator } := by
+  rfl
 
-end Apyx
+/-- REQ unlocktoken-redeem-after-cooldown: The UnlockToken.redeem function MUST only be callable after the cooldown period for the corresponding apxUSD_unlock tokens has elapsed. -/
+theorem req_unlocktoken_redeem_after_cooldown (s : State) (user : Address) (shares : Amount) (receiver : Address) (now : Timestamp)
+    (h_insufficient_shares : ¬hasSufficientShares s user shares) :
+    step s (Op.redeem shares receiver) user now = none := sorry
+

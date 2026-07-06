@@ -1,0 +1,139 @@
+{
+ "results": [
+  {
+   "id": "deposit-mint-apxusd",
+   "verdict": "partial",
+   "note": "The theorem permits the deposit operation to fail, whereas the requirement mandates that deposits must be allowed; it only captures a weakened guarantee about balance increase when the operation succeeds.",
+   "reading": "For any system state `s`, any user address `user`, any USDC amount `usdcAmt`, and any minimum APX amount `minApx`, one of two things must hold: either the `depositForMinShares` operation invoked by `user` on state `s` fails (the `step` function returns `none`), or the operation succeeds (the `step` function returns `some s'` for some resulting state `s'`) and, in that resulting state, the user's APX‑USD balance is at least as large as it was in the original state plus `minApx`. The theorem does not claim that the operation always succeeds, nor that the balance increase is exactly `minApx`; it makes no statements about any other fields of the state or about other users."
+  },
+  {
+   "id": "apxusd-issuance-price",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "redemption-uses-redemption-value",
+   "verdict": "partial",
+   "note": "The theorem shows that if redemption succeeds, totalCollateralValue is reduced by apxAmt × redemptionValue, capturing the use of the current redemption value, but it omits any claim about the user receiving the correct assets or that the same value applies identically to all participants.",
+   "reading": "For any system state `s`, any user address, any amount `apxAmt` of apxUSD to redeem, and any minimum USDC amount `minUSDC`, the theorem says that one of two things must hold: either the `step` function applied to the redemption operation (`redeemForMinAssets`) with those arguments and the user as caller returns `none` (meaning the redemption is rejected), or there exists some resulting state `s'` such that `step s (.redeemForMinAssets user apxAmt minUSDC) user` returns `some s'` (meaning the redemption succeeds) and, in that resulting state, the field `totalCollateralValue` equals the original state's `totalCollateralValue` minus `apxAmt` multiplied by the original state's `redemptionValue`. The theorem makes no claim about whether the operation succeeds, about any other fields of `s'`, about the user's balances, about the `minUSDC` condition, or about any other aspects of the state."
+  },
+  {
+   "id": "overcollateralization-buffer-maintenance",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "total-collateral-metric",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "buffer-visibility",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "liquidity-buffer-maintenance",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "no-rehypothecation",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "yield-distribution",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "exchange-rate-increase",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "no-rebase",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "erc4626-compliance",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "locking-mechanism",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "access-control-pause-denylist",
+   "verdict": "partial",
+   "note": "The theorem omits the deny‑list check for the receiver (only checks the caller) and only covers two specific deposit/mint ops, so it weakens the requirement.",
+   "reading": "For any system state `s`, any operation `op`, and any caller address `caller`, if either the system is paused (`s.paused`) or the caller is on the deny‑list (`s.isDenyListed caller`), then the following holds: – If `op` is a `depositForMinShares` operation (with any arguments), the state transition function `step s op caller` must evaluate to `none` (i.e., the operation is rejected). – If `op` is a `mintForMaxAssets` operation (with any arguments), the state transition function `step s op caller` must also evaluate to `none`. – For any other kind of operation, the statement imposes no condition (the match yields `True`). In other words, when the contract is paused or the caller is deny‑listed, the `depositForMinShares` and `mintForMaxAssets` operations are disallowed, while all other operations are unrestricted by this theorem."
+  },
+  {
+   "id": "redemption-request-process",
+   "verdict": "partial",
+   "note": "The theorem only enforces the ‘at most one pending request per user’ rule by rejecting a second unlock, but it does not address locking assets, the 20‑day cooldown, reset on asset addition, or the fixed exchange‑rate/yield constraints.",
+   "reading": "For any system state `s`, any user address `user`, and any amount `apxAmt`, if the state records that the user already has an active unlock request (i.e., `s.hasActiveUnlockRequest user` is true), then performing the `unlock` operation for that user with that amount—`step s (.unlock user apxAmt) user`—produces `none`. In other words, when a user has an active unlock request, attempting another unlock is rejected and yields no resulting state. The theorem makes no claim about what happens when the user does not have an active unlock request or about any other conditions."
+  },
+  {
+   "id": "flexible-redemption",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "rfq-redemption-process",
+   "verdict": "partial",
+   "note": "The theorem enforces that a successful execution implies the counterparty was authorized, but it does not guarantee that users can always submit redemption requests, as required by the ‘MUST allow’ clause.",
+   "reading": "For any system state `s`, any user address `user`, any counterparty address `counterparty`, and any amounts `apxAmt` and `quote`, consider the state `s'` that results from applying the operation `rfqSubmit user apxAmt quote` as called by `user`. If this submission fails (i.e., `s'` is `none`), the theorem holds trivially. If the submission succeeds, yielding a new state `s1` (so `s' = some s1`), then after performing the operation `rfqExecute counterparty user` as called by `counterparty` starting from `s1`, the resulting state `s2` must satisfy one of two possibilities: either the execution fails (`s2 = none`), or the execution succeeds (`s2 ≠ none`) and, in the intermediate state `s1`, the `counterparty` is listed as an authorized counterparty (`s1.isAuthorizedCounterparty counterparty` is true). The theorem does not claim that the execution must succeed, nor does it claim that a successful execution is impossible when the counterparty is not authorized; it only states that if the execution does succeed, the counterparty must have been authorized in `s1`."
+  },
+  {
+   "id": "governance-deploy-buffer",
+   "verdict": "partial",
+   "note": "The theorem ensures a whitelisted caller can vote to deploy any amount up to the buffer without failure, but it omits the required intermediate‑risk scenario condition and does not restrict callers to governance token holders, so it only partially captures the normative requirement.",
+   "reading": "For any system state `s`, any caller address, any proposal identifier, and any amount, if the caller is listed in the state's whitelist and the amount is less than or equal to the state's current buffer amount, then performing the operation `voteDeployBuffer` with that proposal identifier and amount, invoked by that caller, will not fail: the `step` function applied to `s` with that operation and caller will return `some` new state (i.e., it will not return `none`). The theorem makes no claim about what the resulting state is, nor does it assert anything for cases where the caller is not whitelisted or the amount exceeds the buffer amount."
+  },
+  {
+   "id": "catastrophic-backstop",
+   "verdict": "partial",
+   "note": "The theorem only ensures redemptionValue = totalCollateralValue / totalMintedApxUSD and clears the buffer, but it omits the required pro‑rata distribution of the entire reserve and does not match the exact equality to Total Collateral Value demanded by the requirement.",
+   "reading": "For any system state `s`, consider the result `s'` of applying the `activateBackstop` operation (called by address 0) via the `step` function. The theorem says that one of two possibilities holds:\n\n1. If `step` returns `none` (i.e., the operation fails), then the statement is trivially true (no further condition is required).\n2. If `step` returns `some s1` (i.e., the operation succeeds and yields a new state `s1`), then in that resulting state two specific properties must hold: the `redemptionValue` field of `s1` equals `s1.totalCollateralValue / s1.totalMintedApxUSD`, and the `bufferAmount` field of `s1` equals 0.\n\nThe theorem makes no claim about whether the operation actually succeeds, nor does it impose any conditions on any other fields of the state."
+  },
+  {
+   "id": "price-floor",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "slippage-revert-rules",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "arbitrage-mint-pathway",
+   "verdict": "partial",
+   "note": "The theorem only ensures a whitelisted arbitrageur can invoke arbitrageMint without failure, omitting the crucial condition that apxUSD must be above $1 and any guarantee that minting actually occurs under the required terms.",
+   "reading": "For any system state `s`, any address `arbitrageur`, and any amount `usdcAmt`, if `arbitrageur` is listed in `s`'s whitelist, then executing the `arbitrageMint` operation with that arbitrageur and amount in state `s` does not fail: the `step` function applied to `s`, the `arbitrageMint` operation, and the caller `arbitrageur` returns `some` new state (i.e., it is not `none`). The theorem makes no claim about what the resulting state looks like, nor does it assert anything about cases where the arbitrageur is not whitelisted."
+  },
+  {
+   "id": "arbitrage-redeem-pathway",
+   "verdict": "partial",
+   "note": "The theorem only guarantees that a whitelisted address can invoke the arbitrageRedeem operation without failure, but it omits the crucial condition that apxUSD must be below $1 and does not assert that the redemption yields dollar‑equivalent value.",
+   "reading": "For any system state `s`, any address `arbitrageur`, and any amount `apxAmt`, if the address is listed in the state's whitelist (i.e., `s.isWhitelisted arbitrageur` holds), then invoking the `step` function with the operation `Op.arbitrageRedeem arbitrageur apxAmt` and with the caller also being `arbitrageur` will not produce `none`. In other words, under the whitelist condition the `step` call is defined and yields some resulting state. The theorem does not say anything about what that resulting state is, nor does it claim anything about cases where the address is not whitelisted or about any other properties of the operation."
+  },
+  {
+   "id": "whitelist-arbitrage-access",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  }
+ ],
+ "counts": {
+  "partial": 9,
+  "missing": 15
+ },
+ "coverage_full": 0.0,
+ "coverage_full_or_partial": 0.375
+}

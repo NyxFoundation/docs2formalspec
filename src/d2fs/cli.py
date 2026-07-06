@@ -5,6 +5,7 @@ from __future__ import annotations
 import typer
 
 from .config import Config
+from .pipeline import relean as relean_pipeline
 from .pipeline import run as run_pipeline
 
 app = typer.Typer(add_completion=False)
@@ -25,6 +26,13 @@ def run(
 ):
     """Generate RFC2119 spec + Lean4 formalization from documentation sources."""
     result = run_pipeline(name, sources, Config())
+    typer.echo(result)
+
+
+@app.command()
+def relean(name: str = typer.Option(..., "--name", "-n", help="System/protocol name")):
+    """Re-run only the Lean generation stage from saved requirements/model."""
+    result = relean_pipeline(name, Config())
     typer.echo(result)
 
 

@@ -8,11 +8,12 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .config import Config
-from .extract import extract_requirements, render_spec
+from .extract import Requirement, extract_requirements, render_spec
 from .ingest import ingest
-from .leancheck import CheckResult, check_and_repair
+from .leancheck import CheckResult, check_and_repair, ensure_compiles
 from .leangen import gen_lean
 from .llm import LLM
+from .review import roundtrip_review
 
 MODEL_SUMMARY_SYSTEM = """\
 You summarize a protocol as a formal state-transition model: list state variables \
@@ -58,9 +59,17 @@ def run(system_name: str, sources: list[str], cfg: Config | None = None, log=pri
     )
     (outdir / "model.md").write_text(model_summary)
 
+    return lean_stage(system_name, reqs, model_summary, outdir, cfg, llm, log,
+                      extra={"spec": str(spec_path), "requirements": len(reqs)})
+
+
+def lean_stage(system_name: str, reqs: list[Requirement], model_summary: str,
+               outdir: Path, cfg: Config, llm: LLM, log=print, extra: dict | None = None) -> dict:
     module_name = slugify_module(system_name)
     log(f"[lean] generating {module_name}.lean")
-    lean_code = gen_lean(llm, cfg, system_name, module_name, model_summary, reqs, log=log)
+    gate = lambda code: ensure_compiles(llm, cfg, module_name, code, log=log)  # noqa: E731
+    lean_code = gen_lean(llm, cfg, system_name, module_name, model_summary, reqs,
+                         log=log, compile_gate=gate)
     result: CheckResult = check_and_repair(llm, cfg, module_name, lean_code, log=log)
     (outdir / f"{module_name}.lean").write_text(result.lean_code)
     (outdir / "leancheck.json").write_text(json.dumps({
@@ -69,8 +78,6 @@ def run(system_name: str, sources: list[str], cfg: Config | None = None, log=pri
         "proved": result.theorem_count - result.sorry_count,
     }, indent=1))
     log("[review] round-trip consistency gate")
-    from .review import roundtrip_review
-
     review = roundtrip_review(llm, cfg, reqs, result.lean_code)
     (outdir / "review.json").write_text(json.dumps(review, ensure_ascii=False, indent=1))
     log(f"[review] verdicts={review['counts']} full-coverage={review['coverage_full']:.0%}")
@@ -78,9 +85,22 @@ def run(system_name: str, sources: list[str], cfg: Config | None = None, log=pri
     log(f"[done] ok={result.ok} theorems={result.theorem_count} sorries={result.sorry_count}")
     return {
         "outdir": str(outdir),
-        "spec": str(spec_path),
         "lean_ok": result.ok,
         "theorems": result.theorem_count,
+        "proved": result.theorem_count - result.sorry_count,
         "sorries": result.sorry_count,
-        "requirements": len(reqs),
+        "vacuous": result.vacuous_count,
+        "review": review["counts"],
+        **(extra or {}),
     }
+
+
+def relean(system_name: str, cfg: Config | None = None, log=print) -> dict:
+    """Re-run only the Lean stage from saved requirements.json + model.md."""
+    cfg = cfg or Config()
+    llm = LLM(cfg)
+    outdir = cfg.outputs_dir / re.sub(r"[^a-z0-9-]+", "-", system_name.lower())
+    reqs_raw = json.loads((outdir / "requirements.json").read_text())
+    reqs = [Requirement(**{k: r.get(k) for k in Requirement.__dataclass_fields__}) for r in reqs_raw]
+    model_summary = (outdir / "model.md").read_text()
+    return lean_stage(system_name, reqs, model_summary, outdir, cfg, llm, log)

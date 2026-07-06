@@ -165,9 +165,16 @@ def extend_model(llm: LLM, cfg: Config, model_code: str, reqs: list[Requirement]
 
 
 def gen_lean(llm: LLM, cfg: Config, system_name: str, module_name: str,
-             model_summary: str, reqs: list[Requirement], log=print) -> str:
+             model_summary: str, reqs: list[Requirement], log=print,
+             compile_gate=None) -> str:
+    """compile_gate: optional (model_code) -> (ok, repaired_code); models that fail
+    the gate are still used (best effort) but extensions that fail are discarded."""
     log("[leangen] phase 1: domain model")
     model_code = gen_model(llm, cfg, system_name, module_name, model_summary, reqs)
+    if compile_gate:
+        ok, model_code = compile_gate(model_code)
+        if not ok:
+            log("[leangen] WARNING: model failed compile gate; proceeding best-effort")
     log("[leangen] phase 2: theorems")
     theorems_code = gen_theorems(llm, cfg, model_code, reqs, log=log)
 
@@ -177,13 +184,20 @@ def gen_lean(llm: LLM, cfg: Config, system_name: str, module_name: str,
     missing = [r for r in reqs if r.formalizable and r.id in missing_ids]
     if missing:
         log(f"[leangen] phase 3: extending model for {len(missing)} unformalizable reqs")
-        model_code = extend_model(llm, cfg, model_code, missing)
-        extra = gen_theorems(llm, cfg, model_code, missing, log=log)
-        kept = "\n".join(
-            l for l in theorems_code.splitlines()
-            if not re.match(r"\s*--\s*UNFORMALIZABLE", l)
-        )
-        theorems_code = kept + "\n\n-- Theorems added after model extension\n\n" + extra
+        extended = extend_model(llm, cfg, model_code, missing)
+        ext_ok = True
+        if compile_gate:
+            ext_ok, extended = compile_gate(extended)
+        if ext_ok:
+            model_code = extended
+            extra = gen_theorems(llm, cfg, model_code, missing, log=log)
+            kept = "\n".join(
+                l for l in theorems_code.splitlines()
+                if not re.match(r"\s*--\s*UNFORMALIZABLE", l)
+            )
+            theorems_code = kept + "\n\n-- Theorems added after model extension\n\n" + extra
+        else:
+            log("[leangen] extension failed compile gate; keeping original model")
     return assemble(module_name, model_code, theorems_code)
 
 

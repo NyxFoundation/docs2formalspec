@@ -1,8 +1,8 @@
 {
  "ok": false,
  "attempts": 8,
- "theorems": 14,
- "sorries": 1,
- "vacuous": 0,
- "proved": 13
+ "theorems": 56,
+ "sorries": 51,
+ "vacuous": 2,
+ "proved": 5
 }

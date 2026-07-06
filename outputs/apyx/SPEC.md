@@ -1,57 +1,53 @@
 # Apyx Protocol Specification  
-**Status:** Draft – Working Document  
-**Date:** 2026‑07‑06  
+**Version:** 1.0.0‑draft  
+**Status:** Draft (intended for discussion and review)  
 
----  
+---
 
 ## 1. Introduction  
 
-The **Apyx** protocol implements a dual‑token stable‑value system composed of **apxUSD** (a fiat‑backed stablecoin) and **apyUSD** (a yield‑bearing vault token). The protocol is designed to:
+### 1.1 Purpose  
+This document defines the functional and non‑functional requirements of the **Apyx** protocol, a multi‑asset stable‑coin system comprising the **apxUSD** (collateral‑backed stablecoin) and **apyUSD** (yield‑bearing token). The specification is written in a style compatible with RFC 2119, enabling precise implementation and verification.
 
-* Allow users to deposit USDC and receive apxUSD at a 1:1 peg.  
-* Maintain a transparent over‑collateralization buffer that protects the peg under stress.  
-* Distribute off‑chain dividend yield to apyUSD holders via an on‑chain LinearVestV0 contract.  
-* Enforce strict access‑control and governance mechanisms for minting, redemption, and buffer deployment.  
+### 1.2 Scope  
+The specification covers:
 
-The specification below captures the functional, economic, and security requirements that the protocol **MUST**, **MAY**, or **SHOULD** satisfy, using the terminology defined in RFC 2119.
+* Access‑control rules for minting, redemption and protocol interaction.  
+* Economic and arithmetic invariants that preserve the peg and over‑collateralisation.  
+* State‑transition rules for the on‑chain vault, off‑chain treasury, and auxiliary contracts.  
+* Temporal constraints such as cooldown periods, yield‑streaming windows and fee schedules.  
+* Failure‑mode handling (e.g., slippage reverts, prohibition of rehypothecation).  
 
----  
+All requirements are derived from the source documentation listed in **Appendix A**; no additional requirements are introduced.
+
+---
 
 ## 2. Terminology  
 
-### 2.1 RFC 2119 Keywords  
-
-The following words have the meanings defined in **RFC 2119**:
-
-* **MUST** – required.  
-* **MUST NOT** – prohibited.  
-* **SHOULD** – recommended but not mandatory.  
-* **SHOULD NOT** – discouraged but not prohibited.  
-* **MAY** – optional.  
-* **OPTIONAL** – may be omitted without violating the specification.  
-
-### 2.2 Domain‑Specific Terms  
+The following terms have the meanings defined below. The definitions use the RFC 2119 keywords **MUST**, **MUST NOT**, **SHALL**, **SHOULD**, **MAY**, and **OPTIONAL** as defined in [RFC 2119] (https://datatracker.ietf.org/doc/html/rfc2119).
 
 | Term | Definition |
-|------|------------|
-| **apxUSD** | A fiat‑backed stablecoin issued by the protocol, intended to trade at $1. |
-| **apyUSD** | A tokenized vault representing locked apxUSD plus accrued yield; implements ERC‑4626. |
-| **USDC** | The underlying fiat‑backed stablecoin used as collateral for minting apxUSD. |
-| **Total Collateral Value (TCV)** | The market value of all collateral assets **including** the over‑collateralization buffer. |
-| **Redemption Value (RV)** | The per‑token value at which apxUSD can be redeemed, derived from the underlying basket of preferred shares. |
-| **Over‑collateralization Buffer** | The excess collateral held above the minimum required to back minted apxUSD. |
-| **LinearVestV0** | On‑chain contract that streams converted yield over a configurable period (e.g., 20 days). |
-| **Vault** | The core contract that locks apxUSD, mints apyUSD, and manages withdrawals. |
-| **Unlock Receipt NFT** | An on‑chain NFT representing a pending flexible redemption request. |
-| **Whitelist** | A list of participants approved to mint/redeem or perform arbitrage actions. |
-| **Deny List** | A list of addresses prohibited from interacting with the vault (e.g., during a pause). |
-| **Governance Token Holders** | Holders of the protocol’s governance token who may vote on buffer deployment and other parameters. |
-| **Authorized Counterparties** | Entities approved to execute RFQ redemption requests. |
-| **Cooldown** | A fixed period (≈ 20 days) during which assets are locked after a redemption request. |
-| **Liquidity Buffer** | The portion of collateral reserved to satisfy redemptions even under market stress. |
-| **RFQ** | Request‑for‑Quote process used for large‑scale redemption execution. |
+|------|--------------|
+| **apxUSD** | The primary stablecoin issued by the protocol, backed by a basket of preferred assets (“Prefs”) and short‑term treasury bonds. |
+| **apyUSD** | A tokenised vault share that represents a claim on locked apxUSD and accrues yield distributed by the protocol. |
+| **Offchain Treasury** | The off‑chain entity that receives deposited USDC, acquires the collateral basket, and manages custody. |
+| **Preferred Assets (Prefs)** | The basket of high‑quality securities held as collateral for apxUSD. |
+| **Redemption Value (RV)** | The price at which apxUSD can be redeemed, tracking the market value of the underlying basket. |
+| **Total Collateral Value (TCV)** | The full market value of the reserve, including the over‑collateralisation buffer. |
+| **Liquidity Buffer** | An extra reserve sized against historic TVL drawdowns to protect against stress events. |
+| **Unlock Receipt NFT** | An on‑chain non‑transferable NFT representing a pending redemption (unlock) request. |
+| **Cooldown** | The mandatory waiting period after a redemption request before the claim can be executed. |
+| **YieldDistributor** | The contract that credits converted apxUSD proceeds to the apyUSD vault. |
+| **LinearVestV0** | The contract implementing linear vesting of yield over a configurable period. |
+| **AccessManager** | The on‑chain access‑control component governing privileged operations (e.g., upgrades, pauses). |
+| **RFQ** | “Request‑for‑Quote” process allowing approved counterparties to execute redemption requests. |
+| **Global Pause** | A protocol‑wide emergency switch that halts deposits and mints. |
+| **Deny List** | A registry of addresses prohibited from interacting with the vault. |
+| **KYC / KYB** | Know‑Your‑Customer / Know‑Your‑Business verification procedures. |
+| **ERC‑4626** | Standardised tokenised vault interface. |
+| **UUPS** | Upgradeable proxy pattern. |
 
----  
+---
 
 ## 3. System Model  
 
@@ -59,110 +55,203 @@ The following words have the meanings defined in **RFC 2119**:
 
 | Actor | Role |
 |-------|------|
-| **User** | Deposits USDC, mints apxUSD, locks apxUSD to receive apyUSD, initiates redemption or unlock requests. |
-| **Whitelisted Participant** | May mint/redeem apxUSD through designated pathways and perform arbitrage actions. |
-| **Governance Token Holder** | Can vote on protocol parameters, including deployment of the over‑collateralization buffer. |
-| **Authorized Counterparty** | Executes RFQ redemption requests on behalf of users. |
-| **Protocol Contracts** | Vault, LinearVestV0, Unlock Receipt NFT, Pause controller, etc. |
-| **External Oracle** | Supplies market prices for USDC, apxUSD, and the underlying basket of preferred shares. |
+| **Whitelisted User** | Eligible participant (institutional market maker) allowed to mint/redeem apxUSD under certain market conditions. |
+| **Permissionless User** | Any address that may deposit apxUSD and receive apyUSD without KYC. |
+| **Governance Token Holder** | May vote to deploy part of the over‑collateralisation buffer in intermediate‑risk scenarios. |
+| **Approved Counterparty** | Executes redemption requests submitted via the RFQ process. |
+| **Offchain Treasury** | Receives USDC deposits, purchases Prefs and treasury bonds, holds assets in designated custody accounts. |
+| **YieldDistributor** | Converts proceeds from collateral yields into apxUSD and credits the apyUSD vault. |
+| **Vault (apyUSD contract)** | Implements ERC‑4626, manages deposits, mints, withdrawals, and unlock tokens. |
+| **UnlockToken contract** | Issues non‑transferable Unlock Receipt NFTs. |
+| **AccessManager** | Enforces global pause, deny‑list, and upgradeability controls. |
 
 ### 3.2 State Variables  
 
-* `totalCollateralValue` – market value of all collateral assets (including buffer).  
-* `redemptionValue` – current per‑token redemption price.  
-* `bufferAmount = totalCollateralValue – (totalMintedApxUSD × redemptionValue)`.  
-* `exchangeRate = totalAssets / totalSupply` for the apyUSD vault (reflects accrued yield).  
-* `paused` – global pause flag.  
-* `denyList[address]` – mapping of prohibited addresses.  
-* `whitelist[address]` – mapping of eligible participants.  
+| Variable | Description |
+|----------|-------------|
+| `totalCollateralValue` (TCV) | Market value of all Prefs, treasury bonds, and the over‑collateralisation buffer. |
+| `redemptionValue` (RV) | Price at which apxUSD can be redeemed; tracks the underlying basket. |
+| `liquidityBuffer` | Portion of TCV reserved against historic drawdowns; never consumed in routine redemptions. |
+| `exchangeRate` | Ratio used to convert apyUSD ↔ apxUSD during redemption; must be ≥ 1. |
+| `cooldownEnd[user]` | Timestamp after which a user’s pending unlock request may be claimed. |
+| `unlockReceiptId` | Identifier of the Unlock Receipt NFT associated with a redemption request. |
+| `paused` | Boolean flag indicating whether the global pause is active. |
+| `denyList[address]` | Mapping indicating whether an address is blocked from deposit/mint. |
+| `vestedYield` | Amount of yield that has been vested and is available for distribution. |
 
 ### 3.3 Operations  
 
-| Operation | Description |
-|-----------|-------------|
-| `depositForMinShares` | User deposits USDC, receives at least a minimum number of apxUSD shares. |
-| `mintForMaxAssets` | User specifies a maximum USDC amount to receive a fixed number of apxUSD. |
-| `withdrawForMaxShares` | User withdraws USDC by burning up to a maximum number of apxUSD shares. |
-| `redeemForMinAssets` | User redeems apxUSD for at least a minimum amount of USDC. |
-| `lock` | Synchronously lock apxUSD and mint apyUSD shares (ERC‑4626). |
-| `unlock` | Initiate flexible redemption, mint Unlock Receipt NFT. |
-| `claimUnlock` | After the unlock period, claim USDC and burn the receipt. |
-| `pause` / `unpause` | Global emergency stop that blocks deposits/mints. |
-| `voteDeployBuffer` | Governance vote to release a portion of the buffer. |
-| `rfqSubmit` / `rfqExecute` | Structured redemption request processed by an authorized counterparty. |
+| Operation | Synopsis |
+|-----------|----------|
+| `deposit(assets, receiver)` | Synchronously lock USDC‑equivalent apxUSD and mint apyUSD shares to `receiver`. |
+| `mint(shares, receiver)` | Synchronously mint `shares` of apyUSD by depositing the required apxUSD. |
+| `withdraw(assets, receiver)` | Pull vested yield, then withdraw `assets` of apxUSD, returning an `apxUSD_unlock` token. |
+| `redeem(shares, receiver)` | Convert `shares` of apyUSD into apxUSD at the current `exchangeRate`. |
+| `requestUnlock(amount)` | Create an Unlock Receipt NFT and start a cooldown timer. |
+| `claimUnlock(tokenId)` | After cooldown, redeem the Unlock Receipt for apxUSD. |
+| `submitRFQ(redemptionRequest)` | Submit a structured redemption request; only approved counterparties may fulfil it. |
+| `pause()` / `unpause()` | Global pause control (AccessManager). |
+| `addToDenyList(address)` / `removeFromDenyList(address)` | Manage deny‑list entries (AccessManager). |
+| `upgradeTo(newImplementation)` | Upgrade the vault contract via UUPS (AccessManager). |
 
----  
+All operations must respect the requirements enumerated in the following sections.
 
-## 4. Requirements  
+---
 
-Each requirement is presented as a separate clause, prefixed with **REQ‑\<ID\>**. The clause text reproduces the exact RFC 2119 statement from the source material, followed by a brief elaboration.
+## 4. Access‑Control Requirements  
 
-### 4.1 State Requirements  
+| ID | Requirement |
+|----|-------------|
+| **REQ‑whitelist‑mint‑access** | **The protocol MUST only allow whitelisted users to deposit USDC for minting apxUSD.**<br>Only addresses on the eligible whitelist may invoke the minting pathway that creates new apxUSD. |
+| **REQ‑whitelist‑mint‑redeem** | **Only participants who are eligible, located in permitted jurisdictions, and whitelisted MAY mint or redeem apxUSD through the protocol's designated pathways.**<br>Eligibility and jurisdiction checks are performed off‑chain before the on‑chain call is accepted. |
+| **REQ‑deposit‑permissionless** | **The vault MUST allow any address to deposit apxUSD and receive apyUSD without requiring KYC.**<br>Deposits are permissionless; no identity verification is required. |
+| **REQ‑jurisdiction‑restriction‑frontend** | **The frontend MUST prevent users located in restricted jurisdictions from accessing the Apyx application.**<br>Geolocation checks are enforced at the UI layer. |
+| **REQ‑kyc‑not‑required** | **The smart‑contract system MUST NOT require any KYB/KYC verification for any operation.**<br>All on‑chain functions are open to any address. |
+| **REQ‑rfq‑redemption** | **The system MUST allow users to submit redemption requests via a structured RFQ process and MUST permit only approved counterparties to execute those requests.** |
+| **REQ‑global‑pause‑blocks‑deposit‑mint** | **If the global pause is active, the vault MUST reject any `deposit` or `mint` transaction.** |
+| **REQ‑denylist‑blocks‑deposit‑mint** | **The vault MUST revert any `deposit` or `mint` transaction if the caller or the receiver address is present in the deny list.** |
+| **REQ‑unlock‑nontransferable** | **The apxUSD_unlock token MUST NOT be transferable.** |
+| **REQ‑single‑unlocktoken‑instance** | **There MUST be only one instance of the UnlockToken contract, and it MUST be used exclusively by the apyUSD vault.** |
+| **REQ‑vault‑operator‑unlocktoken** | **The apyUSD vault MUST be set as the operator of the UnlockToken contract, allowing it to initiate redeem requests on behalf of users immediately.** |
+| **REQ‑governance‑deploy‑buffer** | **Governance token holders MUST be able to vote to deploy a portion of the overcollateralization buffer in intermediate‑risk scenarios.** |
+| **REQ‑whitelist‑mint‑premium** | **Only participants on the eligible whitelist MAY mint apxUSD via the arbitrage pathway when apxUSD trades above $1.** |
+| **REQ‑whitelist‑redeem‑discount** | **Only participants on the eligible whitelist MAY redeem apxUSD for dollar‑equivalent value when apxUSD trades below $1.** |
 
-| # | Requirement |
-|---|-------------|
-| **4.1.1 REQ‑deposit-mint-apxusd** | **Statement:** *The system **MUST** allow users to deposit USDC in order to acquire apxUSD.*<br>**Elaboration:** Users interact with the `depositForMinShares` function; the protocol credits the depositor with apxUSD at a 1:1 peg (see §5.3). |
-| **4.1.2 REQ‑apxusd-issuance-price** | **Statement:** *The protocol **MUST** issue new apxUSD at a price of exactly $1 per token.*<br>**Elaboration:** The minting logic enforces a fixed conversion rate between USDC and apxUSD; any deviation causes the transaction to revert. |
-| **4.1.3 REQ‑redemption-uses-redemption-value** | **Statement:** *All redemption transactions **MUST** be executed at the current Redemption Value, which tracks the underlying basket of preferred shares and applies identically to all participants.*<br>**Elaboration:** The `redeemForMinAssets` operation uses `redemptionValue` as the per‑token price, ensuring uniform treatment. |
-| **4.1.4 REQ‑overcollateralization-buffer-maintenance** | **Statement:** *The system **MUST** keep apxUSD over‑collateralized by maintaining an over‑collateralization buffer that grows during stress events, is not consumed by routine redemptions, and ensures total minted apxUSD never exceeds the market value of the collateral minus the required margin.*<br>**Elaboration:** Buffer growth is driven by market‑price feeds; routine redemptions draw only the base collateral, preserving the buffer. |
-| **4.1.5 REQ‑total-collateral-metric** | **Statement:** *The Total Collateral Value metric **MUST** represent the full reserve value including the over‑collateralization buffer and **MUST** be publicly available on the dashboard at all times.*<br>**Elaboration:** The dashboard reads `totalCollateralValue` from the on‑chain contract and displays it in real time. |
-| **4.1.6 REQ‑buffer-visibility** | **Statement:** *The buffer amount (the gap between Redemption Value and Total Collateral Value) **MUST** be visible to all users at all times.*<br>**Elaboration:** A read‑only view function `bufferAmount()` returns the current gap; UI components expose this value. |
-| **4.1.7 REQ‑liquidity-buffer-maintenance** | **Statement:** *The liquidity buffer **MUST** be at least as large as the largest historical TVL drawdown among comparable stablecoins and must remain available at all times, including outside traditional trading hours and on weekends.*<br>**Elaboration:** The buffer is held in highly liquid assets (e.g., USDC) and is never locked, guaranteeing immediate availability. |
-| **4.1.8 REQ‑no-rehypothecation** | **Statement:** *The protocol **MUST NOT** rehypothecate, lend, or otherwise utilize deposited apxUSD for any purpose.*<br>**Elaboration:** All collateral remains in the vault; no external contracts receive approval to transfer it. |
-| **4.1.9 REQ‑yield-distribution** | **Statement:** *The Onchain Vault **MUST** receive converted apxUSD yield from off‑chain dividend collections and stream it continuously over a configurable period (e.g., 20 days) using the LinearVestV0 contract. Yield is paid only to apyUSD tokens not in cooldown; newly locked apyUSD begins receiving yield immediately, while tokens in cooldown are excluded.*<br>**Elaboration:** The vault calls `LinearVestV0.streamYield(amount, period)` after each dividend collection; the streaming logic checks the cooldown status of each holder. |
-| **4.1.10 REQ‑exchange-rate-increase** | **Statement:** *The exchange rate between apyUSD and apxUSD **MUST** increase over time to reflect accrued yield.*<br>**Elaboration:** `exchangeRate = totalAssets / totalSupply` grows as streamed yield augments `totalAssets`. |
-| **4.1.11 REQ‑no-rebase** | **Statement:** *apyUSD token balances **MUST NOT** rebase.*<br>**Elaboration:** Balances change only via mint, burn, or transfer; the contract does not adjust balances proportionally to external factors. |
-| **4.1.12 REQ‑erc4626-compliance** | **Statement:** *The apyUSD contract **MUST** implement the ERC‑4626 tokenized vault interface.*<br>**Elaboration:** All required ERC‑4626 view and mutating functions (`deposit`, `mint`, `withdraw`, `redeem`, `totalAssets`, etc.) are present and conform to the standard. |
-| **4.1.13 REQ‑locking-mechanism** | **Statement:** *The vault **MUST** allow users to lock apxUSD and receive apyUSD shares synchronously within the same transaction. The apyUSD contract **MUST** implement ERC‑4626. `totalAssets()` must include both the vault’s direct apxUSD balance and the vested amount from LinearVestV0. Deposits and mints calculate shares using `totalAssets()`, withdrawals pull all vested yield before processing and burn shares immediately.*<br>**Elaboration:** A single atomic transaction executes `transferFrom` of apxUSD, updates `totalAssets`, and mints the appropriate number of apyUSD shares. |
-| **4.1.14 REQ‑redemption-request-process** | **Statement:** *When a user submits a redemption request, the system **MUST** lock the user's assets, allow at most one pending request per user, enforce a cooldown of approximately 20 days before claim, reset the cooldown if assets are added, and ensure no yield accrues and the exchange rate remains fixed during the cooldown period.*<br>**Elaboration:** The contract records `requestTimestamp`; any additional deposit before claim updates the timestamp, effectively resetting the cooldown. |
-| **4.1.15 REQ‑flexible-redemption** | **Statement:** *The flexible redemption mechanism **MUST** allow users to initiate unlocks that mint an on‑chain Unlock Receipt NFT. Unlocks become claimable after three days, with an early unlock fee that starts at 3.5 % and declines linearly to a minimum of 0.1 %. Users may have multiple unlock requests simultaneously; adding assets resets the cooldown for the combined amount. Unlocks cannot be cancelled.*<br>**Elaboration:** Each unlock request creates a distinct NFT containing the amount and start time; the fee schedule is enforced on early claim. |
-| **4.1.16 REQ‑slippage-revert-rules** | **Statement:** *`depositForMinShares`, `mintForMaxAssets`, `withdrawForMaxShares`, and `redeemForMinAssets` **MUST** revert if the operation would result in fewer shares, exceed max assets, exceed max shares, or receive less than the minimum assets respectively.*<br>**Elaboration:** The functions perform pre‑flight checks against the user‑supplied limits and revert with a descriptive error if violated. |
-| **4.1.17 REQ‑arbitrage-mint-pathway** | **Statement:** *The system **MUST** provide a minting pathway that eligible participants may use to mint apxUSD under predefined terms when apxUSD trades above $1.*<br>**Elaboration:** An on‑chain `arbitrageMint` function is callable only by whitelisted arbitrageurs; it mints apxUSD at the peg and transfers the excess USDC to the buffer. |
-| **4.1.18 REQ‑arbitrage-redeem-pathway** | **Statement:** *The system **MUST** provide a redemption pathway that eligible participants may use to redeem apxUSD for dollar‑equivalent value when apxUSD trades below $1.*<br>**Elaboration:** An on‑chain `arbitrageRedeem` function allows whitelisted arbitrageurs to burn apxUSD and receive USDC at the Redemption Value, draining the buffer if necessary. |
-| **4.1.19 REQ‑whitelist-arbitrage-access** | **Statement:** *The system **MUST** restrict arbitrage minting and redemption actions to participants that are on the eligible whitelist.*<br>**Elaboration:** Both `arbitrageMint` and `arbitrageRedeem` check `whitelist[address]` before proceeding. |
+---
 
-### 4.2 Access‑Control Requirements  
+## 5. Arithmetic Requirements  
 
-| # | Requirement |
-|---|-------------|
-| **4.2.1 REQ‑whitelist-mint-redeem** | **Statement:** *Only participants who are whitelisted and located in permitted jurisdictions **MAY** mint or redeem apxUSD through the protocol's designated pathways.*<br>**Elaboration:** The contract validates the caller against `whitelist` and a jurisdiction‑check oracle before allowing mint or redeem operations. |
-| **4.2.2 REQ‑access-control-pause-denylist** | **Statement:** *If the vault is globally paused, any deposit or mint operation **MUST** revert. Additionally, if the caller or receiver is on the deny list, deposit or mint **MUST** revert immediately.*<br>**Elaboration:** The `paused` flag and `denyList` mapping are consulted at the start of `deposit*` and `mint*` functions; violations trigger a revert with error code `Paused` or `DenyListed`. |
-| **4.2.3 REQ‑rfq-redemption-process** | **Statement:** *The RFQ redemption system **MUST** allow users to submit redemption requests through a structured process, and **MUST** permit only approved counterparties to execute those requests.*<br>**Elaboration:** Users call `rfqSubmit`; only addresses in `authorizedCounterparties` may call `rfqExecute` to settle the request. |
-| **4.2.4 REQ‑governance-deploy-buffer** | **Statement:** *Governance token holders **MUST** be able to vote to deploy a portion of the overcollateralization buffer in intermediate‑risk scenarios.*<br>**Elaboration:** A governance proposal can call `deployBuffer(amount)`; execution succeeds only if the proposal passes the required quorum. |
+| ID | Requirement |
+|----|-------------|
+| **REQ‑issuance‑price‑one** | **The protocol MUST price new issuance of apxUSD at $1 per unit.** |
+| **REQ‑redemption‑value‑tracks‑basket** | **Redemption Value MUST track the value of the underlying basket of preferred shares.** |
+| **REQ‑exchange‑rate‑monotonic** | **The exchangeRate used for redemption MUST be greater than or equal to 1 at all times.** |
+| **REQ‑redemption‑calculation** | **When a user redeems apyUSD, the system MUST transfer apxUSD equal to the redeemed apyUSD amount multiplied by the current exchangeRate.** |
+| **REQ‑overcollateralization‑margin** | **The system MUST ensure that the total amount of apxUSD minted does not exceed the market value of the collateral minus the required overcollateralization margin.** |
+| **REQ‑rate‑dollar‑terms** | **The yield rate MUST be expressed in dollar terms.** |
+| **REQ‑constant‑rate‑vesting** | **The linear vesting mechanism MUST distribute yield at a constant rate over the vesting period.** |
+| **REQ‑total‑collateral‑definition** | **Total Collateral Value MUST be calculated as the full value of the reserve, including the overcollateralization buffer.** |
+| **REQ‑price‑may‑reflect‑spreads** *(Economic category, but arithmetic‑related)* | **The system MAY reflect spreads and offchain execution expenses in the price during minting and redemption.** |
+| **REQ‑price‑floor** *(Economic)* | **Redemption Value MUST act as a hard floor for the market price of apxUSD.** |
+| **REQ‑buffer‑visibility** | **The buffer (gap between Redemption Value and Total Collateral Value) MUST be visible to everyone at all times.** |
+| **REQ‑redemption‑value‑price** | **The system MUST use Redemption Value as the price for all redemption transactions.** |
+| **REQ‑redemption‑value‑uniform** | **Redemption Value MUST apply identically to all participants under both calm and stressed conditions.** |
+| **REQ‑hard‑floor‑redemption‑value** | **apxUSD MUST not trade below Redemption Value, which serves as a hard floor.** |
+| **REQ‑buffer‑growth‑stress** | **The overcollateralization buffer MUST increase during stress events and MUST NOT be reduced by them.** |
+| **REQ‑buffer‑not‑consumed** | **The overcollateralization buffer MUST NOT be consumed during routine redemption operations.** |
+| **REQ‑buffer‑preserved‑stress** | **The system MUST preserve the buffer (the difference between Redemption Value and Total Collateral Value) during stress events.** |
+| **REQ‑liquidity‑buffer‑size** | **The protocol MUST maintain a liquidity buffer sized against the largest historical TVL drawdowns observed in comparable stablecoins.** |
+| **REQ‑catastrophic‑redemption** | **In a catastrophic scenario the system MUST set Redemption Value equal to Total Collateral Value and MUST distribute the entire reserve, buffer included, pro‑rata to remaining holders.** |
+| **REQ‑mint‑redeem‑at‑redemption‑value** | **The system MUST price all mint and redemption transactions at the Redemption Value, which tracks the underlying basket of preferred shares and cash.** |
+| **REQ‑apyusd‑value‑increases‑with‑yield** | **The redemption value of apyUSD SHALL increase over time as yield is distributed.** |
 
-### 4.3 Economic Requirements  
+---
 
-| # | Requirement |
-|---|-------------|
-| **4.3.1 REQ‑no-rehypothecation** *(re‑listed for emphasis)* | **Statement:** *The protocol **MUST NOT** rehypothecate, lend, or otherwise utilize deposited apxUSD for any purpose.*<br>**Elaboration:** Collateral is held in a non‑transferable vault; no external contracts receive `approve` rights. |
-| **4.3.2 REQ‑liquidity-buffer-maintenance** *(re‑listed for emphasis)* | **Statement:** *The liquidity buffer **MUST** be at least as large as the largest historical TVL drawdown among comparable stablecoins and must remain available at all times, including outside traditional trading hours and on weekends.*<br>**Elaboration:** The buffer is composed of instantly liquid assets; no time‑locked mechanisms are applied. |
-| **4.3.3 REQ‑price-floor** | **Statement:** *The market price of apxUSD **MUST** never fall below the Redemption Value.*<br>**Elaboration:** The over‑collateralization buffer and arbitrage pathways are designed to enforce this floor; market‑price deviations trigger automatic arbitrage actions. |
-| **4.3.4 REQ‑catastrophic-backstop** | **Statement:** *In a catastrophic scenario, the protocol **MUST** set Redemption Value equal to Total Collateral Value and **MUST** distribute the entire reserve, including the buffer, pro‑rata to remaining holders.*<br>**Elaboration:** A governance‑triggered `activateBackstop()` function updates `redemptionValue` and initiates a proportional distribution of all assets. |
+## 6. Economic Requirements  
 
-### 4.4 Failure‑Handling Requirements  
+| ID | Requirement |
+|----|-------------|
+| **REQ‑redemption‑at‑redemption‑value** | **The protocol MUST redeem apxUSD at the Redemption Value that tracks the underlying basket.** |
+| **REQ‑price‑may‑reflect‑spreads** | **The system MAY reflect spreads and offchain execution expenses in the price during minting and redemption.** |
+| **REQ‑liquidity‑buffer‑size** | **The protocol MUST maintain a liquidity buffer sized against the largest historical TVL drawdowns observed in comparable stablecoins.** |
+| **REQ‑buffer‑growth‑stress** | **The overcollateralization buffer MUST increase during stress events and MUST NOT be reduced by them.** |
+| **REQ‑price‑floor** | **Redemption Value MUST act as a hard floor for the market price of apxUSD.** |
+| **REQ‑catastrophic‑redemption** | **In a catastrophic scenario the system MUST set Redemption Value equal to Total Collateral Value and MUST distribute the entire reserve, buffer included, pro‑rata to remaining holders.** |
+| **REQ‑mint‑redeem‑at‑redemption‑value** | **The system MUST price all mint and redemption transactions at the Redemption Value, which tracks the underlying basket of preferred shares and cash.** |
+| **REQ‑early‑redemption‑fee‑schedule** | **The system MUST calculate an early redemption fee that starts at 3.5 % at request time and declines linearly to 0.1 % by the end of the 3‑day claim window.** |
+| **REQ‑early‑unlock‑fee‑linear** | **If a user claims an unlock before the end of the cooldown period, the system MUST apply an early unlock fee that declines linearly over time from 3.5 % down to 0.1 %.** |
+| **REQ‑yield‑eligible‑cooldown** | **Yield MUST be paid only to apyUSD tokens that are not currently undergoing cooldown.** |
+| **REQ‑cooldown‑exclusion** | **When an apyUSD token enters the cooldown phase, it MUST be removed from the pool that receives yield.** |
+| **REQ‑immediate‑yield‑on‑lock** | **Newly locked apyUSD MUST begin receiving yield immediately.** |
+| **REQ‑credit‑yield** | **The system MUST credit converted apxUSD proceeds to the apyUSD vault via the YieldDistributor.** |
+| **REQ‑linear‑vesting‑implementation** | **Yield distribution MUST use a linear vesting mechanism implemented by the LinearVestV0 contract.** |
+| **REQ‑continuous‑streaming** | **Yield MUST be streamed continuously over a configurable period rather than as a single lump‑sum distribution.** |
+| **REQ‑monthly‑rate‑setting** | **Each month, the system MUST set the yield rate for the following month based on the yield generated by the collateral base in the prior month.** |
+| **REQ‑configurable‑period** | **The vesting period over which yield is streamed MUST be configurable by the protocol.** |
 
-| # | Requirement |
-|---|-------------|
-| **4.4.1 REQ‑slippage-revert-rules** *(re‑listed for emphasis)* | **Statement:** *`depositForMinShares`, `mintForMaxAssets`, `withdrawForMaxShares`, and `redeemForMinAssets` **MUST** revert if the operation would result in fewer shares, exceed max assets, exceed max shares, or receive less than the minimum assets respectively.*<br>**Elaboration:** The contract checks user‑provided bounds before state changes; any violation aborts the transaction. |
-| **4.4.2 REQ‑catastrophic-backstop** *(re‑listed for emphasis)* | **Statement:** *In a catastrophic scenario, the protocol **MUST** set Redemption Value equal to Total Collateral Value and **MUST** distribute the entire reserve, including the buffer, pro‑rata to remaining holders.*<br>**Elaboration:** This ensures that no holder is left with a negative net value; the distribution is performed atomically. |
+---
 
----  
+## 7. Failure‑Mode Requirements  
 
-## 5. Security Considerations  
+| ID | Requirement |
+|----|-------------|
+| **REQ‑no‑rehypothecation** | **The protocol MUST NOT rehypothecate or lend deposited apxUSD.** |
+| **REQ‑depositforminshares‑slippage** | **The `depositForMinShares` function MUST revert with a slippage error if the previewed share amount is less than `minShares`.** |
+| **REQ‑mintformaxassets‑slippage** | **The `mintForMaxAssets` function MUST revert with a slippage error if the required asset amount exceeds `maxAssets`.** |
+| **REQ‑withdrawformaxshares‑revert‑on‑slippage** | **The `withdrawForMaxShares` function MUST revert if the number of shares required to withdraw the specified assets exceeds `maxShares`.** |
+| **REQ‑redeemforminassets‑revert‑on‑slippage** | **The `redeemForMinAssets` function MUST revert if the amount of assets received for the specified shares is less than `minAssets`.** |
+| **REQ‑unlock‑cannot‑cancel** | **The system MUST NOT allow a user to cancel an unlock once it has been initiated.** |
+| **REQ‑unlocktoken‑redeem‑after‑cooldown** | **The UnlockToken.redeem function MUST only be callable after the cooldown period for the corresponding apxUSD_unlock tokens has elapsed.** |
 
-1. **Access‑Control Integrity** – Whitelist, deny‑list, and authorized‑counterparty checks must be immutable except via governance‑approved proposals. Any bypass would enable unauthorized minting or redemption, breaking the peg.  
-2. **Reentrancy Protection** – All external calls (e.g., token transfers, NFT minting) are placed after state updates and guarded by the `nonReentrant` modifier to prevent re‑entrancy attacks.  
-3. **Oracle Manipulation** – Redemption Value and market price feeds are sourced from multiple independent oracles; a consensus mechanism mitigates single‑oracle manipulation.  
-4. **Buffer Exhaustion** – The over‑collateralization buffer is designed to absorb extreme market stress. Nevertheless, a catastrophic backstop is defined to protect holders if the buffer is depleted.  
-5. **Upgrade Safety** – The vault and LinearVestV0 contracts are deployed behind a proxy with a transparent upgrade pattern; only governance with a super‑majority can authorize upgrades.  
-6. **Denial‑of‑Service (DoS)** – The `pause` mechanism allows rapid halting of deposits/mints in case of DoS attacks, while redemption pathways remain functional for existing holders.  
+---
 
----  
+## 8. State Requirements  
 
-## 6. References  
+| ID | Requirement |
+|----|-------------|
+| **REQ‑treasury‑allocates‑capital** | **The Offchain Treasury MUST allocate incoming USDC to acquire a basket of preferred assets and short‑term treasury bonds.** |
+| **REQ‑custody‑designated‑accounts** | **Acquired preferred assets MUST be held in custody in designated accounts.** |
+| **REQ‑redemption‑settlement‑usdc** | **All redemption settlements MUST be made in USDC.** |
+| **REQ‑redemption‑liquidate‑usdc** | **When a redemption is processed, the protocol MUST liquidate preferred shares into USDC and MUST NOT transfer preferred shares directly to the redeemer.** |
+| **REQ‑hard‑floor‑redemption‑value** | **apxUSD MUST not trade below Redemption Value, which serves as a hard floor.** |
+| **REQ‑publish‑total‑collateral** | **The protocol MUST publish the Total Collateral Value, including the overcollateralization buffer, on the dashboard.** |
+| **REQ‑buffer‑not‑consumed** | **The overcollateralization buffer MUST NOT be consumed during routine redemption operations.** |
+| **REQ‑buffer‑preserved‑stress** | **The system MUST preserve the buffer (the difference between Redemption Value and Total Collateral Value) during stress events.** |
+| **REQ‑buffer‑visibility** | **The buffer (gap between Redemption Value and Total Collateral Value) MUST be visible to everyone at all times.** |
+| **REQ‑publish‑metrics** | **The system MUST publish Redemption Value and Total Collateral Value on the transparency dashboard.** |
+| **REQ‑lock‑apxusd‑for‑apyusd** | **The system SHALL allow users to lock apxUSD in the vault to receive apyUSD.** |
+| **REQ‑non‑rebasing‑balance** | **The apyUSD token balances MUST NOT be rebased; balances may only change via minting or burning.** |
+| **REQ‑erc4626‑compliance** | **The apyUSD contract MUST implement the ERC‑4626 tokenized vault interface.** |
+| **REQ‑upgradeable‑uups** | **The apyUSD contract MUST be upgradeable via the UUPS proxy pattern and governed by AccessManager.** |
+| **REQ‑sync‑withdraw‑redeem** | **The apyUSD vault MUST execute withdraw and redeem operations synchronously and return apxUSD_unlock tokens.** |
+| **REQ‑unlock‑receipt‑nft‑mint** | **When a user initiates a new redemption/unlock, the system MUST mint an on‑chain Unlock Receipt NFT representing the pending claim.** |
+| **REQ‑withdrawal‑pulls‑vested** | **When a withdrawal is requested, the vault MUST automatically pull all vested yield from the LinearVestV0 contract before processing the withdrawal.** |
+| **REQ‑totalassets‑includes‑vested** | **The `totalAssets()` function MUST return the sum of the vault's direct apxUSD balance and the vested amount from the LinearVestV0 contract.** |
+| **REQ‑deposit‑immediate** | **The vault MUST mint apyUSD shares to the receiver immediately upon successful execution of `deposit(assets, receiver)`.** |
+| **REQ‑mint‑immediate** | **The vault MUST mint the requested apyUSD shares to the receiver immediately upon successful execution of `mint(shares, receiver)`.** |
+| **REQ‑withdrawal‑returns‑unlock‑token** | **Upon a successful withdrawal, the vault MUST mint a non‑transferable `apxUSD_unlock` token that MAY be redeemed for apxUSD only after a cooldown period.** |
+| **REQ‑unlock‑nontransferable** | **The apxUSD_unlock token MUST NOT be transferable.** |
+| **REQ‑unlock‑token‑single‑instance** | **There MUST be only one instance of the UnlockToken contract, and it MUST be used exclusively by the apyUSD vault.** |
+| **REQ‑vault‑operator‑unlocktoken** | **The apyUSD vault MUST be set as the operator of the UnlockToken contract, allowing it to initiate redeem requests on behalf of users immediately.** |
+| **REQ‑unlock‑token‑no‑yield** | **The apxUSD_unlock token MUST NOT earn any yield during the cooldown period.** |
 
-| # | Source |
-|---|--------|
+---
+
+## 9. Temporal Requirements  
+
+| ID | Requirement |
+|----|-------------|
+| **REQ‑vault‑yield‑distribution‑20d** | **The Onchain Vault MUST distribute received yield to apyUSD holders over a 20‑day period.** |
+| **REQ‑cooldown‑duration** | **The system MUST enforce a cooldown period of approximately 20 days between a redemption request and the earliest possible claim.** |
+| **REQ‑flexible‑claim‑available‑after‑3d** | **The system MUST allow a flexible redemption/unlock claim to be submitted no earlier than 3 days after the request.** |
+| **REQ‑add‑assets‑resets‑cooldown** | **If a user adds assets to an existing pending redemption request, the system MUST reset the cooldown period starting from the time of the update.** |
+| **REQ‑multiple‑unlock‑requests‑allowed** | **The system MAY allow a user to have multiple concurrent Unlock Receipt NFTs for separate redemption requests.** |
+| **REQ‑multiple‑unlocks‑reset‑cooldown** | **When a user initiates a new unlock while a previous unlock is pending, the system MUST reset the cooldown period for the entire pending amount.** |
+| **REQ‑unlock‑convert‑after‑cooldown** | **The system MUST only allow conversion of apxUSD_unlock to apxUSD after the cooldown period has elapsed.** |
+| **REQ‑early‑redemption‑fee‑schedule** | **The system MUST calculate an early redemption fee that starts at 3.5 % at request time and declines linearly to 0.1 % by the end of the 3‑day claim window.** |
+| **REQ‑early‑unlock‑fee‑linear** | **If a user claims an unlock before the end of the cooldown period, the system MUST apply an early unlock fee that declines linearly over time from 3.5 % down to 0.1 %.** |
+| **REQ‑continuous‑streaming** | **Yield MUST be streamed continuously over a configurable period rather than as a single lump‑sum distribution.** |
+| **REQ‑monthly‑rate‑setting** | **Each month, the system MUST set the yield rate for the following month based on the yield generated by the collateral base in the prior month.** |
+| **REQ‑configurable‑period** | **The vesting period over which yield is streamed MUST be configurable by the protocol.** |
+
+---
+
+## 10. Security Considerations  
+
+* **Access Controls** – Whitelisting, jurisdiction checks, deny‑list, and global pause must be enforced on‑chain to prevent unauthorized minting or redemption.  
+* **Re‑entrancy** – All external calls (e.g., to the YieldDistributor or treasury) must be performed after state updates to avoid re‑entrancy attacks.  
+* **Upgrade Safety** – The UUPS proxy pattern must be combined with AccessManager‑controlled upgrades; only authorized governance may change implementations.  
+* **Denial‑of‑Service** – The liquidity buffer and over‑collateralisation buffer protect against mass redemption attacks; buffers are never consumed in routine redemptions.  
+* **Front‑end Jurisdiction Enforcement** – While UI checks are not a security boundary, they reduce regulatory risk; on‑chain checks (whitelisting) provide the definitive enforcement.  
+* **NFT Minting** – Unlock Receipt NFTs must be non‑transferable to prevent secondary market abuse.  
+* **Yield Distribution** – Tokens in cooldown are excluded from the yield pool, preventing double‑counting of yield.  
+
+---
+
+## 11. References  
+
+| # | URL |
+|---|-----|
 | 1 | <https://docs.apyx.fi/apyx-overview/how-apyx-works.md> |
 | 2 | <https://docs.apyx.fi/product-overview/apxusd-overview.md> |
 | 3 | <https://docs.apyx.fi/product-overview/apyusd-overview.md> |

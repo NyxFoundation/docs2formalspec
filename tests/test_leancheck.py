@@ -38,6 +38,47 @@ def test_error_in_def_not_stubbed():
     assert n == 0
 
 
+MULTILINE = """\
+namespace X
+
+def step (n : Nat) : Nat := n + 1
+
+theorem req_multi (n : Nat) :
+    step n = n + 1 →
+    let m := step n
+    m > n := by
+  simp [step]
+
+theorem req_term (n : Nat) : step n = n + 1 := rfl
+
+theorem req_broken_stmt (n : Nat) :
+    let s' := sorry
+
+end X
+"""
+
+
+def test_multiline_statement_with_let_preserved():
+    # error inside req_multi's proof (line 10 = "  simp [step]")
+    out, n = sorry_stub_failing_proofs(MULTILINE, "X.lean:10:2: unknown tactic")
+    assert n == 1
+    assert "let m := step n" in out          # statement kept, incl. inner :=
+    assert "m > n := sorry" in out           # only proof replaced
+    assert "-- BROKEN" not in out
+
+
+def test_term_proof_killed_not_mangled():
+    out, n = sorry_stub_failing_proofs(MULTILINE, "X.lean:12:40: type mismatch")
+    assert n == 1
+    assert "-- BROKEN: theorem req_term" in out
+
+
+def test_broken_statement_killed():
+    out, n = sorry_stub_failing_proofs(MULTILINE, "X.lean:15:14: unexpected token")
+    assert n == 1
+    assert "-- BROKEN: theorem req_broken_stmt" in out
+
+
 def test_find_vacuous():
     assert find_vacuous("theorem t : True := sorry") == ["t"]
     assert find_vacuous("theorem t (s : S) : s.x = 1 := sorry") == []

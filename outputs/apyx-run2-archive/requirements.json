@@ -1,0 +1,293 @@
+[
+ {
+  "id": "deposit-mint-apxusd",
+  "category": "state",
+  "statement": "The system MUST allow users to deposit USDC in order to acquire apxUSD.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
+  ]
+ },
+ {
+  "id": "whitelist-mint-redeem",
+  "category": "access-control",
+  "statement": "Only participants who are whitelisted and located in permitted jurisdictions MAY mint or redeem apxUSD through the protocol's designated pathways.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": false,
+  "sources": [
+   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md",
+   "https://docs.apyx.fi/product-overview/apxusd-overview.md"
+  ]
+ },
+ {
+  "id": "apxusd-issuance-price",
+  "category": "economic",
+  "statement": "The protocol MUST issue new apxUSD at a price of exactly $1 per token.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md",
+   "https://docs.apyx.fi/product-overview/apxusd-overview.md",
+   "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
+  ]
+ },
+ {
+  "id": "redemption-uses-redemption-value",
+  "category": "economic",
+  "statement": "All redemption transactions MUST be executed at the current Redemption Value, which tracks the underlying basket of preferred shares and applies identically to all participants.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md",
+   "https://docs.apyx.fi/product-overview/apxusd-overview.md",
+   "https://docs.apyx.fi/solution-overview/peg-stability-model.md",
+   "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
+  ]
+ },
+ {
+  "id": "overcollateralization-buffer-maintenance",
+  "category": "state",
+  "statement": "The system MUST keep apxUSD over‑collateralized by maintaining an over‑collateralization buffer that grows during stress events, is not consumed by routine redemptions, and ensures total minted apxUSD never exceeds the market value of the collateral minus the required margin.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/product-overview/apxusd-overview.md",
+   "https://docs.apyx.fi/solution-overview/peg-stability-model.md",
+   "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
+  ]
+ },
+ {
+  "id": "total-collateral-metric",
+  "category": "state",
+  "statement": "The Total Collateral Value metric MUST represent the full reserve value including the over‑collateralization buffer and MUST be publicly available on the dashboard at all times.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/product-overview/apxusd-overview.md",
+   "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
+  ]
+ },
+ {
+  "id": "buffer-visibility",
+  "category": "access-control",
+  "statement": "The buffer amount (the gap between Redemption Value and Total Collateral Value) MUST be visible to all users at all times.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
+  ]
+ },
+ {
+  "id": "liquidity-buffer-maintenance",
+  "category": "economic",
+  "statement": "The liquidity buffer MUST be at least as large as the largest historical TVL drawdown among comparable stablecoins and must remain available at all times, including outside traditional trading hours and on weekends.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/product-overview/apxusd-overview.md"
+  ]
+ },
+ {
+  "id": "no-rehypothecation",
+  "category": "economic",
+  "statement": "The protocol MUST NOT rehypothecate, lend, or otherwise utilize deposited apxUSD for any purpose.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md",
+   "https://docs.apyx.fi/solution-overview/peg-stability-model.md",
+   "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
+  ]
+ },
+ {
+  "id": "yield-distribution",
+  "category": "state",
+  "statement": "The Onchain Vault MUST receive converted apxUSD yield from off‑chain dividend collections and stream it continuously over a configurable period (e.g., 20 days) using the LinearVestV0 contract. Yield is paid only to apyUSD tokens not in cooldown; newly locked apyUSD begins receiving yield immediately, while tokens in cooldown are excluded.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md",
+   "https://docs.apyx.fi/product-overview/apxusd-overview.md",
+   "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
+  ]
+ },
+ {
+  "id": "exchange-rate-increase",
+  "category": "state",
+  "statement": "The exchange rate between apyUSD and apxUSD MUST increase over time to reflect accrued yield.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+  ]
+ },
+ {
+  "id": "no-rebase",
+  "category": "state",
+  "statement": "apyUSD token balances MUST NOT rebase.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+  ]
+ },
+ {
+  "id": "erc4626-compliance",
+  "category": "state",
+  "statement": "The apyUSD contract MUST implement the ERC‑4626 tokenized vault interface.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/technical-overview/locking.md"
+  ]
+ },
+ {
+  "id": "locking-mechanism",
+  "category": "state",
+  "statement": "The vault MUST allow users to lock apxUSD and receive apyUSD shares synchronously within the same transaction. The apyUSD contract MUST implement ERC‑4626. totalAssets() must include both the vault’s direct apxUSD balance and the vested amount from LinearVestV0. Deposits and mints calculate shares using totalAssets(), withdrawals pull all vested yield before processing and burn shares immediately.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/product-overview/apyusd-overview.md",
+   "https://docs.apyx.fi/technical-overview/locking.md"
+  ]
+ },
+ {
+  "id": "access-control-pause-denylist",
+  "category": "access-control",
+  "statement": "If the vault is globally paused, any deposit or mint operation MUST revert. Additionally, if the caller or receiver is on the deny list, deposit or mint MUST revert immediately.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/technical-overview/locking.md"
+  ]
+ },
+ {
+  "id": "redemption-request-process",
+  "category": "state",
+  "statement": "When a user submits a redemption request, the system MUST lock the user's assets, allow at most one pending request per user, enforce a cooldown of approximately 20 days before claim, reset the cooldown if assets are added, and ensure no yield accrues and the exchange rate remains fixed during the cooldown period.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+  ]
+ },
+ {
+  "id": "flexible-redemption",
+  "category": "state",
+  "statement": "The flexible redemption mechanism MUST allow users to initiate unlocks that mint an on‑chain Unlock Receipt NFT. Unlocks become claimable after three days, with an early unlock fee that starts at 3.5 % and declines linearly to a minimum of 0.1 %. Users may have multiple unlock requests simultaneously; adding assets resets the cooldown for the combined amount. Unlocks cannot be cancelled.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/product-overview/apyusd-overview.md",
+   "https://docs.apyx.fi/technical-overview/unlocking.md"
+  ]
+ },
+ {
+  "id": "rfq-redemption-process",
+  "category": "access-control",
+  "statement": "The RFQ redemption system MUST allow users to submit redemption requests through a structured process, and MUST permit only approved counterparties to execute those requests.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
+  ]
+ },
+ {
+  "id": "governance-deploy-buffer",
+  "category": "access-control",
+  "statement": "Governance token holders MUST be able to vote to deploy a portion of the overcollateralization buffer in intermediate‑risk scenarios.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
+  ]
+ },
+ {
+  "id": "catastrophic-backstop",
+  "category": "failure",
+  "statement": "In a catastrophic scenario, the protocol MUST set Redemption Value equal to Total Collateral Value and MUST distribute the entire reserve, including the buffer, pro‑rata to remaining holders.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
+  ]
+ },
+ {
+  "id": "price-floor",
+  "category": "arithmetic",
+  "statement": "The market price of apxUSD MUST never fall below the Redemption Value.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
+  ]
+ },
+ {
+  "id": "slippage-revert-rules",
+  "category": "failure",
+  "statement": "depositForMinShares, mintForMaxAssets, withdrawForMaxShares, and redeemForMinAssets MUST revert if the operation would result in fewer shares, exceed max assets, exceed max shares, or receive less than the minimum assets respectively.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/technical-overview/locking.md",
+   "https://docs.apyx.fi/technical-overview/unlocking.md"
+  ]
+ },
+ {
+  "id": "arbitrage-mint-pathway",
+  "category": "access-control",
+  "statement": "The system MUST provide a minting pathway that eligible participants may use to mint apxUSD under predefined terms when apxUSD trades above $1.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/solution-overview/peg-stability-model.md"
+  ]
+ },
+ {
+  "id": "arbitrage-redeem-pathway",
+  "category": "access-control",
+  "statement": "The system MUST provide a redemption pathway that eligible participants may use to redeem apxUSD for dollar‑equivalent value when apxUSD trades below $1.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/solution-overview/peg-stability-model.md"
+  ]
+ },
+ {
+  "id": "whitelist-arbitrage-access",
+  "category": "access-control",
+  "statement": "The system MUST restrict arbitrage minting and redemption actions to participants that are on the eligible whitelist.",
+  "rationale": null,
+  "source_quote": null,
+  "formalizable": true,
+  "sources": [
+   "https://docs.apyx.fi/solution-overview/peg-stability-model.md"
+  ]
+ }
+]
