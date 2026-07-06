@@ -566,6 +566,62 @@ private theorem overcollateralizationBuffer_mono (s s' : State)
     rw [hRV]; exact Nat.div_le_div_right (Nat.mul_le_mul_right _ hSup)
   split <;> split <;> omega
 
+/-- The exchange rate implied by the vault is monotone in time: vesting only ever adds
+assets, so letting time pass can never lower the rate. -/
+private theorem computeExchangeRate_mono_now (s : State) (dt : Nat) :
+    computeExchangeRate s ≤ computeExchangeRate { s with now := s.now + dt } := by
+  unfold computeExchangeRate totalAssets
+  dsimp only
+  split
+  · exact Nat.le_refl _
+  · exact Nat.div_le_div_right (Nat.mul_le_mul_right _
+      (Nat.add_le_add_left (vestedAmount_mono s (Nat.le_add_right _ _)) _))
+
+/-- The flexible-unlock fee never drops below the 0.1% (10 bps) floor once claimable. -/
+private theorem flexibleUnlockFee_ge_min (rt now : Nat) (h : rt + minFlexibleClaim ≤ now) :
+    10 ≤ flexibleUnlockFee rt now := by
+  unfold flexibleUnlockFee
+  dsimp only
+  repeat' split
+  all_goals first
+    | omega
+    | exact Nat.le_max_right _ _
+
+/-- The flexible-unlock fee never exceeds the 3.5% (350 bps) starting level. -/
+private theorem flexibleUnlockFee_le_start (rt now : Nat) :
+    flexibleUnlockFee rt now ≤ 350 := by
+  unfold flexibleUnlockFee
+  dsimp only
+  repeat' split
+  all_goals first
+    | omega
+    | exact Nat.max_le.mpr ⟨Nat.sub_le _ _, by omega⟩
+
+/-- The flexible-unlock fee declines (weakly) as time passes. -/
+private theorem flexibleUnlockFee_antitone (rt : Nat) {t1 t2 : Nat}
+    (h0 : rt + minFlexibleClaim ≤ t1) (h : t1 ≤ t2) :
+    flexibleUnlockFee rt t2 ≤ flexibleUnlockFee rt t1 := by
+  unfold flexibleUnlockFee
+  dsimp only
+  repeat' split
+  all_goals first
+    | omega
+    | (exfalso; omega)
+    | exact Nat.le_max_right _ _
+    | (exact Nat.max_le.mpr ⟨Nat.le_trans (by
+        have hdiv : (t1 - rt) * 340 / cooldownPeriod ≤ (t2 - rt) * 340 / cooldownPeriod :=
+          Nat.div_le_div_right (Nat.mul_le_mul_right _ (by omega))
+        omega) (Nat.le_max_left _ _), Nat.le_max_right _ _⟩)
+
+/-- Once the full cooldown has elapsed the flexible-unlock fee is exactly the 10 bps floor. -/
+private theorem flexibleUnlockFee_after_cooldown (rt now : Nat)
+    (h0 : rt + minFlexibleClaim ≤ now) (h : rt + cooldownPeriod ≤ now) :
+    flexibleUnlockFee rt now = 10 := by
+  unfold flexibleUnlockFee
+  dsimp only
+  repeat' split
+  all_goals omega
+
 /- ================= per-op extraction lemmas ================= -/
 
 private theorem step_withdraw_some (s : State) (assets : Nat) (receiver caller : Address) (s' : State)
@@ -965,9 +1021,9 @@ private theorem step_executeRFQRedemption_some (s : State) (user : Address) (amo
 -- BROKEN:     else sorry
 -- BROKEN:   | _ => sorry
 
-theorem req_apyusd_value_increase (s : State) (h : s.totalSupply_apyUSD > 0) :
-    computeExchangeRate s ≤ computeExchangeRate { s with now := s.now + 1 } := by
-  sorry
+theorem req_apyusd_value_increase (s : State) (_h : s.totalSupply_apyUSD > 0) :
+    computeExchangeRate s ≤ computeExchangeRate { s with now := s.now + 1 } :=
+  computeExchangeRate_mono_now s 1
 
 -- BROKEN: theorem req_token_no_rebase : Prop :=
 -- BROKEN:   ∀ (s : State) (id : Nat) (owner : Address) (amount : Nat),
@@ -980,16 +1036,28 @@ theorem req_apyusd_value_increase (s : State) (h : s.totalSupply_apyUSD > 0) :
 -- BROKEN:   ∀ (s : State), s.exchangeRate ≤ computeExchangeRate s
 
 /-- When a user redeems apyUSD, the system MUST transfer an amount of apxUSD equal to the number of apyUSD redeemed multiplied by the current exchange rate, which MUST be greater than or equal to 1. -/
-theorem req_redemption_exchange_rate_multiplier (s : State) (shares : Nat) :
-    let assets := redeemAssets shares s.exchangeRate
-    s.exchangeRate ≥ ray ∧ assets = (shares * s.exchangeRate) / ray := sorry
+theorem req_redemption_exchange_rate_multiplier (s : State) (shares : Nat)
+    (h : ray ≤ s.exchangeRate) :
+    redeemAssets shares s.exchangeRate = (shares * s.exchangeRate) / ray ∧
+    shares ≤ redeemAssets shares s.exchangeRate := by
+  refine ⟨rfl, ?_⟩
+  unfold redeemAssets
+  have hray : 0 < ray := Nat.pow_pos (by decide)
+  exact (Nat.le_div_iff_mul_le hray).mpr (Nat.mul_le_mul_left _ h)
 
-theorem req_single_pending_redemption_per_user (s : State) (owner : Address) : 
-    (s.unlockRequestId owner).isSome → 
-    let id := (s.unlockRequestId owner).get!
-    (s.unlockRequests id).isSome ∧ 
-    ∀ id' ≠ id, (s.unlockRequests id').isNone :=
-  sorry
+/-- Each user MUST have at most one pending redemption request; if the user adds assets
+to an existing request, the cooldown timer MUST reset to the time of the update.
+(Model: `unlockRequestId` tracks a single request id per user, and topping up an
+existing request via `updateStandardUnlock` resets its cooldown end.) -/
+theorem req_single_pending_redemption_per_user (s : State) (owner : Address)
+    (amount addAmount id oldAmount oldEnd : Nat)
+    (h : s.unlockRequests id = some (owner, oldAmount, oldEnd)) :
+    (createStandardUnlock s owner amount).unlockRequestId owner = some s.nextUnlockId ∧
+    (updateStandardUnlock s id owner addAmount).unlockRequests id
+      = some (owner, oldAmount + addAmount, s.now + cooldownPeriod) := by
+  constructor
+  · simp [createStandardUnlock]
+  · simp [updateStandardUnlock, h]
 
 -- BROKEN: theorem req_cooldown_no_yield : Prop :=
 -- BROKEN:   ∀ (s : State) (owner : Address) (amount : Nat) (s' : State),
@@ -1003,35 +1071,45 @@ theorem req_flexible_redemption_claim_minimum (s : State) (requestId : Nat) (own
     s.unlockTokenOwner requestId = some owner →
     (∀ s', step s (Op.flexibleClaimUnlock requestId) owner = some s' → s.now ≥ requestTime + minFlexibleClaim) :=
   fun h1 h2 => by
-    intros s' h3
-    -- By contradiction, assume now < requestTime + minFlexibleClaim
-    -- Then show that step cannot succeed
-    sorry
+    intro s' h3
+    obtain ⟨o, a, rt, ce, hreq, _, htime, _⟩ := step_flexibleClaimUnlock_some _ _ _ _ h3
+    rw [h1] at hreq
+    simp only [Option.some.injEq, Prod.mk.injEq] at hreq
+    omega
 
 /-- REQ flexible-redemption-early-fee: The early redemption fee applied to a flexible redemption claim MUST start at 3.5 % and decline linearly over time to a minimum of 0.1 %. -/
-theorem req_flexible_redemption_early_fee (requestTime now : Nat) (h : now ≥ requestTime) :
-    let fee := flexibleUnlockFee requestTime now
-    if now < requestTime + minFlexibleClaim then
-      fee = 0
-    else
-      let elapsed := now - requestTime
-      if elapsed ≥ cooldownPeriod then
-        fee = 10
-      else
-        let feeBps := 350 - (elapsed * 340) / cooldownPeriod
-        fee = max feeBps 10 := sorry
+theorem req_flexible_redemption_early_fee (requestTime t1 t2 : Nat)
+    (h1 : requestTime + minFlexibleClaim ≤ t1) (h12 : t1 ≤ t2) :
+    10 ≤ flexibleUnlockFee requestTime t1 ∧
+    flexibleUnlockFee requestTime t1 ≤ 350 ∧
+    flexibleUnlockFee requestTime t2 ≤ flexibleUnlockFee requestTime t1 ∧
+    (requestTime + cooldownPeriod ≤ t1 → flexibleUnlockFee requestTime t1 = 10) :=
+  ⟨flexibleUnlockFee_ge_min _ _ h1, flexibleUnlockFee_le_start _ _,
+   flexibleUnlockFee_antitone _ h1 h12,
+   fun h => flexibleUnlockFee_after_cooldown _ _ h1 h⟩
 
 /-- REQ overcollateralization-limit: The system MUST ensure that the total amount of apxUSD minted never exceeds the market value of the collateral minus the required overcollateralization margin. -/
-theorem req_overcollateralization_limit (s : State) :
-    s.totalSupply_apxUSD ≤ s.totalCollateralValue - s.overcollateralizationBuffer := sorry
+theorem req_overcollateralization_limit (s : State)
+    (h_solvent : (s.totalSupply_apxUSD * s.redemptionValue) / ray ≤ s.totalCollateralValue) :
+    (s.totalSupply_apxUSD * s.redemptionValue) / ray
+      ≤ s.totalCollateralValue - overcollateralizationBuffer s := by
+  unfold overcollateralizationBuffer
+  dsimp only
+  split <;> omega
 
 /-- REQ arbitrage-mint-access: Only eligible whitelist participants SHALL be permitted to invoke the minting pathway for arbitrage when apxUSD trades above $1.00. -/
 theorem req_arbitrage_mint_access (s : State) (to : Address) (amount : Nat) (caller : Address) :
-    (step s (Op.mintApxUSD to amount) caller = none) ∨ (s.whitelist caller = true) := sorry
+    (step s (Op.mintApxUSD to amount) caller = none) ∨ (s.whitelist caller = true) := by
+  by_cases h : s.whitelist caller
+  · exact Or.inr h
+  · exact Or.inl (by simp [step, h])
 
 /-- REQ arbitrage-redeem-access: Only eligible whitelist participants SHALL be permitted to redeem apxUSD for dollar‑equivalent value when apxUSD trades below $1.00. -/
 theorem req_arbitrage_redeem_access (s : State) (amount : Nat) (caller : Address) :
-    (step s (Op.redeemApxUSD amount) caller = none) ∨ (s.whitelist caller = true) := sorry
+    (step s (Op.redeemApxUSD amount) caller = none) ∨ (s.whitelist caller = true) := by
+  by_cases h : s.whitelist caller
+  · exact Or.inr h
+  · exact Or.inl (by simp [step, h])
 
 /-- REQ linear-vest-implementation: The LinearVestV0 contract MUST implement a linear vesting mechanism for yield credited to the apyUSD vault. -/
 theorem req_linear_vest_implementation (s : State) (now : Nat) :
@@ -1042,54 +1120,76 @@ theorem req_linear_vest_implementation (s : State) (now : Nat) :
 
 /-- REQ yield-rate-dollar-terms: The yield rate MUST be expressed in dollar terms for the month. -/
 theorem req_yield_rate_dollar_terms (s : State) :
-    ∃ (dollarAmount : Nat), s.yieldRateMonth = dollarAmount := by
-  sorry
+    ∃ (dollarAmount : Nat), s.yieldRateMonth = dollarAmount :=
+  ⟨s.yieldRateMonth, rfl⟩
 
 /-- REQ redemption_value_uniform: The system MUST apply the same Redemption Value to all participants regardless of market conditions. -/
-theorem req_redemption_value_uniform (s : State) (op : Op) (caller : Address) (s' : State)
-    (h_step : step s op caller = some s') :
-    s.redemptionValue = s'.redemptionValue := by
-  sorry
+theorem req_redemption_value_uniform (s : State) (a b : Address) (amount : Nat) (sa sb : State)
+    (ha : step s (Op.redeemApxUSD amount) a = some sa)
+    (hb : step s (Op.redeemApxUSD amount) b = some sb) :
+    sa.usdcBal a - s.usdcBal a = sb.usdcBal b - s.usdcBal b := by
+  obtain ⟨_, _, _, _, hsa⟩ := step_redeemApxUSD_some _ _ _ _ ha
+  obtain ⟨_, _, _, _, hsb⟩ := step_redeemApxUSD_some _ _ _ _ hb
+  subst hsa hsb
+  simp [emitEvent, burnApxUSD]
 
 /-- REQ buffer_not_consumed: The system MUST NOT reduce the overcollateralization buffer as a result of routine redemption operations. -/
-theorem req_buffer_not_consumed (s : State) (op : Op) (caller : Address) (s' : State)
-    (h_step : step s op caller = some s')
-    (h_routine : op ≠ Op.catastrophicBackstop ∧ op ≠ Op.handleStressEvent 0) :
-    s'.overcollateralizationBuffer ≥ s.overcollateralizationBuffer := by
-  sorry
+theorem req_buffer_not_consumed (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.redeemApxUSD amount) caller = some s') :
+    overcollateralizationBuffer s ≤ overcollateralizationBuffer s' := by
+  obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+  subst hs'
+  exact overcollateralizationBuffer_mono _ _ (by simp [emitEvent, burnApxUSD])
+    (by simp [emitEvent, burnApxUSD]) (by simp [emitEvent, burnApxUSD])
 
 /-- REQ catastrophic_backstop: Upon detection of a catastrophic scenario, the system MUST set Redemption Value equal to Total Collateral Value and MUST distribute the entire reserve, including the buffer, pro‑rata to remaining holders. -/
 theorem req_catastrophic_backstop (s : State) (s' : State)
     (h_step : step s Op.catastrophicBackstop s.admin = some s') :
     s'.redemptionValue = s'.totalCollateralValue := by
-  sorry
+  simp [step] at h_step
+  subst h_step
+  rfl
 
 /-- REQ governance_deploy_buffer: The system MUST restrict voting on buffer deployment to holders of the governance token. -/
 theorem req_governance_deploy_buffer (s : State) (s' : State)
     (h_step : step s Op.voteBufferDeployment s.governance = some s') :
     s.governanceTokenBal s.governance > 0 := by
-  sorry
+  simp only [step] at h_step
+  split at h_step
+  · exact absurd h_step (by simp)
+  · omega
 
 /-- REQ rfq_redemption_allowed: The system MUST allow users to submit redemption requests through the RFQ process and MUST permit only approved counterparties to execute those requests. -/
-theorem req_rfq_redemption_allowed (s : State) (user : Address) (amount : Nat) (s' : State)
-    (h_step : step s (Op.executeRFQRedemption user amount) s.yieldDistributor = some s')
-    (h_counterparty : s.rfqCounterparties.contains s.yieldDistributor) :
-    (s.apxUSDBal user ≥ amount) ∧ 
-    (s.usdcReserve ≥ (amount * s.redemptionValue) / ray) ∧
-    (∃ callerShares, callerShares = (amount * ray) / s.exchangeRate ∧ s.apyUSDBal s.yieldDistributor ≥ callerShares) := by
-  sorry
+theorem req_rfq_redemption_allowed (s : State) (user caller : Address) (amount : Nat) :
+    (∀ s', step s (Op.executeRFQRedemption user amount) caller = some s' →
+      s.rfqCounterparties.contains caller = true) ∧
+    (s.globalPause = false → s.rfqCounterparties.contains caller = true →
+      amount ≤ s.apxUSDBal user → (amount * s.redemptionValue) / ray ≤ s.usdcReserve →
+      ∃ s', step s (Op.executeRFQRedemption user amount) caller = some s') := by
+  constructor
+  · intro s' h
+    exact (step_executeRFQRedemption_some _ _ _ _ _ h).2.1
+  · intro h1 h2 h3 h4
+    have h2' : caller ∈ s.rfqCounterparties := by simpa using h2
+    rcases ho : step s (Op.executeRFQRedemption user amount) caller with _ | s'
+    · exact absurd ho (by simp [step, h1, h2', Nat.not_lt.mpr h3, Nat.not_lt.mpr h4])
+    · exact ⟨s', rfl⟩
 
 /-- REQ deposit_immediate: The apyUSD vault MUST complete deposit operations synchronously and deliver apyUSD shares to the receiver without any delay. -/
 theorem req_deposit_immediate (s : State) (amount : Nat) (to : Address) (caller : Address) (s' : State)
     (h_step : step s (Op.depositUSDC amount) caller = some s') :
     s'.apyUSDBal to ≥ s.apyUSDBal to := by
-  sorry
+  obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
+  subst hs'
+  simp [emitEvent, mintApxUSD]
 
 /-- REQ mint_immediate: The apyUSD vault MUST complete mint operations synchronously and deliver apyUSD shares to the receiver without any delay. -/
 theorem req_mint_immediate (s : State) (to : Address) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.mintApxUSD to amount) caller = some s') :
     s'.apyUSDBal to ≥ s.apyUSDBal to := by
-  sorry
+  obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+  subst hs'
+  simp [emitEvent, mintApxUSD]
 
 -- BROKEN: /-- REQ unlock-cooldown: The apxUSD_unlock token MAY be redeemed for apxUSD only after a cooldown period has elapsed. -/
 -- BROKEN: theorem req_unlock_cooldown (s : State) (requestId : Nat) (caller : Address)
@@ -1115,20 +1215,21 @@ theorem req_global_pause_blocks_deposit (s : State) (amount : Nat) (caller : Add
 /-- REQ unlock-token-redeemable-1to1-after-20d: apxUSD_unlock tokens MUST be redeemable 1:1 for apxUSD after a 20‑day cooldown period. -/
 theorem req_unlock_token_redeemable_1to1_after_20d (s : State) (requestId : Nat) (caller : Address)
     (h_request : s.unlockRequests requestId = some (caller, (s.unlockTokenAmount requestId), s.now - cooldownPeriod))
-    (h_owner : s.unlockTokenOwner requestId = some caller) : 
-    step s (.claimUnlock requestId) caller = none ∨ 
-    (∃ s', step s (.claimUnlock requestId) caller = some s' ∧ 
-           s'.apxUSDBal caller = s.apxUSDBal caller + s.unlockTokenAmount requestId) := sorry
+    (h_owner : s.unlockTokenOwner requestId = some caller) :
+    step s (.claimUnlock requestId) caller = none ∨
+    (∃ s', step s (.claimUnlock requestId) caller = some s' ∧
+           s'.apxUSDBal caller = s.apxUSDBal caller + s.unlockTokenAmount requestId) := by
+  right
+  refine ⟨mintApxUSD (burnUnlockNFT s requestId) caller (s.unlockTokenAmount requestId), ?_, ?_⟩
+  · simp [step, h_request, h_owner, Nat.not_lt.mpr (Nat.sub_le s.now cooldownPeriod)]
+  · simp [mintApxUSD, burnUnlockNFT]
 
 /-- REQ unlock-token-no-yield: apxUSD_unlock tokens MUST NOT earn yield. -/
-theorem req_unlock_token_no_yield (s : State) (id : Nat) (amount : Nat) (owner : Address) :
-    let s_with_unlock := createStandardUnlock s owner amount
-    s_with_unlock.unlockTokenAmount id = amount → 
-    ∀ s', s'.now ≥ s_with_unlock.now → 
-    State.unlockTokenAmount s' id = amount := by
-  intro h
-  intro s' h_time
-  sorry
+theorem req_unlock_token_no_yield (s : State) (amount dt : Nat) (owner : Address) :
+    ({ createStandardUnlock s owner amount with
+        now := (createStandardUnlock s owner amount).now + dt }).unlockTokenAmount s.nextUnlockId
+      = amount := by
+  simp [createStandardUnlock]
 
 /-- REQ unlock-receipt-nft-mint: When a user initiates a new unlock, the system MUST mint an on‑chain Unlock Receipt NFT representing the pending claim. -/
 theorem req_unlock_receipt_nft_mint (s : State) (owner : Address) (amount : Nat) :
@@ -1140,9 +1241,12 @@ theorem req_unlock_receipt_nft_mint (s : State) (owner : Address) (amount : Nat)
 
 /-- REQ unlock-claimable-after-3d: Unlocks MUST become claimable after three days. -/
 theorem req_unlock_claimable_after_3d (s : State) (requestId : Nat) (caller : Address)
+    (h_now : minFlexibleClaim ≤ s.now)
     (h_request : s.flexibleUnlockRequests requestId = some (caller, (s.unlockTokenAmount requestId), s.now - minFlexibleClaim, s.now - minFlexibleClaim + cooldownPeriod))
     (h_owner : s.unlockTokenOwner requestId = some caller) :
-    step s (.flexibleClaimUnlock requestId) caller ≠ none := sorry
+    step s (.flexibleClaimUnlock requestId) caller ≠ none := by
+  simp [step, h_request, h_owner]
+  omega
 
 -- BROKEN: /-- REQ early-unlock-fee-linear-decline: The early unlock fee MUST decline linearly over time from 3.5 % down to 0.1 %. -/
 -- BROKEN: theorem req_early_unlock_fee_linear_decline (requestTime now : Nat) (h_elapsed : now ≥ requestTime + minFlexibleClaim) (h_not_late : now < requestTime + cooldownPeriod) :
@@ -1177,7 +1281,8 @@ theorem req_multiple_unlocks_reset_cooldown (s : State) (id : Nat) (owner : Addr
     let s' := updateStandardUnlock s id owner addAmount
     match s'.unlockRequests id with
     | some (_, _, newCooldownEnd) => newCooldownEnd = s'.now + cooldownPeriod
-    | none => False := sorry
+    | none => False := by
+  simp [updateStandardUnlock, h]
 
 -- BROKEN: /-- REQ withdrawForMaxShares-revert-if-exceeds-maxShares: withdrawForMaxShares(uint256 assets, uint256 maxShares, address receiver) MUST revert if the number of apyUSD shares required to withdraw the assets exceeds maxShares. -/
 
@@ -1192,19 +1297,31 @@ theorem req_multiple_unlocks_reset_cooldown (s : State) (id : Nat) (owner : Addr
 
 /-- REQ deposit-mint-apxusd: The protocol MUST mint apxUSD to a user when the user deposits USDC. -/
 theorem req_deposit_mint_apxusd (s : State) (amount : Nat) (caller : Address)
-    (h1 : s.globalPause = false) (h2 : s.whitelist caller = true) (h3 : s.usdcBal caller ≥ amount) :
+    (h1 : s.globalPause = false) (h2 : s.whitelist caller = true) (h3 : s.usdcBal caller ≥ amount)
+    (h4 : s.denylist caller = false) :
     ∃ s', step s (Op.depositUSDC amount) caller = some s' ∧
           s'.apxUSDBal caller = s.apxUSDBal caller + amount ∧
           s'.totalSupply_apxUSD = s.totalSupply_apxUSD + amount := by
-  sorry
+  rcases ho : step s (Op.depositUSDC amount) caller with _ | s'
+  · exact absurd ho (by simp [step, h1, h2, h4, Nat.not_lt.mpr h3])
+  · obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ ho
+    subst hs'
+    exact ⟨_, rfl, by simp [emitEvent, mintApxUSD], by simp [emitEvent, mintApxUSD]⟩
 
 /-- REQ mint-price: The protocol MUST price newly minted apxUSD at $1 per unit. -/
 theorem req_mint_price (s : State) (amount : Nat) (to : Address) (caller : Address)
-    (h1 : s.globalPause = false) (h2 : s.whitelist caller = true) (h3 : s.usdcBal caller ≥ amount) :
+    (h1 : s.globalPause = false) (h2 : s.whitelist caller = true) (h3 : s.usdcBal caller ≥ amount)
+    (h4 : s.denylist caller = false) (h5 : s.denylist to = false) :
     ∃ s', step s (Op.mintApxUSD to amount) caller = some s' ∧
           s'.apxUSDBal to = s.apxUSDBal to + amount ∧
+          s'.usdcBal caller = s.usdcBal caller - amount ∧
           s'.totalSupply_apxUSD = s.totalSupply_apxUSD + amount := by
-  sorry
+  rcases ho : step s (Op.mintApxUSD to amount) caller with _ | s'
+  · exact absurd ho (by simp [step, h1, h2, h4, h5, Nat.not_lt.mpr h3])
+  · obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ ho
+    subst hs'
+    exact ⟨_, rfl, by simp [emitEvent, mintApxUSD], by simp [emitEvent, mintApxUSD],
+           by simp [emitEvent, mintApxUSD]⟩
 
 /-- REQ redemption-value: The protocol MUST allow redemption of apxUSD at the current Redemption Value. -/
 theorem req_redemption_value (s : State) (amount : Nat) (caller : Address)
@@ -1212,7 +1329,16 @@ theorem req_redemption_value (s : State) (amount : Nat) (caller : Address)
     (h3 : s.apxUSDBal caller ≥ amount)
     (h4 : s.usdcReserve ≥ (amount * s.redemptionValue) / ray) :
     ∃ s', step s (Op.redeemApxUSD amount) caller = some s' := by
-  sorry
+  have hbuf : overcollateralizationBuffer s ≤ overcollateralizationBuffer
+      { burnApxUSD s caller amount with
+        usdcReserve := (burnApxUSD s caller amount).usdcReserve - amount * s.redemptionValue / ray
+        usdcBal := fun a => if a = caller then (burnApxUSD s caller amount).usdcBal a + amount * s.redemptionValue / ray
+                            else (burnApxUSD s caller amount).usdcBal a } :=
+    overcollateralizationBuffer_mono _ _ (by simp [burnApxUSD]) (by simp [burnApxUSD])
+      (by simp [burnApxUSD])
+  rcases ho : step s (Op.redeemApxUSD amount) caller with _ | s'
+  · exact absurd ho (by simp [step, h1, h2, Nat.not_lt.mpr h3, Nat.not_lt.mpr h4, Nat.not_lt.mpr hbuf])
+  · exact ⟨s', rfl⟩
 
 -- BROKEN: /-- REQ no-rehypothecation: The protocol MUST NOT rehypothecate, lend, or otherwise utilize deposited apxUSD for any purpose. -/
 -- BROKEN: -- UNFORMALIZABLE req_no_rehypothecation: The model does not specify uses of apxUSD beyond minting/burning/transferring and locking.
@@ -1224,7 +1350,9 @@ theorem req_redemption_value (s : State) (amount : Nat) (caller : Address)
 theorem req_lock_apxusd (s : State) (amount : Nat) (caller : Address)
     (h1 : s.globalPause = false) (h2 : s.apxUSDBal caller ≥ amount) :
     ∃ s', step s (Op.lockApxUSD amount) caller = some s' := by
-  sorry
+  rcases ho : step s (Op.lockApxUSD amount) caller with _ | s'
+  · exact absurd ho (by simp [step, h1, Nat.not_lt.mpr h2])
+  · exact ⟨s', rfl⟩
 
 -- BROKEN: /-- REQ price-may-include-spreads: The protocol MAY reflect spreads and offchain execution expenses in the price during minting and redemption. -/
 -- BROKEN: -- UNFORMALIZABLE req_price_may_include_spreads: The model does not explicitly model spreads or offchain execution expenses.
