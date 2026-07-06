@@ -232,12 +232,14 @@ inductive Op
   | updateRedemptionValue
   | handleStressEvent (amount : Nat)
   | catastrophicBackstop
+  | setVestPeriod (p : Nat)
 
 def step (s : State) (op : Op) (caller : Address) : Option State :=
   match op with
   | Op.depositUSDC amount =>
     if s.globalPause then none
     else if ¬ s.whitelist caller then none
+    else if s.denylist caller then none
     else if s.usdcBal caller < amount then none
     else
       let s1 := { s with
@@ -250,6 +252,7 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
   | Op.mintApxUSD to amount =>
     if s.globalPause then none
     else if ¬ s.whitelist caller then none
+    else if s.denylist caller || s.denylist to then none
     else if s.usdcBal caller < amount then none
     else
       let s1 := { s with
@@ -345,9 +348,9 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
   | Op.flexibleClaimUnlock requestId =>
     match s.flexibleUnlockRequests requestId with
     | none => none
-    | some (owner, amount, requestTime, cooldownEnd) =>
+    | some (owner, amount, requestTime, _cooldownEnd) =>
       if s.unlockTokenOwner requestId != some owner then none
-      else if s.now < cooldownEnd then none
+      else if s.now < requestTime + minFlexibleClaim then none
       else
         let feeBps := flexibleUnlockFee requestTime s.now
         let fee := (amount * feeBps) / 10000
@@ -385,17 +388,376 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
       }
       some s1
     else none
-  | Op.voteBufferDeployment => sorry
-  | Op.executeRFQRedemption user amount => sorry
+  | Op.voteBufferDeployment =>
+    -- only governance-token holders may vote; a vote reaching the threshold deploys the buffer
+    if s.governanceTokenBal caller = 0 then none
+    else some { s with bufferDeployed := s.bufferDeployed || (s.governanceTokenBal caller ≥ s.governanceThreshold) }
+  | Op.executeRFQRedemption user amount =>
+    -- only approved RFQ counterparties may execute a user's redemption request
+    if s.globalPause then none
+    else if ¬ (s.rfqCounterparties.contains caller) then none
+    else if s.apxUSDBal user < amount then none
+    else
+      let usdcAmount := (amount * s.redemptionValue) / ray
+      if s.usdcReserve < usdcAmount then none
+      else
+        let s1 := burnApxUSD s user amount
+        let s2 := { s1 with
+          usdcReserve := s1.usdcReserve - usdcAmount
+          usdcBal := fun a => if a = user then s1.usdcBal a + usdcAmount else s1.usdcBal a
+        }
+        some s2
   | Op.updateRedemptionValue =>
     if caller == s.oracle then
       -- placeholder: in practice would fetch from oracle
       some s
     else none
-  | Op.handleStressEvent amount => sorry
-  | Op.catastrophicBackstop => sorry
+  | Op.handleStressEvent amount =>
+    -- a stress loss reduces total collateral value; absorbed by the buffer, admin only
+    if caller == s.admin then
+      some { s with totalCollateralValue := s.totalCollateralValue - amount, emergencyFlag := true }
+    else none
+  | Op.catastrophicBackstop =>
+    -- catastrophic scenario: redemption value is set to track total collateral value,
+    -- distributing the entire reserve (including the buffer) pro-rata to holders
+    if caller == s.admin then
+      some { s with redemptionValue := s.totalCollateralValue, emergencyFlag := true }
+    else none
+  | Op.setVestPeriod p =>
+    if caller == s.admin then some { s with vestPeriod := p }
+    else none
+
+/-- ERC-4626 slippage wrappers: revert (return `none`) when the preview violates the
+user-supplied bound, otherwise defer to the underlying vault operation. -/
+def depositForMinShares (s : State) (assets minShares : Nat) (_receiver caller : Address) : Option State :=
+  if previewDeposit s assets < minShares then none
+  else step s (Op.lockApxUSD assets) caller
+
+def mintForMaxAssets (s : State) (shares maxAssets : Nat) (_receiver caller : Address) : Option State :=
+  if previewMint s shares > maxAssets then none
+  else step s (Op.lockApxUSD (previewMint s shares)) caller
+
+def withdrawForMaxShares (s : State) (assets maxShares : Nat) (receiver caller : Address) : Option State :=
+  if previewWithdraw s assets > maxShares then none
+  else step s (Op.withdraw assets receiver) caller
+
+def redeemForMinAssets (s : State) (shares minAssets : Nat) (receiver caller : Address) : Option State :=
+  if previewRedeem s shares < minAssets then none
+  else step s (Op.redeem shares receiver) caller
 
 -- Requirements as theorems
+
+/- ================= helper lemmas (not requirement theorems) ================= -/
+
+@[simp] private theorem pullVestedYield_now (s : State) :
+    (pullVestedYield s).now = s.now := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_globalPause (s : State) :
+    (pullVestedYield s).globalPause = s.globalPause := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_exchangeRate (s : State) :
+    (pullVestedYield s).exchangeRate = s.exchangeRate := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_apyUSDBal (s : State) :
+    (pullVestedYield s).apyUSDBal = s.apyUSDBal := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_apxUSDBal (s : State) :
+    (pullVestedYield s).apxUSDBal = s.apxUSDBal := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_totalSupply_apyUSD (s : State) :
+    (pullVestedYield s).totalSupply_apyUSD = s.totalSupply_apyUSD := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_totalSupply_apxUSD (s : State) :
+    (pullVestedYield s).totalSupply_apxUSD = s.totalSupply_apxUSD := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_nextUnlockId (s : State) :
+    (pullVestedYield s).nextUnlockId = s.nextUnlockId := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_unlockRequests (s : State) :
+    (pullVestedYield s).unlockRequests = s.unlockRequests := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_unlockRequestId (s : State) :
+    (pullVestedYield s).unlockRequestId = s.unlockRequestId := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_flexibleUnlockRequests (s : State) :
+    (pullVestedYield s).flexibleUnlockRequests = s.flexibleUnlockRequests := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_unlockTokenOwner (s : State) :
+    (pullVestedYield s).unlockTokenOwner = s.unlockTokenOwner := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_unlockTokenAmount (s : State) :
+    (pullVestedYield s).unlockTokenAmount = s.unlockTokenAmount := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_usdcBal (s : State) :
+    (pullVestedYield s).usdcBal = s.usdcBal := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_usdcReserve (s : State) :
+    (pullVestedYield s).usdcReserve = s.usdcReserve := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_redemptionValue (s : State) :
+    (pullVestedYield s).redemptionValue = s.redemptionValue := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_totalCollateralValue (s : State) :
+    (pullVestedYield s).totalCollateralValue = s.totalCollateralValue := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pullVestedYield_vaultApxUSDBal (s : State) :
+    (pullVestedYield s).vaultApxUSDBal = s.vaultApxUSDBal + vestedAmount s s.now := by
+  unfold pullVestedYield; dsimp only; split <;> simp_all
+
+/-- If `e ≤ P` then `e * T / P ≤ T`. -/
+private theorem div_mul_le_total {e P T : Nat} (h : e ≤ P) : e * T / P ≤ T := by
+  rcases Nat.eq_zero_or_pos P with hp | hp
+  · subst hp
+    simp [Nat.le_zero.mp h]
+  · calc e * T / P ≤ P * T / P := Nat.div_le_div_right (Nat.mul_le_mul_right _ h)
+      _ = T := Nat.mul_div_cancel_left _ hp
+
+/-- `vestedAmount` never exceeds the total vest amount. -/
+private theorem vestedAmount_le_total (s : State) (n : Nat) :
+    vestedAmount s n ≤ s.vestTotal := by
+  unfold vestedAmount
+  dsimp only
+  repeat' split
+  · exact Nat.zero_le _
+  · exact Nat.le_refl _
+  · exact div_mul_le_total (by omega)
+
+/-- `vestedAmount` is monotone in time. -/
+private theorem vestedAmount_mono (s : State) {n m : Nat} (h : n ≤ m) :
+    vestedAmount s n ≤ vestedAmount s m := by
+  unfold vestedAmount
+  dsimp only
+  repeat' split
+  all_goals first
+    | omega
+    | exact Nat.zero_le _
+    | (exfalso; omega)
+    | exact div_mul_le_total (by omega)
+    | exact Nat.div_le_div_right (Nat.mul_le_mul_right _ (by omega))
+
+/-- The overcollateralization buffer only grows when supply shrinks (collateral and
+redemption value held fixed). -/
+private theorem overcollateralizationBuffer_mono (s s' : State)
+    (hTCV : s'.totalCollateralValue = s.totalCollateralValue)
+    (hRV : s'.redemptionValue = s.redemptionValue)
+    (hSup : s'.totalSupply_apxUSD ≤ s.totalSupply_apxUSD) :
+    overcollateralizationBuffer s ≤ overcollateralizationBuffer s' := by
+  unfold overcollateralizationBuffer
+  dsimp only
+  have hrt : (s'.totalSupply_apxUSD * s'.redemptionValue) / ray
+      ≤ (s.totalSupply_apxUSD * s.redemptionValue) / ray := by
+    rw [hRV]; exact Nat.div_le_div_right (Nat.mul_le_mul_right _ hSup)
+  split <;> split <;> omega
+
+/- ================= per-op extraction lemmas ================= -/
+
+private theorem step_withdraw_some (s : State) (assets : Nat) (receiver caller : Address) (s' : State)
+    (h : step s (Op.withdraw assets receiver) caller = some s') :
+    s.globalPause = false ∧
+    withdrawShares assets s.exchangeRate ≤ (pullVestedYield s).apyUSDBal caller ∧
+    assets ≤ (pullVestedYield s).vaultApxUSDBal ∧
+    s' = emitEvent (updateExchangeRate (createStandardUnlock
+          { burnApyUSD (pullVestedYield s) caller (withdrawShares assets s.exchangeRate) with
+            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller (withdrawShares assets s.exchangeRate)).vaultApxUSDBal - assets }
+          receiver assets)) "Withdraw" [caller, receiver, caller, assets, withdrawShares assets s.exchangeRate] := by
+  simp only [step, pullVestedYield_exchangeRate] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · exact ⟨by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
+
+private theorem step_redeem_some (s : State) (shares : Nat) (receiver caller : Address) (s' : State)
+    (h : step s (Op.redeem shares receiver) caller = some s') :
+    s.globalPause = false ∧
+    shares ≤ (pullVestedYield s).apyUSDBal caller ∧
+    redeemAssets shares s.exchangeRate ≤ (pullVestedYield s).vaultApxUSDBal ∧
+    s' = emitEvent (updateExchangeRate (createStandardUnlock
+          { burnApyUSD (pullVestedYield s) caller shares with
+            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller shares).vaultApxUSDBal - redeemAssets shares s.exchangeRate }
+          receiver (redeemAssets shares s.exchangeRate))) "Withdraw" [caller, receiver, caller, redeemAssets shares s.exchangeRate, shares] := by
+  simp only [step, pullVestedYield_exchangeRate] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · exact ⟨by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
+
+private theorem step_depositUSDC_some (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.depositUSDC amount) caller = some s') :
+    s.globalPause = false ∧ s.whitelist caller = true ∧ s.denylist caller = false ∧
+    amount ≤ s.usdcBal caller ∧
+    s' = emitEvent (mintApxUSD { s with
+        usdcBal := fun a => if a = caller then s.usdcBal a - amount else s.usdcBal a
+        usdcReserve := s.usdcReserve + amount } caller amount)
+      "Deposit" [caller, caller, caller, amount, amount] := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · exact ⟨by simp_all, by simp_all, by simp_all, by omega, (Option.some.inj h).symm⟩
+
+private theorem step_mintApxUSD_some (s : State) (to : Address) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.mintApxUSD to amount) caller = some s') :
+    s.globalPause = false ∧ s.whitelist caller = true ∧
+    s.denylist caller = false ∧ s.denylist to = false ∧
+    amount ≤ s.usdcBal caller ∧
+    s' = emitEvent (mintApxUSD { s with
+        usdcBal := fun a => if a = caller then s.usdcBal a - amount else s.usdcBal a
+        usdcReserve := s.usdcReserve + amount } to amount)
+      "Deposit" [caller, to, to, amount, amount] := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · refine ⟨by simp_all, by simp_all, ?_, ?_, by omega, (Option.some.inj h).symm⟩ <;> simp_all
+
+private theorem step_lockApxUSD_some (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.lockApxUSD amount) caller = some s') :
+    s.globalPause = false ∧ amount ≤ s.apxUSDBal caller ∧
+    s' = emitEvent (updateExchangeRate (mintApyUSD
+          { burnApxUSD s caller amount with
+            vaultApxUSDBal := (burnApxUSD s caller amount).vaultApxUSDBal + amount }
+          caller (lockShares amount s.exchangeRate)))
+      "Deposit" [caller, caller, caller, amount, lockShares amount s.exchangeRate] := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+
+private theorem step_requestUnlock_some (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.requestUnlock amount) caller = some s') :
+    s.globalPause = false ∧ amount ≤ s.apxUSDBal caller ∧
+    s' = createStandardUnlock (burnApxUSD s caller amount) caller amount := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+
+private theorem step_flexibleRequestUnlock_some (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.flexibleRequestUnlock amount) caller = some s') :
+    s.globalPause = false ∧ amount ≤ s.apxUSDBal caller ∧
+    s' = createFlexibleUnlock (burnApxUSD s caller amount) caller amount := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+
+private theorem step_claimUnlock_some (s : State) (id : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.claimUnlock id) caller = some s') :
+    ∃ owner amount cooldownEnd,
+      s.unlockRequests id = some (owner, amount, cooldownEnd) ∧
+      s.unlockTokenOwner id = some owner ∧
+      cooldownEnd ≤ s.now ∧
+      s' = mintApxUSD (burnUnlockNFT s id) owner amount := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i owner amount cooldownEnd heq
+    split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · exact ⟨owner, amount, cooldownEnd, heq, by simp_all, by omega, (Option.some.inj h).symm⟩
+
+private theorem step_flexibleClaimUnlock_some (s : State) (id : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.flexibleClaimUnlock id) caller = some s') :
+    ∃ owner amount requestTime cooldownEnd,
+      s.flexibleUnlockRequests id = some (owner, amount, requestTime, cooldownEnd) ∧
+      s.unlockTokenOwner id = some owner ∧
+      requestTime + minFlexibleClaim ≤ s.now ∧
+      s' = mintApxUSD (burnUnlockNFT s id) owner
+        (amount - amount * flexibleUnlockFee requestTime s.now / 10000) := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i owner amount requestTime cooldownEnd heq
+    split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · exact ⟨owner, amount, requestTime, cooldownEnd, heq, by simp_all, by omega, (Option.some.inj h).symm⟩
+
+private theorem step_redeemApxUSD_some (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.redeemApxUSD amount) caller = some s') :
+    s.globalPause = false ∧ s.whitelist caller = true ∧ amount ≤ s.apxUSDBal caller ∧
+    (amount * s.redemptionValue) / ray ≤ s.usdcReserve ∧
+    s' = emitEvent { burnApxUSD s caller amount with
+        usdcReserve := (burnApxUSD s caller amount).usdcReserve - (amount * s.redemptionValue) / ray
+        usdcBal := fun a => if a = caller then (burnApxUSD s caller amount).usdcBal a + (amount * s.redemptionValue) / ray
+                            else (burnApxUSD s caller amount).usdcBal a }
+      "Redeem" [caller, amount, (amount * s.redemptionValue) / ray] := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · split at h
+          · exact absurd h (by simp)
+          · exact ⟨by simp_all, by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
+
+private theorem step_executeRFQRedemption_some (s : State) (user : Address) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.executeRFQRedemption user amount) caller = some s') :
+    s.globalPause = false ∧ s.rfqCounterparties.contains caller = true ∧
+    amount ≤ s.apxUSDBal user ∧
+    (amount * s.redemptionValue) / ray ≤ s.usdcReserve ∧
+    s' = { burnApxUSD s user amount with
+        usdcReserve := (burnApxUSD s user amount).usdcReserve - (amount * s.redemptionValue) / ray
+        usdcBal := fun a => if a = user then (burnApxUSD s user amount).usdcBal a + (amount * s.redemptionValue) / ray
+                            else (burnApxUSD s user amount).usdcBal a } := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · exact ⟨by simp_all, by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
+
+/- ================= requirement theorems ================= -/
 
 
 
