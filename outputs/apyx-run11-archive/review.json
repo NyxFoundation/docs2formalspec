@@ -1,0 +1,413 @@
+{
+ "results": [
+  {
+   "id": "deposit-mint-apxusd",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "mint-price",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "redemption-value",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "no-rehypothecation",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "yield-distribution-period",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "lock-apxusd",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "apyusd-value-increase",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "price-may-include-spreads",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "rebalance-overcollateralization",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "redeem-liquidate-usdc",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "redeem-no-share-transfer",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "redemption-settlement-value",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "mint-access-whitelist",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "redeem-access-whitelist",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "issuance-price-one",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "deposit-permissionless",
+   "verdict": "partial",
+   "note": "The theorem only states that deposit may fail and only tracks apxUSD balance increase, omitting the required guarantee of successful deposit and receipt of apyUSD.",
+   "reading": "For any state `s`, caller address `caller`, deposit amount `amount`, and timestamp `now`, if the amount is greater than zero, the caller is not deny‑listed (i.e., `isDenylisted s caller = false`), and the global pause flag is false (`s.globalPause = false`), then one of two possibilities must hold: either the `depositUSDC` operation fails, meaning `step s (.depositUSDC amount) caller now` returns `none`; or the operation succeeds, meaning there exists some resulting state `s'` such that `step s (.depositUSDC amount) caller now = some s'`, and in that resulting state the caller’s `apxUSD` balance is at least the original balance plus the deposited amount (`s'.bal_apxUSD caller ≥ s.bal_apxUSD caller + amount`) and the total supply of `apxUSD` is at least the original total supply plus the deposited amount (`s'.totalSupply_apxUSD ≥ s.totalSupply_apxUSD + amount`). The theorem does not claim that the operation must succeed, nor that the balance and total‑supply increases are exactly equal to the deposited amount; it only requires the ≥ relationship and makes no statements about any other parts of the state."
+  },
+  {
+   "id": "token-no-rebase",
+   "verdict": "partial",
+   "note": "The theorem restricts balance changes to three specific operations (lockApxUSD, requestUnlock, withdraw) and omits the allowed transfer case, so it captures a weakening of the no‑rebase requirement.",
+   "reading": "For any given state `s`, any operation `op`, any caller address `caller`, and any timestamp `now`, let `s'` be the result of applying the state‑transition function `step` to `s` with `op`, `caller` and `now`. Then, for every address `a`, one of the following must hold:\n\n1. The `apyUSD` balance of `a` in the new state is exactly the same as it was in the original state (i.e., `s'.map (·.bal_apyUSD a) = some (s.bal_apyUSD a)`).\n2. There exists an `amount` such that the operation is `Op.lockApxUSD amount`, and the `apyUSD` balance of `a` in the new state equals the old balance plus the amount of shares obtained by converting `amount` of `apxUSD` at the current exchange rate (`s.bal_apyUSD a + (amount * 1e27) / s.exchangeRate_ray`).\n3. There exists an `amount` such that the operation is `Op.requestUnlock amount`, and the `apyUSD` balance of `a` in the new state equals the old balance minus that `amount` (`s.bal_apyUSD a - amount`).\n4. There exist `assets` and a receiver address `_receiver` such that the operation is `Op.withdraw assets _receiver`, and the `apyUSD` balance of `a` in the new state equals the old balance minus the number of `apyUSD` shares corresponding to `assets` at the current exchange rate (`s.bal_apyUSD a - (assets * 1e27) / s.exchangeRate_ray`).\n\nIn other words, after any operation, the only ways the `apyUSD` balance of any address can change are exactly the three cases listed above; otherwise it must remain unchanged. The theorem does not make any claims about other parts of the state, about the values of `amount` or `assets` (e.g., that they are positive), about the `apxUSD` balances, about the success or failure of operations other than those three, or about the existence of a resulting state—though the formulation implicitly requires that `step` returns a `some` state for the equality to hold."
+  },
+  {
+   "id": "exchange-rate-non-decreasing",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "redemption-exchange-rate-multiplier",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "redemption-async-process",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "redemption-cooldown-period",
+   "verdict": "partial",
+   "note": "The theorem only states that if a claim succeeds after 20 days then the cooldown has ended, but it does not assert that claims are prohibited before the cooldown, nor that the cooldown is approximately 20 days.",
+   "reading": "For any state `s`, caller address `caller`, request identifier `requestId`, unlock amount `amount`, and current timestamp `now`, define `s'` as the result of applying the `requestUnlock amount` operation to `s` by `caller` at time `now`, and define `s''` as the result of applying the `claimUnlock requestId` operation to the state obtained from `s'` (or to `s` if `s'` is `none`) by the same `caller` at time `now + 1728000`. The theorem asserts that if the second operation (`claimUnlock`) yields a state (i.e., `s''.isSome` is true), then the cooldown for that request must already be ended at that time: the predicate `isCooldownEnded` holds for the state before the claim (`Option.getD s' s`), the caller, the given `requestId`, and the timestamp `now + 1728000`. It does not claim that the claim operation necessarily succeeds, nor does it assert anything about the values of `s'`, the relationship between `requestId` and the request created by `requestUnlock`, or any other properties."
+  },
+  {
+   "id": "single-pending-redemption-per-user",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "cooldown-no-yield",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "flexible-redemption-claim-minimum",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "flexible-redemption-early-fee",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "flexible-redemption-multiple-requests",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "overcollateralization-limit",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "buffer-preservation",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "mint-redeem-at-redemption-value",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "buffer-non-decreasing",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "arbitrage-mint-access",
+   "verdict": "partial",
+   "note": "The theorem enforces the whitelist restriction but omits the required condition that it only applies when apxUSD trades above $1.00.",
+   "reading": "For every state `s`, destination address `to`, amount `amount`, and caller address `caller`, when we try to perform the `mintApxUSD` operation (minting `amount` of apxUSD to `to`) at timestamp 0, either the state transition function `step` returns `none` (meaning the operation fails), or the caller is listed in the whitelist of `s`. The theorem does not claim that the operation succeeds when the caller is whitelisted, nor that it fails when the caller is not whitelisted, nor does it impose any conditions on `to` or `amount`."
+  },
+  {
+   "id": "arbitrage-redeem-access",
+   "verdict": "partial",
+   "note": "The theorem captures the prohibition for non‑whitelisted callers when price < $1, but omits the complementary requirement that whitelisted participants must be permitted to redeem.",
+   "reading": "For any given state `s`, any amount, any caller address, and any timestamp, if the state's `redemptionValue_cents` is less than 100 (i.e., the redemption value is below one dollar) **and** the caller's address is not present in the state's whitelist, then invoking the `step` function with the operation `redeemApxUSD amount` by that caller at that time must produce `none` (i.e., the redemption operation is rejected). The theorem makes no claim about what happens when either condition is false, nor does it impose any requirements on the `amount` or other parts of the state."
+  },
+  {
+   "id": "yield-distributor-credit",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "linear-vest-implementation",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "continuous-stream",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "monthly-yield-rate-set",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "yield-rate-dollar-terms",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "pay-to-non-cooldown",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "new-locked-receives-yield",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "cooldown-removal",
+   "verdict": "mismatch",
+   "note": "The theorem only asserts that a successful unlock reduces the caller’s apyUSD balance, missing the key condition that removal must occur when the token enters cooldown and the consequent higher yield for remaining tokens.",
+   "reading": "For any given state `s`, caller address `caller`, and amount `amount`, consider the result of applying the `requestUnlock amount` operation at timestamp 0, i.e. `result := step s (Op.requestUnlock amount) caller 0`. The theorem states that either the operation fails (the result is `none`), in which case the statement is trivially true, or the operation succeeds (the result is `some s'`). In the success case, the caller’s `bal_apyUSD` balance in the new state `s'` is strictly smaller than the caller’s `bal_apyUSD` balance in the original state `s`. No other properties are claimed."
+  },
+  {
+   "id": "configurable-vesting-period",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "redemption-value-uniform",
+   "verdict": "full",
+   "note": "The theorem guarantees the redemption value never changes across any operation, timestamp, or caller, which enforces a uniform value for all participants regardless of market conditions.",
+   "reading": "For any protocol state `s`, any operation `op`, any caller address `caller`, and any timestamp `now`, either the state transition function `step s op caller now` fails (returns `none`), or, if we let `s'` be the state produced by `step` when it succeeds (and otherwise just `s`), the `redemptionValue_cents` field of `s'` is exactly the same as the `redemptionValue_cents` field of the original state `s`. In other words, a step never changes the redemption value, unless the step does not produce a new state. The theorem does not claim that a step must succeed, nor does it say anything about any other fields of the state, nor does it restrict which operations are considered."
+  },
+  {
+   "id": "buffer-not-consumed",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "catastrophic-backstop",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "governance-deploy-buffer",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "rfq-redemption-allowed",
+   "verdict": "partial",
+   "note": "The theorem covers the requirement that only approved counterparties can execute redemption (given extra whitelist/balance checks), but it omits the mandate that users must be allowed to submit redemption requests and adds unnecessary conditions.",
+   "reading": "If the caller’s address is listed among the RFQ counterparties, the user’s address is on the whitelist, the user’s apxUSD balance is at least the given amount, and the amount is greater than zero, then performing the operation `executeRFQRedemption` for that user and amount, invoked by that caller at the given timestamp, will not result in `none`—i.e., the state transition will succeed and produce some new state. The theorem makes no claim about the resulting state or about cases where any of these conditions are not met."
+  },
+  {
+   "id": "deposit-immediate",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "mint-immediate",
+   "verdict": "partial",
+   "note": "The theorem only ensures non‑decreasing balance if the mint succeeds, but omits the requirement that the mint must succeed synchronously and deliver shares immediately (i.e., no allowance for failure or mere non‑decrease).",
+   "reading": "For any state `s`, any destination address `to`, any amount `amount`, any caller address `caller`, and any timestamp `now`, let `s'` be the result of applying the `mintApxUSD` operation (minting `amount` of apxUSD to `to`) to `s` with `caller` and `now`. The theorem asserts that either the operation fails (`s'` is `none`), or, if it succeeds (so `s'` is `some s''` for some state `s''`), then the apxUSD balance of `to` in the resulting state `s''` is greater than or equal to its apxUSD balance in the original state `s`. It does not claim that the mint must succeed, that the balance strictly increases, or that any other parts of the state remain unchanged."
+  },
+  {
+   "id": "synchronous-withdraw-return-token",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "unlock-cooldown",
+   "verdict": "full",
+   "note": "The theorem enforces that a claim‑unlock can only succeed when the cooldown has ended (and the caller is the owner), matching the “may only after cooldown” requirement; it does not assert success, which is consistent with a MAY permission.",
+   "reading": "For any state `s`, any request identifier `requestId`, any caller address `caller`, and any timestamp `now`, one of the following must be true: either the state transition `step s (.claimUnlock requestId) caller now` yields `none` (meaning the claim‑unlock operation is rejected), or, when we look up the unlock request with that `requestId` in `s.unlockRequests`, the lookup must produce a `some req` and that request must satisfy both `req.owner = caller` and `isCooldownEnded s caller requestId now`. If the lookup yields `none`, the second alternative is false, so the theorem forces the first alternative. The theorem does not claim that the operation succeeds when the conditions hold, nor does it say anything about the resulting state when it does succeed; it only provides this disjunction."
+  },
+  {
+   "id": "depositforminshares-slippage",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "mintformaxassets-slippage",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "totalAssets-includes-vault-balance-and-vested",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "withdrawal-pulls-vested",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "global-pause-blocks-deposit",
+   "verdict": "full",
+   "note": "The theorem states that when the global pause flag is true, both deposit and mint operations return `none` (i.e., revert), directly matching the requirement.",
+   "reading": "For any system state `s`, any amount, any destination address `to`, any caller address `caller`, and any timestamp `now`, if the `globalPause` flag in `s` is true, then both of the following hold: the state transition function `step` applied to `s` with the operation `depositUSDC amount` (called by `caller` at time `now`) returns `none`, and `step` applied to `s` with the operation `mintApxUSD to amount` (called by `caller` at time `now`) also returns `none`. In other words, when the global pause is active, attempts to deposit USDC or to mint apxUSD by the given caller result in no state change."
+  },
+  {
+   "id": "denylist-blocks-deposit",
+   "verdict": "full",
+   "note": "The theorem exactly states that both depositUSDC and mintApxUSD return none (revert) when either the caller or the destination is denylisted, matching the requirement.",
+   "reading": "For any given state `s`, amount, destination address `to`, caller address `caller`, and timestamp `now`, if either the caller or the destination address is on the denylist (i.e., `isDenylisted s caller` or `isDenylisted s to` holds), then two things are guaranteed: (1) attempting to perform a `depositUSDC` operation with that amount by the caller at that time yields `none` from the `step` function (meaning the deposit is rejected), and (2) attempting to perform a `mintApxUSD` operation sending that amount to `to` by the same caller at that time also yields `none` from the `step` function (meaning the mint is rejected). The theorem makes no claim about what happens when neither address is denylisted, nor does it assert any other properties of the `step` function."
+  },
+  {
+   "id": "deposit-emits-event",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "mint-emits-event",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "erc4626-compliance",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "unlock-token-redeemable-1to1-after-20d",
+   "verdict": "full",
+   "note": "The theorem asserts that after the cooldown predicate holds (which should encode the 20‑day period), a successful claimUnlock gives the caller exactly the requested amount of apxUSD, matching the 1:1 redemption requirement.",
+   "reading": "For any system state `s`, any unlock request identifier `requestId`, any caller address `caller`, and any current timestamp `now`, define `result` to be the outcome of applying the `claimUnlock requestId` operation to `s` by `caller` at time `now`. The theorem says that if `result` is `some s'` (i.e., the operation succeeds and yields a new state `s'`) **and** the original state `s` contains an unlock request `req` at `requestId` (so `s.unlockRequests requestId = some req`), then the following holds: **if** `req.owner = caller` **and** the cooldown for that request has already ended in the original state (`isCooldownEnded s caller requestId now` is true), **then** the caller’s `apxUSD` balance in the new state `s'` is exactly the old balance plus the amount requested, i.e. `s'.bal_apxUSD caller = s.bal_apxUSD caller + req.amount`. In every other case—when the operation does not succeed, when there is no unlock request at that id, or when either of the two conditions above is not met—the theorem imposes no requirement (the match falls through to a branch that simply asserts `True`)."
+  },
+  {
+   "id": "unlock-token-nontransferable",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "unlock-token-no-yield",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "unlock-receipt-nft-mint",
+   "verdict": "partial",
+   "note": "The theorem records the unlock request in state but does not assert that an Unlock Receipt NFT is minted, so it omits the core normative action.",
+   "reading": "The theorem talks about any state `s`, any amount `amount`, any caller address `caller`, and any timestamp `now`. It first defines `result` to be the outcome of the state transition function `step` when applied to `s` with the operation `requestUnlock amount`, the caller `caller`, and the time `now`.\n\nIt then splits on the two possible shapes of `result`:\n\n* **Case 1 – `result` is `some s'`** (the transition succeeds and yields a new state `s'`). In this case, assuming two pre‑conditions hold – namely that `amount` is strictly greater than zero and that the caller’s `apyUSD` balance in the original state `s` is at least `amount` – the theorem asserts three concrete facts about the new state `s'`:\n  1. Let `requestId` be the value of `s.nextRequestId`. Define a function `newUnlockRequests` that is identical to `s.unlockRequests` except that it maps `requestId` to `some { owner := caller, amount := amount, requestTime := now }`. Then `s'.unlockRequests` is exactly `newUnlockRequests`.\n  2. `s'.nextRequestId` equals `requestId + 1` (i.e., the original `nextRequestId` incremented by one).\n  3. The cooldown entry for the caller and that `requestId` in `s'` is `some (now + 1728000)`, meaning the cooldown ends 1,728,000 seconds after `now`.\n\n* **Case 2 – `result` is `none`** (the transition fails). In this case, under the same two pre‑conditions (`amount > 0` and the caller’s `apyUSD` balance in `s` is at least `amount`), the theorem asserts `False`. In other words, the transition is impossible to fail when those pre‑conditions are satisfied.\n\nThe theorem does **not** say anything about what happens when `amount` is zero or negative, when the caller’s balance is insufficient, or about any other fields of the state besides `unlockRequests`, `nextRequestId`, and `cooldownEnd`."
+  },
+  {
+   "id": "unlock-claimable-after-3d",
+   "verdict": "partial",
+   "note": "The theorem only guarantees successful claim (balance increase) at exactly three days and assumes the caller is the owner, omitting the broader “any time after three days” requirement and other aspects of claimability.",
+   "reading": "For any protocol state `s`, any unlock request identifier `requestId`, any caller address `caller`, and any request timestamp `requestTime`, consider the result of applying the `claimUnlock requestId` operation by `caller` at the time `requestTime + 259200` seconds (three days). If, in the original state `s`, there is an unlock request `req` at `requestId` (i.e., `s.unlockRequests requestId = some req`) and the `step` function returns a new state `s'` (i.e., `result = some s'`), then assuming that `req.owner` equals `caller` and `req.requestTime` equals `requestTime`, the caller’s `apxUSD` balance in the new state is exactly the old balance plus the amount requested: `s'.bal_apxUSD caller = s.bal_apxUSD caller + req.amount`. In every other case—when there is no unlock request at `requestId`, or when the `step` call does not produce a new state—the theorem imposes no condition (it simply evaluates to `True`)."
+  },
+  {
+   "id": "early-unlock-fee-linear-decline",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "unlock-cannot-be-cancelled",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "unlock-conversion-after-cooldown",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "multiple-unlocks-reset-cooldown",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "withdrawForMaxShares-revert-if-exceeds-maxShares",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "redeemForMinAssets-revert-if-below-minAssets",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "vault-pulls-vested-yield-before-withdraw",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "vault-burns-apyUSD-shares-immediately",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "vault-deposits-apxUSD-into-UnlockToken",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "unlockToken-mints-apxUSD_unlock-immediately",
+   "verdict": "missing",
+   "note": "no theorem generated"
+  },
+  {
+   "id": "unlockToken-redeem-after-cooldown",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "singleton-unlockToken-instance",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  },
+  {
+   "id": "vault-operator-of-UnlockToken",
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
+  }
+ ],
+ "counts": {
+  "missing": 26,
+  "unformalizable": 36,
+  "partial": 9,
+  "mismatch": 1,
+  "full": 5
+ },
+ "coverage_full": 0.06493506493506493,
+ "coverage_full_or_partial": 0.18181818181818182
+}

@@ -316,6 +316,10 @@ def step (s : State) (op : Op) (caller : Address) (now : Timestamp) : Option Sta
 
 -- Requirements as theorems
 
+
+
+
+
 -- BROKEN: /--
 -- BROKEN:   REQ deposit-mint-apxusd: The protocol MUST mint apxUSD to a user when the user deposits USDC.
 -- BROKEN: -/
@@ -482,50 +486,10 @@ theorem req_arbitrage_mint_access (s : State) (to : Address) (amount : Amount) (
     step s (.mintApxUSD to amount) caller 0 = none ∨ isWhitelisted s caller := sorry
 
 /-- REQ arbitrage-redeem-access: Only eligible whitelist participants SHALL be permitted to redeem apxUSD for dollar‑equivalent value when apxUSD trades below $1.00. -/
-theorem req_arbitrage_redeem_access (s : State) (amount : Amount) (caller : Address) :
-    step s (.redeemApxUSD amount) caller 0 = none ∨ step s (.redeemApxUSD amount) caller 0 = some s := by
+theorem req_arbitrage_redeem_access (s : State) (amount : Amount) (caller : Address) (now : Timestamp) :
+    (s.redemptionValue_cents < 100 ∧ ¬s.whitelist.contains caller) → 
+    step s (.redeemApxUSD amount) caller now = none := by
   sorry
-
--- BROKEN: /--
--- BROKEN: REQ new_locked_receives_yield: When new apyUSD is locked, it MUST immediately begin receiving yield, which reduces the overall percentage yield for existing holders.
--- BROKEN: -/
--- BROKEN: theorem req_new_locked_receives_yield (s : State) (caller : Address) (amount : Amount) :
--- BROKEN:   let result := step s (Op.lockApxUSD amount) caller 0
--- BROKEN:   match result with
--- BROKEN:   | some s' => s'.totalSupply_apyUSD > s.totalSupply_apyUSD ∧
--- BROKEN:                s'.bal_apyUSD caller > s.bal_apyUSD caller
--- BROKEN:   | none => True :=
--- BROKEN: by
--- BROKEN:   unfold step
--- BROKEN:   split
--- BROKEN:   · -- Op.depositUSDC case
--- BROKEN:     intro h
--- BROKEN:     simp [h]
--- BROKEN:   · split
--- BROKEN:     · -- Op.mintApxUSD case
--- BROKEN:       intro h
--- BROKEN:       simp [h]
--- BROKEN:     · split
--- BROKEN:       · -- Op.lockApxUSD case (this is what we want)
--- BROKEN:         intro h
--- BROKEN:         simp [h] at *
--- BROKEN:         split
--- BROKEN:         · -- s.bal_apxUSD caller < amount ∨ amount = 0
--- BROKEN:           intro h1
--- BROKEN:           simp [h1]
--- BROKEN:         · -- valid lock operation
--- BROKEN:           intro h1 h2
--- BROKEN:           simp at h1 h2
--- BROKEN:           split
--- BROKEN:           · -- amount = 0
--- BROKEN:             intro h3
--- BROKEN:             simp [h3]
--- BROKEN:           · -- actual lock operation with amount > 0
--- BROKEN:             intro h3
--- BROKEN:             simp at h3
--- BROKEN:             -- Extract the new state
--- BROKEN:             let shares := (amount * 1000000000000000000000000000) / s.exchangeRate_ray
--- BROKEN:             have h_shares_pos : shares > 0 := sorry
 
 /--
 REQ cooldown_removal: When apyUSD enters the cooldown phase, it MUST be removed from the yield pool, causing remaining apyUSD to receive a higher percentage yield.
@@ -595,8 +559,15 @@ theorem req_unlock_receipt_nft_mint (s : State) (amount : Amount) (caller : Addr
   match result with
   | some s' => 
     amount > 0 → s.bal_apyUSD caller ≥ amount → 
-    s'.unlockRequests s.nextRequestId = some { owner := caller, amount := amount, requestTime := now }
-  | none => True :=
+    (let requestId := s.nextRequestId
+     let newUnlockRequests := fun id => if id = requestId then 
+       some { owner := caller, amount := amount, requestTime := now }
+     else s.unlockRequests id
+     s'.unlockRequests = newUnlockRequests ∧
+     s'.nextRequestId = requestId + 1 ∧
+     s'.cooldownEnd caller requestId = some (now + 1728000))
+  | none => 
+    amount > 0 → s.bal_apyUSD caller ≥ amount → False :=
 sorry
 
 /-- REQ unlock-claimable-after-3d: Unlocks MUST become claimable after three days. -/
@@ -720,7 +691,7 @@ theorem req_rfq_redemption_allowed (s : State) (user caller : Address) (amount :
 -- BROKEN:       · intro h_success
 -- BROKEN:         simp
 -- BROKEN:         have shares := (amount * 1000000000000000000000000000) / s.exchangeRate_ray
--- BROKEN:         have h_shares_nonneg : shares ≥ 0 := sorry
+-- BROKEN:         have h_shares_nonneg : shares ≥ 0 := by simp [step]
 
 /--
   REQ mint-immediate: The apyUSD vault MUST complete mint operations synchronously and deliver apyUSD shares to the receiver without any delay.
