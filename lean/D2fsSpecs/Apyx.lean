@@ -1191,16 +1191,84 @@ theorem req_unlock_token_redeem_after_cooldown (s : State) (id : Nat) (owner : A
 
 /-- REQ vault-operator-of-UnlockToken: The apyUSD vault MUST be configured as the operator
 of the UnlockToken contract, allowing it to initiate redeem requests on behalf of users
-immediately. (Model: a withdraw step itself creates the unlock request for the receiver —
-no separate user transaction against the unlock registry is needed.) -/
-theorem req_vault_operator_of_unlock_token (s : State) (assets : Nat)
-    (receiver caller : Address) (s' : State)
-    (h_step : step s (Op.withdraw assets receiver) caller = some s') :
-    s'.unlockTokenOwner s.nextUnlockId = some receiver ∧
-    s'.unlockRequests s.nextUnlockId = some (receiver, assets, s.now + cooldownPeriod) := by
-  obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
-  subst hs'
-  constructor <;> simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+immediately. (Model: contracts are folded into one `State`, so "operator configuration" is
+represented by exclusivity of access: if a step creates a new apxUSD_unlock position for
+some owner, that step was one of the vault's own operations — `withdraw`/`redeem`, where
+the vault initiates the unlock on the user's behalf within the same step, or the vault's
+`requestUnlock`/`flexibleRequestUnlock` entry points — and the position was allocated
+immediately at the registry's current counter. No other operation can touch the
+UnlockToken registry. Note: `claimUnlock` itself is not gated on `caller`, reflecting that
+a claim only ever pays the recorded NFT owner.) -/
+theorem req_vault_operator_of_unlock_token (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') (id : Nat) (owner : Address)
+    (h_new : s.unlockTokenOwner id = none)
+    (h_now : s'.unlockTokenOwner id = some owner) :
+    ((∃ a, op = Op.requestUnlock a) ∨ (∃ a, op = Op.flexibleRequestUnlock a) ∨
+     (∃ a r, op = Op.withdraw a r) ∨ (∃ sh r, op = Op.redeem sh r)) ∧
+    id = s.nextUnlockId := by
+  cases op
+  case requestUnlock a =>
+    obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
+    subst hs'
+    by_cases hid : id = s.nextUnlockId
+    · exact ⟨Or.inl ⟨a, rfl⟩, hid⟩
+    · simp [createStandardUnlock, burnApxUSD, hid, h_new] at h_now
+  case flexibleRequestUnlock a =>
+    obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
+    subst hs'
+    by_cases hid : id = s.nextUnlockId
+    · exact ⟨Or.inr (Or.inl ⟨a, rfl⟩), hid⟩
+    · simp [createFlexibleUnlock, burnApxUSD, hid, h_new] at h_now
+  case withdraw a r =>
+    obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
+    subst hs'
+    by_cases hid : id = s.nextUnlockId
+    · exact ⟨Or.inr (Or.inr (Or.inl ⟨a, r, rfl⟩)), hid⟩
+    · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD, hid, h_new] at h_now
+  case redeem sh r =>
+    obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
+    subst hs'
+    by_cases hid : id = s.nextUnlockId
+    · exact ⟨Or.inr (Or.inr (Or.inr ⟨sh, r, rfl⟩)), hid⟩
+    · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD, hid, h_new] at h_now
+  case claimUnlock rid =>
+    obtain ⟨o, am, ce, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
+    subst hs'
+    by_cases hid : id = rid
+    · subst hid; simp [mintApxUSD, burnUnlockNFT] at h_now
+    · simp [mintApxUSD, burnUnlockNFT, hid, h_new] at h_now
+  case flexibleClaimUnlock rid =>
+    obtain ⟨o, am, rt, ce, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
+    subst hs'
+    by_cases hid : id = rid
+    · subst hid; simp [mintApxUSD, burnUnlockNFT] at h_now
+    · simp [mintApxUSD, burnUnlockNFT, hid, h_new] at h_now
+  case depositUSDC a =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, mintApxUSD, h_new] at h_now
+  case mintApxUSD t a =>
+    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, mintApxUSD, h_new] at h_now
+  case lockApxUSD a =>
+    obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD, h_new] at h_now
+  case redeemApxUSD a =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    subst hs'
+    simp [emitEvent, burnApxUSD, h_new] at h_now
+  case executeRFQRedemption u am =>
+    obtain ⟨_, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+    subst hs'
+    simp [burnApxUSD, h_new] at h_now
+  all_goals
+    simp only [step] at h_step
+    split at h_step <;>
+      first
+        | (cases Option.some.inj h_step; simp_all)
+        | exact absurd h_step (by simp)
 
 
 
