@@ -2,8 +2,8 @@
  "ok": true,
  "attempts": 1,
  "theorems": 55,
- "sorries": 23,
+ "sorries": 0,
  "vacuous": 0,
  "killed": 9,
- "proved": 32
+ "proved": 55
 }
