@@ -1154,17 +1154,27 @@ theorem req_redeem_for_min_assets_revert_if_below_min_assets (s : State)
   simp [redeemForMinAssets, h]
 
 /-- REQ unlockToken-mints-apxUSD_unlock-immediately: The UnlockToken contract MUST mint
-apxUSD_unlock tokens to the user immediately after the deposit. (Model: in the same
-withdraw step, the freshly allocated unlock token is owned by the receiver and carries the
-full asset amount.) -/
-theorem req_unlock_token_mints_apx_usd_unlock_immediately (s : State) (assets : Nat)
-    (receiver caller : Address) (s' : State)
-    (h_step : step s (Op.withdraw assets receiver) caller = some s') :
-    s'.unlockTokenOwner s.nextUnlockId = some receiver ∧
-    s'.unlockTokenAmount s.nextUnlockId = assets := by
-  obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
-  subst hs'
-  constructor <;> simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+apxUSD_unlock tokens to the user immediately after the deposit. (Model: "the deposit" is
+the user handing apxUSD to the UnlockToken contract by requesting an unlock; in the very
+same `requestUnlock` — or `flexibleRequestUnlock` — step, the freshly allocated
+apxUSD_unlock token is owned by the depositor and carries the full deposited amount.) -/
+theorem req_unlock_token_mints_apx_usd_unlock_immediately (s : State) (amount : Nat)
+    (caller : Address) :
+    (∀ s', step s (Op.requestUnlock amount) caller = some s' →
+      s'.unlockTokenOwner s.nextUnlockId = some caller ∧
+      s'.unlockTokenAmount s.nextUnlockId = amount) ∧
+    (∀ s', step s (Op.flexibleRequestUnlock amount) caller = some s' →
+      s'.unlockTokenOwner s.nextUnlockId = some caller ∧
+      s'.unlockTokenAmount s.nextUnlockId = amount) := by
+  constructor
+  · intro s' h_step
+    obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
+    subst hs'
+    constructor <;> simp [createStandardUnlock, burnApxUSD]
+  · intro s' h_step
+    obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
+    subst hs'
+    constructor <;> simp [createFlexibleUnlock, burnApxUSD]
 
 /-- REQ unlockToken-redeem-after-cooldown: The UnlockToken contract MUST allow a user to
 call redeem() after the cooldown period to receive the underlying apxUSD. -/
