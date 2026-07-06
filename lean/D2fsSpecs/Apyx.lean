@@ -12,6 +12,9 @@ def minFlexibleClaim : Nat := 3 * day
 
 def vaultAddress : Address := 0
 
+/-- The address identifying the single UnlockToken contract instance (cf. `vaultAddress`). -/
+def unlockTokenAddress : Address := 1
+
 structure State where
   now : Nat
   globalPause : Bool
@@ -45,6 +48,11 @@ structure State where
   flexibleUnlockRequests : Nat → Option (Address × Nat × Nat × Nat)
   unlockTokenOwner : Nat → Option Address
   unlockTokenAmount : Nat → Nat
+  /-- The address of the (single) UnlockToken contract instance holding the unlock registry. -/
+  unlockTokenAddress : Address
+  /-- The address authorized to initiate claims on behalf of a recorded unlock-position
+  owner (the apyUSD vault, when the system is configured per the spec). -/
+  unlockTokenOperator : Address
   bufferDeployed : Bool
   usdcBal : Address → Nat
   usdcReserve : Nat
@@ -285,11 +293,13 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     | none => none
     | some (owner, amount, cooldownEnd) =>
       if s.unlockTokenOwner requestId != some owner then none
-      else if s.now < cooldownEnd then none
-      else
-        let s1 := burnUnlockNFT s requestId
-        let s2 := mintApxUSD s1 owner amount
-        some s2
+      else if caller = owner ∨ caller = s.unlockTokenOperator then
+        if s.now < cooldownEnd then none
+        else
+          let s1 := burnUnlockNFT s requestId
+          let s2 := mintApxUSD s1 owner amount
+          some s2
+      else none
   | Op.redeemApxUSD amount =>
     if s.globalPause then none
     else if ¬ s.whitelist caller then none
@@ -350,14 +360,16 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     | none => none
     | some (owner, amount, requestTime, _cooldownEnd) =>
       if s.unlockTokenOwner requestId != some owner then none
-      else if s.now < requestTime + minFlexibleClaim then none
-      else
-        let feeBps := flexibleUnlockFee requestTime s.now
-        let fee := (amount * feeBps) / 10000
-        let claimAmount := amount - fee
-        let s1 := burnUnlockNFT s requestId
-        let s2 := mintApxUSD s1 owner claimAmount
-        some s2
+      else if caller = owner ∨ caller = s.unlockTokenOperator then
+        if s.now < requestTime + minFlexibleClaim then none
+        else
+          let feeBps := flexibleUnlockFee requestTime s.now
+          let fee := (amount * feeBps) / 10000
+          let claimAmount := amount - fee
+          let s1 := burnUnlockNFT s requestId
+          let s2 := mintApxUSD s1 owner claimAmount
+          some s2
+      else none
   | Op.pause =>
     if caller == s.pauseController then some { s with globalPause := true }
     else none
@@ -745,6 +757,7 @@ private theorem step_claimUnlock_some (s : State) (id : Nat) (caller : Address) 
     ∃ owner amount cooldownEnd,
       s.unlockRequests id = some (owner, amount, cooldownEnd) ∧
       s.unlockTokenOwner id = some owner ∧
+      (caller = owner ∨ caller = s.unlockTokenOperator) ∧
       cooldownEnd ≤ s.now ∧
       s' = mintApxUSD (burnUnlockNFT s id) owner amount := by
   simp only [step] at h
@@ -754,14 +767,18 @@ private theorem step_claimUnlock_some (s : State) (id : Nat) (caller : Address) 
     split at h
     · exact absurd h (by simp)
     · split at h
+      · split at h
+        · exact absurd h (by simp)
+        · exact ⟨owner, amount, cooldownEnd, heq, by simp_all, by assumption, by omega,
+            (Option.some.inj h).symm⟩
       · exact absurd h (by simp)
-      · exact ⟨owner, amount, cooldownEnd, heq, by simp_all, by omega, (Option.some.inj h).symm⟩
 
 private theorem step_flexibleClaimUnlock_some (s : State) (id : Nat) (caller : Address) (s' : State)
     (h : step s (Op.flexibleClaimUnlock id) caller = some s') :
     ∃ owner amount requestTime cooldownEnd,
       s.flexibleUnlockRequests id = some (owner, amount, requestTime, cooldownEnd) ∧
       s.unlockTokenOwner id = some owner ∧
+      (caller = owner ∨ caller = s.unlockTokenOperator) ∧
       requestTime + minFlexibleClaim ≤ s.now ∧
       s' = mintApxUSD (burnUnlockNFT s id) owner
         (amount - amount * flexibleUnlockFee requestTime s.now / 10000) := by
@@ -772,8 +789,11 @@ private theorem step_flexibleClaimUnlock_some (s : State) (id : Nat) (caller : A
     split at h
     · exact absurd h (by simp)
     · split at h
+      · split at h
+        · exact absurd h (by simp)
+        · exact ⟨owner, amount, requestTime, cooldownEnd, heq, by simp_all, by assumption,
+            by omega, (Option.some.inj h).symm⟩
       · exact absurd h (by simp)
-      · exact ⟨owner, amount, requestTime, cooldownEnd, heq, by simp_all, by omega, (Option.some.inj h).symm⟩
 
 private theorem step_redeemApxUSD_some (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.redeemApxUSD amount) caller = some s') :
@@ -845,7 +865,7 @@ private theorem apyUSDBal_unchanged_of_non_share_op (s : State) (op : Op) (calle
     subst hs'
     simp [createStandardUnlock, burnApxUSD]
   case claimUnlock id =>
-    obtain ⟨o, am, ce, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
+    obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
     subst hs'
     simp [mintApxUSD, burnUnlockNFT]
   case redeemApxUSD amount =>
@@ -857,7 +877,7 @@ private theorem apyUSDBal_unchanged_of_non_share_op (s : State) (op : Op) (calle
     subst hs'
     simp [createFlexibleUnlock, burnApxUSD]
   case flexibleClaimUnlock id =>
-    obtain ⟨o, am, rt, ce, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
+    obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
     subst hs'
     simp [mintApxUSD, burnUnlockNFT]
   case executeRFQRedemption u am =>
@@ -948,7 +968,7 @@ theorem req_redemption_cooldown_period (s : State) :
     subst hs'
     simp [createStandardUnlock, burnApxUSD]
   · intro id caller s' h
-    obtain ⟨o, a, ce, hreq, _, ht, _⟩ := step_claimUnlock_some _ _ _ _ h
+    obtain ⟨o, a, ce, hreq, _, _, ht, _⟩ := step_claimUnlock_some _ _ _ _ h
     exact ⟨o, a, ce, hreq, ht⟩
 
 /-- REQ cooldown-no-yield: During a redemption cooldown, the exchange rate for the locked
@@ -963,7 +983,7 @@ theorem req_cooldown_no_yield (s : State) (id : Nat) (caller : Address) (dt : Na
       s'.apxUSDBal owner = s.apxUSDBal owner + amount) := by
   refine ⟨rfl, ?_⟩
   intro owner amount cooldownEnd s' hreq h
-  obtain ⟨o, a, ce, hreq', _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h
+  obtain ⟨o, a, ce, hreq', _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h
   rw [hreq] at hreq'
   simp only [Option.some.injEq, Prod.mk.injEq] at hreq'
   obtain ⟨rfl, rfl, rfl⟩ := hreq'
@@ -1173,13 +1193,13 @@ theorem req_vault_operator_of_unlock_token (s : State) (op : Op) (caller : Addre
     · exact ⟨Or.inr (Or.inr (Or.inr ⟨sh, r, rfl⟩)), hid⟩
     · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD, hid, h_new] at h_now
   case claimUnlock rid =>
-    obtain ⟨o, am, ce, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
+    obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
     subst hs'
     by_cases hid : id = rid
     · subst hid; simp [mintApxUSD, burnUnlockNFT] at h_now
     · simp [mintApxUSD, burnUnlockNFT, hid, h_new] at h_now
   case flexibleClaimUnlock rid =>
-    obtain ⟨o, am, rt, ce, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
+    obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
     subst hs'
     by_cases hid : id = rid
     · subst hid; simp [mintApxUSD, burnUnlockNFT] at h_now
@@ -1469,7 +1489,7 @@ theorem req_flexible_redemption_claim_minimum (s : State) (requestId : Nat) (own
     (∀ s', step s (Op.flexibleClaimUnlock requestId) owner = some s' → s.now ≥ requestTime + minFlexibleClaim) :=
   fun h1 h2 => by
     intro s' h3
-    obtain ⟨o, a, rt, ce, hreq, _, htime, _⟩ := step_flexibleClaimUnlock_some _ _ _ _ h3
+    obtain ⟨o, a, rt, ce, hreq, _, _, htime, _⟩ := step_flexibleClaimUnlock_some _ _ _ _ h3
     rw [h1] at hreq
     simp only [Option.some.injEq, Prod.mk.injEq] at hreq
     omega
