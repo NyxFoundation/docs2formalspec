@@ -2,4 +2,4 @@
 __pycache__/
 *.pyc
 lean/.lake/
-outputs/*.log
+outputs/**/*.log

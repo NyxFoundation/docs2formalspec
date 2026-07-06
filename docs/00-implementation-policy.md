@@ -32,6 +32,13 @@ ingest (URL→trafilatura→markdown | file→text)
 - lake build 成功 / 修復ラウンド数 / theorem数 / sorry数
 - 今後: 要件カバレッジ(formalizable要件のうちtheorem化された率)、vacuity check(`True`定理の検出)
 
+## 出力ディレクトリ規約
+`run --name <n>` は `outputs/<n>/` を毎回上書きする(コード側に自動アーカイブなし)。
+複数ラン/プロジェクトの結果を残す場合は、上書き前に `outputs/<n>-run<N>-archive/` の
+ような**兄弟フォルダを作らず**、`outputs/<n>/archive/run<N>/` に退避すること。
+生ログも `outputs/<n>/logs/` に集約(`.gitignore` は `outputs/**/*.log`)。
+プロジェクトが変わっても(apyx 以外でも)この一箇所集約を踏襲する。
+
 ## ステータス (2026-07-06 終了時点)
 - [x] 類似研究サーベイ → docs/01-related-work.md
 - [x] フルパイプライン実装(評価ケーススタディはapyx、詳細 docs/03-eval-log.md)
