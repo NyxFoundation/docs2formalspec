@@ -98,6 +98,9 @@ COMPLETENESS IS MANDATORY: the State must contain every quantitative variable th
 requirement themes mention (balances, total supply, caps, collateral/redemption
 values, buffers, exchange rate, vesting schedule, cooldowns, receipts) — a State
 holding only access-control fields is useless and will be rejected.
+DECLARATION ORDER IS STRICT (Lean has no forward references): abbrevs and constants
+first, then `structure State`, then `inductive Op`, then helper defs that take
+`State`, then `step` last.
 """
 
 THEOREM_SYSTEM = """\
@@ -136,7 +139,10 @@ You fix Lean 4 (v4.31, core + Std, NO mathlib) compile errors. You receive a fil
 compiler output. Return the COMPLETE corrected file in one Lean code block. Rules: \
 preserve every theorem name and keep each theorem statement as strong as possible; if \
 a proof cannot be completed, replace the proof body with `sorry` — NEVER weaken a \
-statement to `True` and never delete a theorem. Never add `import Mathlib`."""
+statement to `True` and never delete a theorem. Never add `import Mathlib`. \
+Lean has NO forward references: if a definition uses `State` (or any type/def) before \
+it is declared, REORDER declarations (abbrevs/constants, then structures, then \
+inductives, then helper defs, then step)."""
 
 EXTEND_SYSTEM = """\
 You extend a Lean 4 (v4.31, core + Std, NO mathlib) state-machine model so that more \
