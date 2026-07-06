@@ -2324,15 +2324,33 @@ theorem req_yield_distributor_credit (s : State) (amount : Nat) (caller : Addres
 
 /-- REQ new-locked-receives-yield: When new apyUSD is locked, it MUST immediately begin
 receiving yield, which reduces the overall percentage yield for existing holders. (Model:
-locking immediately mints shares to the depositor and adds them to the total supply, so all
-future vested yield is spread over the enlarged share base.) -/
+locking mints shares at the prevailing exchange rate — no discount, waiting period, or
+carve-out — so from the moment of the lock the new holder's redeemable assets grow with the
+same vesting exchange rate as every existing holder's; and the mint enlarges the share
+base, (weakly) diluting each unit share's claim on any yet-unvested yield pool.) -/
 theorem req_new_locked_receives_yield (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.lockApxUSD amount) caller = some s') :
+    -- shares are minted immediately, priced at the prevailing exchange rate
     s'.apyUSDBal caller = s.apyUSDBal caller + lockShares amount s.exchangeRate ∧
-    s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount s.exchangeRate := by
+    -- and immediately begin receiving yield: the new holder's redeemable assets grow with
+    -- the vesting exchange rate from the very moment of the lock, like any other holder's
+    (∀ dt, redeemAssets (s'.apyUSDBal caller) (computeExchangeRate s')
+      ≤ redeemAssets (s'.apyUSDBal caller) (computeExchangeRate { s' with now := s'.now + dt })) ∧
+    -- the enlarged share base spreads future yield thinner over existing holders:
+    s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount s.exchangeRate ∧
+    (∀ pendingYield : Nat, 0 < s.totalSupply_apyUSD →
+      (pendingYield * ray) / s'.totalSupply_apyUSD
+        ≤ (pendingYield * ray) / s.totalSupply_apyUSD) := by
   obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
   subst hs'
-  constructor <;> simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  · intro dt
+    exact Nat.div_le_div_right (Nat.mul_le_mul_left _ (computeExchangeRate_mono_now _ dt))
+  · simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  · intro pendingYield hpos
+    apply Nat.div_le_div_left ?_ hpos
+    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
 
 -- BROKEN: /-- REQ cooldown_removal: When apyUSD enters the cooldown phase, it MUST be removed from the yield pool, causing remaining apyUSD to receive a higher percentage yield. -/
 -- BROKEN: -- UNFORMALIZABLE req_cooldown_removal: The model does not explicitly track individual apyUSD allocations in the yield pool or compute yield distribution percentages.
