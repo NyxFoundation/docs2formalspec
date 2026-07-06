@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Config
-from .leangen import repair_lean
+from .leangen import devacuate_lean, find_vacuous, repair_lean
 from .llm import LLM
 
 
@@ -18,6 +18,7 @@ class CheckResult:
     attempts: int
     sorry_count: int
     theorem_count: int
+    vacuous_count: int
     last_output: str
     lean_code: str
 
@@ -45,20 +46,35 @@ def _lake_build(cfg: Config, module_name: str) -> tuple[bool, str]:
     return proc.returncode == 0, out
 
 
+def _metrics(code: str) -> tuple[int, int, int]:
+    return (len(re.findall(r"\bsorry\b", code)),
+            len(re.findall(r"\btheorem\b", code)),
+            len(find_vacuous(code)))
+
+
 def check_and_repair(llm: LLM, cfg: Config, module_name: str, lean_code: str,
-                     max_rounds: int = 6, log=print) -> CheckResult:
+                     max_rounds: int = 8, max_devac_rounds: int = 2, log=print) -> CheckResult:
     code = lean_code
     out = ""
-    for attempt in range(1, max_rounds + 1):
+    devac_used = 0
+    attempt = 0
+    while attempt < max_rounds:
+        attempt += 1
         _write_module(cfg, module_name, code)
         ok, out = _lake_build(cfg, module_name)
-        n_sorry = len(re.findall(r"\bsorry\b", code))
-        n_thm = len(re.findall(r"\btheorem\b", code))
-        log(f"[leancheck] round {attempt}: ok={ok} theorems={n_thm} sorries={n_sorry}")
+        n_sorry, n_thm, n_vac = _metrics(code)
+        log(f"[leancheck] round {attempt}: ok={ok} theorems={n_thm} sorries={n_sorry} vacuous={n_vac}")
         if ok:
-            return CheckResult(True, attempt, n_sorry, n_thm, out, code)
+            vac = find_vacuous(code)
+            if vac and devac_used < max_devac_rounds:
+                devac_used += 1
+                log(f"[leancheck] de-vacuating {len(vac)} theorems (pass {devac_used})")
+                code = devacuate_lean(llm, cfg, code, vac)
+                continue
+            n_sorry, n_thm, n_vac = _metrics(code)
+            return CheckResult(True, attempt, n_sorry, n_thm, n_vac, out, code)
         code = repair_lean(llm, cfg, code, out)
     _write_module(cfg, module_name, code)
     ok, out = _lake_build(cfg, module_name)
-    return CheckResult(ok, max_rounds, len(re.findall(r"\bsorry\b", code)),
-                       len(re.findall(r"\btheorem\b", code)), out, code)
+    n_sorry, n_thm, n_vac = _metrics(code)
+    return CheckResult(ok, attempt, n_sorry, n_thm, n_vac, out, code)

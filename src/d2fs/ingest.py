@@ -34,8 +34,7 @@ def _ingest_url(url: str) -> SourceDoc | None:
     ctype = r.headers.get("content-type", "")
     # Sites like docs.apyx.fi serve pages as raw markdown at *.md URLs.
     if url.endswith(".md") or "text/markdown" in ctype or "text/plain" in ctype:
-        title = r.text.lstrip().splitlines()[0].lstrip("# ") if r.text.strip() else url
-        return SourceDoc(source=url, title=title, markdown=r.text)
+        return SourceDoc(source=url, title=_md_title(r.text) or url, markdown=r.text)
     html = r.text
     md = trafilatura.extract(
         html, output_format="markdown", include_tables=True, include_links=False
@@ -44,6 +43,13 @@ def _ingest_url(url: str) -> SourceDoc | None:
         md = html  # fall back to raw; LLM extraction is tolerant
     title = trafilatura.extract_metadata(html).title if md else url
     return SourceDoc(source=url, title=title or url, markdown=md)
+
+
+def _md_title(text: str) -> str | None:
+    for line in text.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return None
 
 
 def _ingest_file(path: Path) -> SourceDoc | None:

@@ -32,7 +32,10 @@ Return a JSON array of objects:
 - "statement": one RFC 2119 sentence, subject = the system component
 - "rationale": <=1 sentence, why the source implies this
 - "source_quote": the exact supporting sentence(s) copied from the document
-- "formalizable": true if it constrains state/arithmetic precisely enough to state as a theorem over a state-transition model, else false
+- "formalizable": true ONLY if the requirement can be stated as a predicate over an \
+on-chain state-transition model (state variables, operation guards/effects, arithmetic \
+relations). Off-chain duties (custody, attestations, legal/jurisdiction checks, \
+frontend behavior, business processes) are NOT formalizable.
 """
 
 MERGE_SYSTEM = """\

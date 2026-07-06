@@ -60,12 +60,13 @@ def run(system_name: str, sources: list[str], cfg: Config | None = None, log=pri
 
     module_name = slugify_module(system_name)
     log(f"[lean] generating {module_name}.lean")
-    lean_code = gen_lean(llm, cfg, system_name, module_name, model_summary, reqs)
+    lean_code = gen_lean(llm, cfg, system_name, module_name, model_summary, reqs, log=log)
     result: CheckResult = check_and_repair(llm, cfg, module_name, lean_code, log=log)
     (outdir / f"{module_name}.lean").write_text(result.lean_code)
     (outdir / "leancheck.json").write_text(json.dumps({
         "ok": result.ok, "attempts": result.attempts, "theorems": result.theorem_count,
-        "sorries": result.sorry_count,
+        "sorries": result.sorry_count, "vacuous": result.vacuous_count,
+        "proved": result.theorem_count - result.sorry_count,
     }, indent=1))
     log("[review] round-trip consistency gate")
     from .review import roundtrip_review
