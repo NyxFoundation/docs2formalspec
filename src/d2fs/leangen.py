@@ -235,6 +235,23 @@ def gen_lean(llm: LLM, cfg: Config, system_name: str, module_name: str,
             theorems_code = kept + "\n\n-- Theorems added after model extension\n\n" + extra
         else:
             log("[leangen] extension failed compile gate; keeping original model")
+
+    # coverage reconciliation: requirements with neither a theorem nor an explicit
+    # UNFORMALIZABLE declaration were silently dropped (batch retries lose items)
+    for _pass in range(2):
+        covered = {n.replace("_", "-") for n in
+                   re.findall(r"^\s*theorem\s+req_([A-Za-z0-9_']+)", theorems_code, flags=re.M)}
+        declared = set(find_unformalizable(theorems_code))
+        dropped = [r for r in reqs if r.formalizable
+                   and r.id not in covered and r.id not in declared]
+        if not dropped:
+            break
+        log(f"[leangen] coverage pass {_pass + 1}: regenerating {len(dropped)} dropped reqs")
+        extra = gen_theorems(llm, cfg, model_code, dropped, log=log,
+                             batch_gate=gate_for(model_code))
+        if not extra.strip():
+            break
+        theorems_code += "\n\n-- Theorems added by coverage reconciliation\n\n" + extra
     return assemble(module_name, model_code, theorems_code)
 
 

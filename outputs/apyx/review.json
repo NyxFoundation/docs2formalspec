@@ -2,33 +2,38 @@
  "results": [
   {
    "id": "whitelist-mint-access",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem only covers deposits invoked at timestamp 0, so it does not guarantee the whitelist restriction for deposits at other times.",
+   "reading": "For every possible state, amount, receiver address, and caller address, when we try to perform a deposit operation with the given amount and receiver, invoked by the caller at timestamp 0, either the step function returns `none` (meaning the operation is rejected), or the caller is listed in the whitelist (i.e., `s.whitelist caller` is true)."
   },
   {
    "id": "issuance-price-one",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem describes accounting updates for a deposit but never asserts that the exchange rate equals $1 (i.e., shares = assets), so it omits the core pricing requirement.",
+   "reading": "For any protocol state `s`, any amount of assets `assets`, any receiver address `receiver`, and any caller address `caller`, one of two possibilities must hold. Either the `step` function applied to the state `s` with the deposit operation `Op.deposit assets receiver`, invoked by `caller` at timestamp `0`, returns `none` (i.e., the deposit fails), **or** the `step` function returns `some s'` for some new state `s'` and, in that case, the following three conditions are true: (1) let `shares` be defined as `assets * 10^18 / s.exchangeRate`; then the balance of `receiver` in the new state `s'` equals the balance of `receiver` in the original state `s` plus `shares`; (2) the total assets recorded in `s'` equal the total assets in `s` plus the deposited `assets`; and (3) the total shares recorded in `s'` equal the total shares in `s` plus `shares`. The theorem makes no claim about any other fields of `s'` or about what happens when the step returns `none` beyond the fact that this is one of the two alternatives."
   },
   {
    "id": "redemption-at-redemption-value",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem ensures that redeemed assets equal shares × exchangeRate and that totals are conserved, but it does not assert that the exchangeRate (or assetsOut) actually tracks the underlying basket as required.",
+   "reading": "For any protocol state `s`, any number of shares `shares`, any receiver address `receiver`, any caller address `caller`, and any timestamp `now`, one of the following must be true: either the `step` function applied to the state `s` with the operation `redeem shares receiver` (executed by `caller` at time `now`) returns `none` (meaning the redemption is rejected), or, if that `step` call returns `some s'` (i.e., the redemption succeeds and yields a new state `s'`), then defining `assetsOut` as `shares * s.exchangeRate / 10^18`, the new state's total assets equal the original state's total assets minus `assetsOut`, and the new state's total shares equal the original state's total shares minus `shares`. No other properties of the new state are claimed."
   },
   {
    "id": "vault-yield-distribution-20d",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
   },
   {
    "id": "lock-apxusd-for-apyusd",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem proves that locking can succeed under certain preconditions, but it does not guarantee that the user receives apyUSD, which is required by the normative statement.",
+   "reading": "For any protocol state `s`, any amount, any receiver address, and any caller address, if the protocol is not paused (`¬s.paused`), the caller is not on the deny list (`¬s.denyList caller`), the receiver is not on the deny list (`¬s.denyList receiver`), and the caller’s apxUSD balance is at least the specified amount (`s.apxUSDBal caller ≥ amount`), then there exists some state `s'` such that executing the `lockApxUSD` operation with that amount and receiver, invoked by the caller at timestamp 0, succeeds—that is, `step s (.lockApxUSD amount receiver) caller 0` evaluates to `some s'`. The theorem does not assert anything else about `s'` (e.g., its contents, uniqueness, or any additional conditions)."
   },
   {
    "id": "apyusd-value-increases-with-yield",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem only ensures a non‑decrease of totalAssets on successful yield distribution and omits strict increase, other relevant fields, and cases where the operation fails, thus weakening the normative requirement.",
+   "reading": "For any protocol state `s` and any amount `amount` that satisfies `amount ≤ s.vestedYield`, define `s'` to be the result of executing the operation `distributeYield amount` on `s` (with caller 0 and timestamp 0). The theorem states that:\n\n- If this step produces a new state `s''` (i.e., `s'` is `some s''`), then the `totalAssets` field of `s''` is at least as large as the `totalAssets` field of the original state `s` (`s''.totalAssets ≥ s.totalAssets`).\n- If the step fails and returns `none`, the theorem merely asserts `True` (i.e., it imposes no condition).\n\nThus the theorem guarantees a non‑decrease of `totalAssets` only in the case where the `distributeYield` operation succeeds, and it makes no claim about any other fields, about strict increase, or about situations where the precondition `amount ≤ s.vestedYield` does not hold."
   },
   {
    "id": "rebalance-overcollateralization",
@@ -62,23 +67,27 @@
   },
   {
    "id": "deposit-permissionless",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem permits rejection (returns `none`) and only ensures non‑decrease of the receiver’s balance if successful, missing the MUST‑allow guarantee and any KYC‑related condition.",
+   "reading": "For every protocol state `s`, every amount of assets, every receiver address, and every caller address, when we invoke the `step` function with the deposit operation `Op.deposit assets receiver` at timestamp 0, either the function returns `none` (meaning the deposit is rejected), or there exists some resulting state `s'` such that `step s (Op.deposit assets receiver) caller 0` equals `some s'` and the balance of the receiver in `s'` (`State.bal s' receiver`) is greater than or equal to the receiver’s balance in the original state `s` (`State.bal s receiver`). The theorem makes no claim about any other outcomes, about the caller’s balance, about the values of other fields, or about whether the deposit succeeds; it only guarantees this non‑decrease of the receiver’s balance in the case of success."
   },
   {
    "id": "non-rebasing-balance",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "full",
+   "note": "The theorem forbids any balance change for operations other than mint/deposit (increase) and burn/withdraw (decrease), which matches the requirement that balances only change via minting or burning and never via rebasing.",
+   "reading": "For any protocol state `s`, any operation `op`, any caller address, and any timestamp `now`, the theorem says that either the step function `step s op caller now` yields `none` (the operation is rejected), or there exists a resulting state `s'` such that `step s op caller now` equals `some s'` and the following property holds: for every address `a`, if the balance of `a` in the new state differs from its balance in the original state (i.e., `State.bal s' a ≠ State.bal s a`), then the direction of that change must match the kind of operation—specifically, if `op` is a `deposit` or a `mint` then the new balance is strictly greater than the old balance; if `op` is a `withdraw` or a `redeem` then the new balance is strictly less than the old balance; and for any other kind of operation the condition is `False`, meaning that no address’s balance may change at all. The theorem makes no claim about what happens when `step` returns `none`, and it does not assert any quantitative amount of change, only the sign of the change for the listed operations."
   },
   {
    "id": "exchange-rate-monotonic",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem only guarantees a high exchangeRate after a successful step (and for any operation), missing the requirement that the rate be ≥1 at all times (including the original state) and that it specifically apply to redemption.",
+   "reading": "For every protocol state `s`, every operation `op`, every caller address `caller`, and every timestamp `now`, one of the following must hold: either the step function `step s op caller now` fails and returns `none`, or there exists some state `s'` such that `step s op caller now` succeeds and returns `some s'` and, in that resulting state `s'`, the `exchangeRate` field is at least `10^18`. The theorem makes no claim about what happens when the step succeeds with an exchange rate below `10^18` (such a case is ruled out), does not assert uniqueness of the resulting state, does not assert any other properties of `s'`, and does not say anything about the exchange rate in the original state `s`."
   },
   {
    "id": "redemption-calculation",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem captures the correct amount calculation (shares * exchangeRate) but only for a successful step and records it in an unlock receipt, not the required transfer of apxUSD, and it allows the operation to fail without guaranteeing the mandatory transfer.",
+   "reading": "For any protocol state `s`, any number of shares `shares`, any receiver address `receiver`, any caller address `caller`, and any timestamp `now`, one of the following must hold: either the step function applied to the state `s` with the redeem operation `(.redeem shares receiver)` invoked by `caller` at time `now` fails (i.e., returns `none`), or there exists some resulting state `s'` such that the step function succeeds (returns `some s'`) and, in that resulting state, the amount recorded in the unlock receipt indexed by `s'.unlockReceiptId` is exactly `shares * s.exchangeRate / 10^18`. The theorem makes no claim about any other outcomes, about the uniqueness of `s'`, about the values of other fields, or about any pre‑conditions on `shares`, `receiver`, `caller`, or `now` beyond what is expressed in the disjunction."
   },
   {
    "id": "single-pending-request",
@@ -102,8 +111,9 @@
   },
   {
    "id": "unlock-receipt-nft-mint",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem ensures a new receipt is created, owned by the caller, and marked active, but it omits any guarantee that the receipt correctly encodes the pending claim (e.g., amount or asset details).",
+   "reading": "Assume we have a protocol state `s`, an operation `op`, a caller address `caller`, a timestamp `now`, and a state `s'`. Suppose that executing `op` by `caller` at time `now` from state `s` succeeds, i.e. the step function returns `some s'`. Also suppose that `op` is one of the three operations that create an unlock receipt: either a `withdraw` with some `assets` and `receiver`, or a `redeem` with some `shares` and `receiver`, or a `requestUnlock` with some `amount`. Under these two assumptions, the theorem guarantees exactly three things about the resulting state `s'`:\n1. The field `unlockReceiptId` in `s'` is equal to the previous `unlockReceiptId` in `s` plus one.\n2. The owner of the receipt whose identifier is the old `unlockReceiptId` (i.e. `s.unlockReceiptId`) in the new state `s'` is `caller`.\n3. That same receipt (`s.unlockReceiptId`) is marked as active (`true`) in `s'`.\nThe theorem makes no claim about any other fields of `s'`, about the amount stored in the new receipt, about receipts with other identifiers, or about the behavior when `op` is not one of the three listed operations."
   },
   {
    "id": "flexible-claim-available-after-3d",
@@ -122,86 +132,99 @@
   },
   {
    "id": "overcollateralization-margin",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "full",
+   "note": "The theorem states that any successful step results in total assets ≤ collateral value minus the liquidity buffer, which corresponds to the required over‑collateralisation margin, matching the normative requirement.",
+   "reading": "For any protocol state `s`, any operation `op`, any caller address, and any timestamp `now`, consider the result of applying the step function: `let result := step s op caller now`. The theorem asserts that either the step function returns `none` (meaning the operation is rejected), or, if the step function returns a new state (so `result` is `some s'` and `let s' := result.get!`), then in that resulting state the total assets do not exceed the total collateral value minus the liquidity buffer; formally, `s'.totalAssets ≤ s'.TCV - s'.liquidityBuffer`. The theorem makes no claim about what happens when `result = none`, nor does it assert any other properties of the resulting state."
   },
   {
    "id": "buffer-not-consumed",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "full",
+   "note": "The theorem guarantees that when a withdrawal (redemption) succeeds, the liquidity/overcollateralization buffer is unchanged, and otherwise the operation is rejected, satisfying the ‘must not be consumed’ requirement.",
+   "reading": "For any protocol state `s`, any amount `assets`, any receiver address `receiver`, any caller address `caller`, and any timestamp `now`, consider the withdraw operation `Op.withdraw assets receiver` and the result of applying the step function to `s` with that operation, caller, and time. The theorem states that either the step function returns `none` (i.e., the withdraw operation is rejected), or, if the step function returns `some s'` (so `result.get!` yields a new state `s'`), then the `liquidityBuffer` field of the new state `s'` is exactly the same as the `liquidityBuffer` field of the original state `s`. No other properties of the result are claimed, and the theorem does not assert that the operation succeeds, nor that any other fields remain unchanged."
   },
   {
    "id": "mint-redeem-at-redemption-value",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "mismatch",
+   "note": "The theorem enforces exchangeRate = RV for every successful operation, not just mint or redemption, and does not directly express pricing of those transactions, so it does not capture the requirement.",
+   "reading": "For any protocol state `s`, any operation `op`, any caller address `caller`, and any timestamp `now`, consider the result of applying the step function to these inputs. Either the step function returns `none` (indicating the operation is rejected), or, if it returns `some s'` (so that `s'` is the new state obtained by `result.get!`), then the `exchangeRate` field of the new state `s'` is equal to the `RV` (redemption value) field of the original state `s`. No other properties are claimed."
   },
   {
    "id": "buffer-preserved-stress",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "full",
+   "note": "The theorem guarantees that the buffer (TCV‑liquidityBuffer) is unchanged for any successful step, which certainly satisfies the MUST‑preserve requirement for stress events.",
+   "reading": "For any protocol state `s`, any operation `op`, any caller address `caller`, and any timestamp `now`, consider the result of applying the step function: `result := step s op caller now`. The theorem asserts that either the step function returns `none` (meaning the operation is rejected), or, if the step function returns a new state (so `result` is `some s'` and `s'` is defined as `result.get!`), then the quantity `TCV - liquidityBuffer` in the new state `s'` is exactly equal to the same quantity `TCV - liquidityBuffer` in the original state `s`. No other conclusions are claimed: the theorem does not assert that the step must succeed, nor does it assert any additional properties of the resulting state beyond the preservation of the `TCV - liquidityBuffer` difference."
   },
   {
    "id": "whitelist-mint-premium",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem enforces that non‑whitelisted callers cannot mint, matching the whitelist restriction, but omits the price‑above‑$1 condition and does not guarantee that whitelisted callers may mint.",
+   "reading": "For any given protocol state `s`, any number of shares, any receiver address, any caller address, and any timestamp, define the operation `op` to be a mint of the specified number of shares to the receiver. The theorem states that if the caller is *not* on the whitelist (i.e., `s.whitelist caller` is false), then executing `step s op caller now` yields `none`. In other words, a mint operation initiated by a non‑whitelisted caller always fails (produces no resulting state). The theorem makes no claim about what happens when the caller *is* whitelisted, nor does it assert anything about other conditions such as whether the contract is paused, whether the caller or receiver is on the deny list, or whether there are sufficient assets; it only guarantees failure in the specific case where the caller is not whitelisted."
   },
   {
    "id": "whitelist-redeem-discount",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem only enforces that non‑whitelisted callers are rejected, omitting the price‑below‑$1 condition and any guarantee that whitelisted callers can redeem.",
+   "reading": "For every protocol state `s`, any number of shares, any receiver address, any caller address, and any timestamp, let `op` be the redeem operation with those shares and that receiver. The theorem states that if the caller is **not** whitelisted in `s` (i.e., `s.whitelist caller` is false), then executing `step s op caller now` yields `none`—the operation is rejected and produces no new state. The claim makes no other assertions: it does not say what happens when the caller is whitelisted, nor does it guarantee that `none` is returned for any other reasons; it only guarantees `none` under the non‑whitelisted condition."
   },
   {
    "id": "credit-yield",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem shows amount moving from vestedYield to totalAssets, but omits the condition that the amount comes from converted apxUSD proceeds and permits the operation to be rejected, weakening the MUST requirement.",
+   "reading": "For any protocol state `s`, any amount `amount`, any caller address `caller`, and any timestamp `now`, consider the operation `Op.distributeYield amount` and the result of applying the step function to `s` with that operation, caller, and timestamp. The theorem asserts that either the step function returns `none` (meaning the operation is rejected), or, if the step function returns a new state (so `result.get!` is defined as `s'`), then in that new state `s'` the field `totalAssets` equals the original state's `totalAssets` plus `amount`, and the field `vestedYield` equals the original state's `vestedYield` minus `amount`. No other properties of the resulting state are claimed, and the theorem does not require any particular conditions on `amount`, `caller`, or `now` beyond those implicit in the definitions."
   },
   {
    "id": "linear-vesting-implementation",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem precisely specifies the linear vesting calculation, but it does not assert that this behavior is provided by the LinearVestV0 contract, so the implementation requirement is missing.",
+   "reading": "For every protocol state `s` and every timestamp `now`, the value returned by the function `s.currentVestedYield now` is exactly equal to the following piece‑wise expression: if `now` is strictly less than `s.yieldVestingStart` then the result is `0`; otherwise, if `now` is greater than or equal to `s.yieldVestingStart + s.yieldVestingPeriod` then the result is `s.yieldVestingAmount`; in all other cases (i.e., when `now` is at least `s.yieldVestingStart` but still before `s.yieldVestingStart + s.yieldVestingPeriod`) the result is `(now - s.yieldVestingStart) * s.yieldVestingRate / 10^18`. The theorem asserts only this equality and does not claim anything else about `s`, `now`, or any other functions or fields."
   },
   {
    "id": "continuous-streaming",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "mismatch",
+   "note": "The theorem only states that calling updateYieldVesting succeeds without changing state, which does not address the requirement that yield be streamed continuously over a period.",
+   "reading": "For every protocol state `s` and every timestamp `now`, if we call the `step` function with the state `s`, the operation `Op.updateYieldVesting now`, caller address `0`, and the same timestamp `now`, then the result of `step` is exactly `some s`—that is, the operation succeeds and leaves the state unchanged."
   },
   {
    "id": "monthly-rate-setting",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "mismatch",
+   "note": "The theorem describes an authorized manual update of the yield rate by a whitelisted caller at a fixed timestamp, whereas the requirement mandates an automatic monthly update derived from prior collateral yield, with no whitelist condition.",
+   "reading": "For any protocol state `s`, any address `caller`, and any amount `rate`, if `caller` is listed in `s`’s whitelist (i.e., `s.whitelist caller` holds), then executing the step function on `s` with the operation `setYieldRate rate`, invoked by `caller` at timestamp 0, succeeds and returns the state that is identical to `s` except that its `yieldRate` field has been replaced by `rate`. The theorem makes no claim about what happens when `caller` is not whitelisted, about any other fields of the state, or about any other timestamps."
   },
   {
    "id": "rate-dollar-terms",
    "verdict": "vacuous",
-   "note": "The theorem merely states a reflexive identity (rateInDollars = rateInDollars) and does not enforce that the yield rate is expressed in dollar terms.",
-   "reading": "For every value `rate` of type `YieldRate`, the `rateInDollars` field of `rate` is equal to itself."
+   "note": "The theorem merely states a trivial truth about any state and does not mention yield rate or dollar terms, so it does not capture the requirement.",
+   "reading": "For every value `s` of type `State`, the proposition `True` holds. In other words, the theorem asserts that `True` is true for any state, and it does not claim any additional property about `s`."
   },
   {
    "id": "yield-eligible-cooldown",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "mismatch",
+   "note": "The theorem concerns the effect of a lock operation on the count of yield‑eligible shares, never mentioning cooldown status or restricting yield payments to non‑cooldown tokens, so it does not capture the requirement.",
+   "reading": "For any protocol state `s`, any caller address, any amount, and any receiver address, if all of the following conditions hold:\n1. The protocol is not paused (`s.paused = false`).\n2. The caller is not on the deny list (`s.denyList caller = false`).\n3. The receiver is not on the deny list (`s.denyList receiver = false`).\n4. The caller’s apxUSD balance is at least the specified amount (`s.apxUSDBal caller ≥ amount`).\n5. Executing the operation `lockApxUSD amount receiver` by the caller at timestamp 0 is defined by the step function (i.e., `step s (.lockApxUSD amount receiver) caller 0` is not `none`).\n\nThen, letting `s'` be the state produced by that step (the `some` state returned by `step`, obtained via `getD s`), the number of shares that are eligible for yield in the new state is greater than or equal to the number of yield‑eligible shares in the original state. In symbols: `s'.yieldEligibleShares ≥ s.yieldEligibleShares`.\n\nThe theorem makes no claim about any other fields of the state, does not assert that the inequality is strict, and does not assert any properties beyond the five listed premises."
   },
   {
    "id": "cooldown-exclusion",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "mismatch",
+   "note": "The theorem claims yieldEligibleShares stays unchanged after a redeem step, while the requirement demands that a token entering cooldown be removed from the yield pool.",
+   "reading": "For any protocol state `s`, caller address `caller`, amount of shares `shares`, and receiver address `receiver`: if the protocol is not paused (`s.paused = false`), the caller is not on the deny list (`s.denyList caller = false`), the receiver is not on the deny list (`s.denyList receiver = false`), the caller’s share balance is at least `shares` (`s.bal caller ≥ shares`), and performing the redeem operation `(.redeem shares receiver)` by `caller` at timestamp 0 would succeed (i.e., `step s (.redeem shares receiver) caller 0` is not `none`), then after executing that redeem step the resulting state `s'` has the same value for the field `yieldEligibleShares` as the original state `s` (`s'.yieldEligibleShares = s.yieldEligibleShares`). The theorem makes no claim about any other fields or about what happens when any of the listed conditions fail."
   },
   {
    "id": "immediate-yield-on-lock",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem shows that locking increases total yield‑eligible shares, which aligns with the idea that the newly locked amount starts earning yield, but it does not explicitly tie the increase to the specific locked apyUSD amount nor address the requirement unconditionally (e.g., when paused or on deny list).",
+   "reading": "For any protocol state `s`, any caller address, any amount, and any receiver address, if all of the following conditions hold:\n1. the contract is not paused (`s.paused = false`),\n2. the caller is not on the deny list (`s.denyList caller = false`),\n3. the receiver is not on the deny list (`s.denyList receiver = false`),\n4. the caller’s apxUSD balance is at least the specified `amount` (`s.apxUSDBal caller ≥ amount`), and\n5. executing the operation `lockApxUSD amount receiver` by `caller` at timestamp 0 from state `s` does not fail (i.e., `step s (.lockApxUSD amount receiver) caller 0 ≠ none`),\nthen, letting `s'` be the resulting state produced by that step (`let s' := (step s (.lockApxUSD amount receiver) caller 0).getD s`), the number of shares that are eligible for yield in the new state is strictly greater than the number of yield‑eligible shares in the original state (`s'.yieldEligibleShares > s.yieldEligibleShares`).\nThe theorem makes no claim about what happens when any of the listed premises are false, nor does it assert any other property of the states or the operation."
   },
   {
    "id": "configurable-period",
    "verdict": "full",
-   "note": "The theorem shows that any whitelisted caller can successfully invoke an update to the vesting period, directly satisfying the requirement that the period be configurable by the protocol.",
-   "reading": "For any system state `s`, any timestamp `newPeriod`, and any address `caller`, if `caller` is listed in the state's whitelist, then let `s'` be the result of calling the `step` function on `s` with the operation `updateVestingPeriod newPeriod` performed by `caller`. Under this condition, the theorem asserts that `s'` is exactly `some { s with vestingPeriod := newPeriod }`—that is, the `step` call succeeds (produces `some` rather than `none`) and returns a state that is identical to `s` except that its `vestingPeriod` field has been updated to `newPeriod`. The theorem makes no claim about what happens when `caller` is not in the whitelist, nor does it assert any other changes to the state."
+   "note": "The theorem shows that the protocol provides an operation to set the yield vesting period, proving configurability (subject to the whitelist condition, which does not contradict the requirement).",
+   "reading": "For any protocol state `s`, any address `caller`, and any timestamp value `period`, the theorem states that if `caller` is whitelisted in `s` (i.e., `s.whitelist caller` holds), then invoking the `step` function on `s` with the operation `Op.setYieldVestingPeriod period`, using `caller` as the transaction sender and a current time of `0`, yields exactly the option `some { s with yieldVestingPeriod := period }`. In other words, under the whitelist condition, the step succeeds and returns a new state that is identical to `s` except that its `yieldVestingPeriod` field is updated to `period`. The theorem makes no claim about what happens when `caller` is not whitelisted or about any other possible effects; it only guarantees this specific result under the given hypothesis."
   },
   {
    "id": "constant-rate-vesting",
    "verdict": "full",
-   "note": "The theorem precisely states that vested amount grows linearly with elapsed time at a constant rate during the vesting period, matching the requirement's normative claim.",
-   "reading": "Assume we have a system state `s`, an address `caller`, and a vesting schedule `schedule`. If the state's record of the caller's vesting schedule is exactly `some schedule` (i.e., the caller is associated with that schedule), and we let\n- `vested` be the value returned by `getVestedAmount s schedule`,\n- `elapsed` be `s.currentTime - schedule.startTime`, and\n- `totalVestingTime` be `schedule.endTime - schedule.startTime`,\nthen, provided that `totalVestingTime` is greater than zero and the current time `s.currentTime` is strictly before `schedule.endTime`, the vested amount `vested` is equal to the linear fraction `(schedule.totalAmount * elapsed) / totalVestingTime` minus the amount already claimed (`schedule.claimedAmount`). The theorem makes no claim about any other situations (e.g., when `totalVestingTime` is zero or negative, when the current time is at or after the end time, or when the caller has no vesting schedule)."
+   "note": "The theorem proves that vested yield grows linearly with time at a fixed rate for any timestamps inside the vesting interval, directly capturing the constant‑rate distribution requirement.",
+   "reading": "Assume we have a protocol state `s` and two timestamps `now1` and `now2`. Suppose (1) the vesting period recorded in `s` is strictly positive, (2) both `now1` and `now2` occur strictly before the end of the current vesting interval—that is, each is less than `s.yieldVestingStart + s.yieldVestingPeriod`, and (3) the first timestamp is not later than the second (`now1 ≤ now2`). Define `rate` to be `s.yieldVestingAmount * 10^18 / s.yieldVestingPeriod` (the total amount to be vested divided by the period, scaled by 10^18). Define `vested1` as the amount of yield that is vested at time `now1` according to `s.currentVestedYield now1`, and define `vested2` analogously at time `now2`. Under these conditions the theorem asserts that the increase in vested yield between the two times is exactly the elapsed time multiplied by the constant rate, i.e. `vested2 - vested1 = (now2 - now1) * rate / 10^18`. The theorem makes no claim about any other situations—for example, it does not say anything when the vesting period is zero, when either timestamp is on or after the vesting end, or when `now1` is greater than `now2`."
   },
   {
    "id": "publish-metrics",
@@ -210,147 +233,160 @@
   },
   {
    "id": "redemption-value-price",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "mismatch",
+   "note": "The theorem states that the Redemption Value field remains unchanged during a redeem operation, but the requirement demands that the price used for redemption equals the Redemption Value, which is not addressed.",
+   "reading": "For any protocol state `s`, any operation `op`, any caller address, any timestamp `now`, and any resulting state `s'`, if executing the step function with those arguments succeeds (i.e., `step s op caller now` returns `some s'`), then the following holds: if the operation `op` is a `redeem` operation (regardless of its arguments), the `RV` field of the resulting state `s'` is exactly equal to the `RV` field of the original state `s`; for any other kind of operation, no condition is imposed (the statement is trivially true)."
   },
   {
    "id": "redemption-value-uniform",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "vacuous",
+   "note": "The theorem merely proves a trivial equality of two identical expressions and does not address participants, calm vs stressed conditions, or any uniform application of redemption value.",
+   "reading": "For every protocol state `s`, for any two addresses `caller1` and `caller2`, for any amount `shares`, and for any timestamp `now`, if we let `assets1` be the value `shares * s.RV / 10^18` and we also let `assets2` be the value `shares * s.RV / 10^18` (i.e., the same expression), then `assets1` is equal to `assets2`. The theorem makes no other claims about `caller1`, `caller2`, `now`, `s`, or any other fields; it only asserts this trivial equality of the two identically defined quantities."
   },
   {
    "id": "total-collateral-definition",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "vacuous",
+   "note": "The theorem reduces to TCV = RV + (TCV - RV), a tautology that doesn't enforce that the buffer is the required over‑collateralization amount, so it doesn't capture the normative requirement.",
+   "reading": "For every protocol state `s`, the total collateral value `s.TCV` is equal to the redemption value `s.RV` plus the buffer size `s.bufferSize` (where `s.bufferSize` is defined as `s.TCV - s.RV`)."
   },
   {
    "id": "buffer-visibility",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem defines the buffer size as TCV‑RV, but it does not assert that this value is visible to everyone at all times, which is the core normative requirement.",
+   "reading": "For every protocol state `s`, the field `bufferSize` of `s` is equal to the difference between `s.TCV` and `s.RV`. In other words, `s.bufferSize` is defined to be exactly `s.TCV - s.RV`. The theorem does not claim any other relationships or properties about `s` or its other fields."
   },
   {
    "id": "price-floor",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
   },
   {
    "id": "governance-deploy-buffer",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "mismatch",
+   "note": "The theorem talks about any whitelisted caller directly deploying buffer funds, ignoring the required voting process, governance token holder role, and intermediate‑risk condition, so it does not capture the normative requirement.",
+   "reading": "For any protocol state `s`, any amount `amount`, and any address `caller`, if two conditions hold—(1) the `caller` is on the whitelist (`s.whitelist caller = true`), and (2) the `amount` is less than or equal to the current buffer size (`amount ≤ s.bufferSize`)—then there exists some state `s'` such that executing the `deployBuffer amount` operation from state `s` by `caller` at timestamp 0 succeeds, i.e., the `step` function returns `some s'`. The theorem does not claim anything about what `s'` looks like, about uniqueness of `s'`, about what happens when the conditions are not met, nor about other timestamps or callers."
   },
   {
    "id": "catastrophic-redemption",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem only guarantees RV = TCV when the catastrophicRedemption step succeeds, omitting the requirement that the operation must succeed and the mandatory distribution of the entire reserve (including buffer) pro‑rata to holders.",
+   "reading": "For every protocol state `s`, consider the result `s'` of applying the `catastrophicRedemption` operation (with caller address 0 and timestamp 0) via the `step` function. The theorem states that if `step` returns a new state (i.e., `s'` is `some state`), then in that resulting state the redemption value `RV` is exactly equal to the total collateral value `TCV`. If `step` returns `none` (meaning the operation fails), the statement is trivially true. The theorem does not claim that the operation must succeed, nor does it say anything about any other fields of the state."
   },
   {
    "id": "rfq-redemption",
    "verdict": "partial",
-   "note": "The theorem captures the permission restriction (only approved counterparties can succeed) but omits the requirement that any user may submit redemption requests via a structured RFQ process and does not address the execution vs submission distinction.",
-   "reading": "For any system state `s`, any request identifier, amount, price, and expiry (all natural numbers), and any caller address, the step function applied to `s` with the operation `submitRFQ requestId amount price expiry` performed by `caller` produces a defined next state (i.e., the result is `some` rather than `none`) exactly when the caller’s address is an element of the list `s.approvedCounterparties`. In other words, the operation succeeds if and only if the caller is an approved counter‑party. The theorem makes no claim about what the resulting state looks like, about the values of the request fields, about uniqueness of the request identifier, or about any other aspects of the system; it only characterises the success condition in terms of the caller’s presence in `approvedCounterparties`."
+   "note": "The theorem only shows that approved counterparties can submit an RFQ successfully, but it omits the requirement that unapproved parties must be prohibited and does not address the broader allowance for all users to submit redemption requests.",
+   "reading": "For any protocol state `s`, any address `caller`, and any values `requestId`, `amount`, `price`, and `expiry`, if the state's `approvedCounterparties` map returns `true` for `caller` (i.e., `caller` is an approved counterparty in `s`), then invoking the `step` function on `s` with the operation `submitRFQ requestId amount price expiry` performed by `caller` at timestamp `0` yields `some s`. In other words, under that condition the `submitRFQ` operation succeeds and leaves the state unchanged. The theorem makes no claim about what happens if the condition is false, nor does it impose any requirements on the values of `requestId`, `amount`, `price`, or `expiry` beyond being provided."
   },
   {
    "id": "deposit-immediate",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "full",
+   "note": "The theorem shows that after a successful deposit (i.e., when all checks pass) the receiver’s balance is increased by the computed shares, matching the requirement that shares are minted immediately.",
+   "reading": "For any protocol state `s`, any amount `assets`, any receiver address `receiver`, and any caller address `caller`, if the following four conditions hold:\n1. the contract is not paused (`s.paused = false`),\n2. the caller is not on the deny list (`s.denyList caller = false`),\n3. the receiver is not on the deny list (`s.denyList receiver = false`), and\n4. the caller is whitelisted (`s.whitelist caller = true`),\nthen define `shares` to be the integer value of `assets * 10^18 / s.exchangeRate`, and define `s'` to be the result of the `step` function applied to `s` with the operation `Op.deposit assets receiver` performed by `caller` at timestamp `0`. Under these assumptions, `s'` is exactly `some` of a new state that is identical to `s` except that:\n- `totalAssets` is increased by `assets` (`totalAssets := s.totalAssets + assets`),\n- `totalShares` is increased by `shares` (`totalShares := s.totalShares + shares`), and\n- the balance function `bal` is updated so that the `receiver`'s balance is increased by `shares` and all other addresses keep their previous balances (`bal a = if a = receiver then s.bal a + shares else s.bal a`).\nThe theorem makes no claim about any other fields of the state, nor does it assert anything when any of the four preconditions fail."
   },
   {
    "id": "mint-immediate",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "full",
+   "note": "The theorem states that under the conditions defining a successful mint, the state is updated instantly with the receiver’s share balance increased, matching the requirement’s normative content.",
+   "reading": "For any protocol state `s`, any number of shares `shares`, any receiver address `receiver`, and any caller address `caller`, if the protocol is not paused (`s.paused = false`), the caller is not on the deny list (`s.denyList caller = false`), and the receiver is not on the deny list (`s.denyList receiver = false`), and if we define `requiredAssets` to be `shares * s.exchangeRate / 10^18` and this amount does not exceed the available collateral (`requiredAssets ≤ s.TCV - s.liquidityBuffer`), then performing the `mint` operation with those shares and receiver at timestamp 0 (i.e., evaluating `step s (.mint shares receiver) caller 0`) yields a result `s'` that is exactly `some` state equal to `s` except that:\n- `totalAssets` is increased by `requiredAssets`,\n- `totalShares` is increased by `shares`,\n- the balance function `bal` is updated so that the receiver’s balance is increased by `shares` (all other addresses keep their previous balances).\nThe theorem makes no claim about any other fields of the state, about what happens when the listed conditions are not satisfied, or about any other possible outcomes of `step`."
   },
   {
    "id": "depositforminshares-slippage",
-   "verdict": "partial",
-   "note": "The theorem captures that a previewed share amount below minShares forces the operation to fail, but it omits the requirement that the failure be a specific slippage error.",
-   "reading": "For any vault state `s`, any amounts `assets` and `minShares`, any receiver address, and any caller address, define `result` to be the outcome of applying the `depositForMinShares` operation with those parameters to the state `s` (using `step s (Op.depositForMinShares assets minShares receiver) caller`). Also define `mintShares` as the integer division of `assets` by the current exchange rate `s.exchangeRate`. The theorem asserts that if the computed `mintShares` is strictly less than the required `minShares`, then the operation must fail: the `step` function returns `none`. It makes no claim about what happens when `mintShares` is greater than or equal to `minShares`, nor does it assert anything about other possible failure reasons (such as the contract being paused or the caller/receiver being on a deny list)."
+   "verdict": "full",
+   "note": "The theorem exactly states that the operation fails (returns none) when the previewed share amount is less than minShares, matching the requirement's slippage revert condition.",
+   "reading": "For any protocol state `s`, any amount of assets, any receiver address, any minimum‑shares requirement `minShares`, any caller address, and any timestamp `now`, let `shares` be the number of shares that would be obtained by converting `assets` at the current exchange rate (`shares = assets * 10^18 / s.exchangeRate`). The theorem asserts that if this computed `shares` value is strictly less than the required `minShares`, then the step function applied to `s` with the operation `depositForMinShares assets receiver minShares`, invoked by `caller` at time `now`, must produce `none` (i.e., the operation fails). It does not claim anything about what happens when `shares` is greater than or equal to `minShares`, nor does it assert any other conditions on the state or the caller."
   },
   {
    "id": "mintformaxassets-slippage",
    "verdict": "partial",
-   "note": "The theorem captures the failure when requiredAssets > maxAssets but does not assert that the revert is specifically a slippage error, thus weakening the normative requirement.",
-   "reading": "For any vault state `s`, any numbers of `shares` and `maxAssets`, any `receiver` address and any `caller` address, define `result` to be the value returned by the step function when it processes the operation `mintForMaxAssets shares maxAssets receiver` invoked by `caller`, and define `requiredAssets` to be `shares` multiplied by the current exchange rate stored in `s`. The theorem asserts that if `requiredAssets` is strictly greater than `maxAssets`, then `result` must be `none` (i.e., the operation fails and produces no new state). It makes no claim about what happens when `requiredAssets` is less than or equal to `maxAssets`, nor does it assert anything about other conditions such as pauses, deny‑lists, or any state changes beyond the fact that the result is `none` in this case."
+   "note": "The theorem captures the required rejection when required assets exceed maxAssets, but it does not specify that the revert is a slippage error, omitting the normative error type.",
+   "reading": "For any protocol state `s`, any caller address, any receiver address, any number of shares `shares`, any maximum‑asset limit `maxAssets`, and any timestamp `now`, define `requiredAssets` as `shares * s.exchangeRate / 10^18`. The theorem asserts that if `requiredAssets` is strictly greater than `maxAssets`, then invoking the step function with the operation `mintForMaxAssets shares receiver maxAssets` (performed by `caller` at time `now`) yields `none`—i.e., the operation is rejected. The statement makes no claim about what happens when `requiredAssets` is less than or equal to `maxAssets`, nor does it assert anything about other state conditions such as pause status or deny‑list membership; it only guarantees rejection in the case where the required assets exceed the specified maximum."
   },
   {
    "id": "totalassets-includes-vested",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "mismatch",
+   "note": "The theorem adds unrelated terms (TCV and liquidityBuffer) to the totalAssets calculation, deviating from the requirement that totalAssets equals only the direct balance plus vested amount.",
+   "reading": "For every protocol state `s`, the value of `s.totalAssets` is exactly equal to `s.TCV` minus `s.liquidityBuffer` plus `s.vestedYield`. No other conditions or statements are made."
   },
   {
    "id": "withdrawal-pulls-vested",
-   "verdict": "vacuous",
-   "note": "The theorem only concludes True under certain conditions and does not assert that vested yield is pulled before withdrawal, so it does not capture the requirement.",
-   "reading": "If the state's vestedYield field is greater than zero and the step function applied to the state with a withdraw operation (with the given assets and receiver) initiated by the caller returns a non‑none result, then the proposition True holds."
+   "verdict": "mismatch",
+   "note": "The theorem only specifies asset accounting for withdrawals and does not assert that vested yield must be pulled from LinearVestV0 before processing, omitting the core requirement.",
+   "reading": "For any protocol state `s`, any withdrawal amount `assets`, any receiver address, any caller address, and any current timestamp `now`, define `sharesNeeded` as `assets * 10^18 / s.exchangeRate`. If three conditions hold—(1) the requested `assets` are less than or equal to the total assets recorded in `s`, (2) the caller’s share balance `s.bal caller` is at least `sharesNeeded`, and (3) the current time `now` is greater than or equal to the caller’s cooldown end time `s.cooldownEnd caller`—then consider the result `s'` of applying the `step` function to `s` with the operation `Op.withdraw assets receiver` performed by `caller` at time `now`. The theorem states that in this situation either:\n\n* `s'` is `some s''` (i.e., the withdrawal succeeds) and the new state's total assets satisfy `s''.totalAssets = s.totalAssets - assets`; or\n* `s'` is `none` (i.e., the withdrawal fails) and the theorem imposes no further requirement (the condition `True` is trivially satisfied).\n\nThe theorem makes no claim about whether the withdrawal must succeed, about any other fields of the resulting state, about the receiver’s balances, or about any behavior when the three pre‑conditions are not met."
   },
   {
    "id": "global-pause-blocks-deposit-mint",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem only proves rejection at timestamp 0, omitting the requirement that deposits and mints be rejected at any timestamp when paused.",
+   "reading": "For any protocol state `s`, any asset amount `assets`, any share amount `shares`, any receiver address `receiver`, and any caller address `caller`: if the state's `paused` flag is true, then calling the `step` function on `s` with a `deposit` operation (using `assets` and `receiver`) by `caller` at timestamp 0 yields `none`, and calling `step` on `s` with a `mint` operation (using `shares` and `receiver`) by `caller` at timestamp 0 also yields `none`. In other words, when the global pause flag is set, both deposit and mint operations are blocked (return `none`). The theorem makes no claim about any other operations, about timestamps other than 0, about the case when `paused` is false, or about any other conditions."
   },
   {
    "id": "denylist-blocks-deposit-mint",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem proves reversion only for timestamp 0, omitting the requirement that the revert must hold for all timestamps (i.e., universally).",
+   "reading": "For any protocol state `s`, any asset amount `assets`, any share amount `shares`, any receiver address `receiver`, and any caller address `caller`: if either the caller or the receiver is listed in the deny list of `s` (i.e., `s.denyList caller` is true or `s.denyList receiver` is true), then the step function applied to a deposit operation with those `assets` and `receiver`, invoked by `caller` at timestamp 0, yields `none`. Moreover, under the same deny‑list condition, the step function applied to a mint operation with those `shares` and `receiver`, invoked by `caller` at timestamp 0, also yields `none`. The theorem makes no claim about what happens when the deny‑list condition is false, about other timestamps, or about any other operations."
   },
   {
    "id": "withdrawal-returns-unlock-token",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem captures the creation (minting) of a receipt token with correct ownership and amount, but omits the required cooldown period and any restriction on redemption or non‑transferability.",
+   "reading": "For any protocol state `s`, any values called `assets` and `receiver`, any caller address `caller`, and any timestamp `now`, consider the result of performing the `withdraw` operation with those `assets` and `receiver` on state `s` by `caller` at time `now`. If that operation succeeds (i.e., `step s (.withdraw assets receiver) caller now` returns `some` state), then letting `s'` be the state returned by the operation, the following hold simultaneously:\n\n1. The new state's `unlockReceiptId` is exactly one greater than the original state's `unlockReceiptId` (`s'.unlockReceiptId = s.unlockReceiptId + 1`).\n2. The receipt whose identifier is the original `unlockReceiptId` (the receipt created by this withdrawal) is marked active in the new state (`s'.unlockReceiptActive s.unlockReceiptId = true`).\n3. That same receipt is owned by the caller (`s'.unlockReceiptOwner s.unlockReceiptId = caller`).\n4. The amount recorded in that receipt equals the `assets` value supplied to the withdrawal (`s'.unlockReceiptAmount s.unlockReceiptId = assets`).\n\nThe theorem makes no claim about any other fields of `s'`, nor does it assert any conditions on `assets`, `receiver`, `caller`, or `now` beyond the assumption that the withdrawal step succeeded."
   },
   {
    "id": "erc4626-compliance",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "unformalizable",
+   "note": "declared unformalizable by generator"
   },
   {
    "id": "sync-withdraw-redeem",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem only characterizes when withdraw and redeem are permitted based on numeric conditions, but omits the requirement that they be executed synchronously and that they return apxUSD_unlock tokens.",
+   "reading": "For any protocol state `s`, any values `assets`, `shares`, and `receiver` (treated as addresses), any caller address `caller`, and any timestamp `now`, the following two statements are equivalent:\n\n1. Both of the following hold:\n   - The `step` function applied to `s` with the operation `Op.withdraw assets receiver`, called by `caller` at time `now`, returns `some` state (i.e., the withdraw operation is allowed).\n   - The `step` function applied to `s` with the operation `Op.redeem shares receiver`, called by `caller` at time `now`, returns `some` state (i.e., the redeem operation is allowed).\n\n2. All of the following conditions are true simultaneously:\n   - `assets` is less than or equal to `s.totalAssets`.\n   - The caller’s asset balance, computed as `s.bal caller * s.exchangeRate / 10^18`, is at least `assets`.\n   - The current time `now` is greater than or equal to the caller’s cooldown end time `s.cooldownEnd caller`.\n   - `shares` is less than or equal to `s.totalShares`.\n   - The exchange rate `s.exchangeRate` is at least `10^18`.\n\nIn other words, the pair of operations (withdraw and redeem) can both succeed exactly when the five numeric conditions above all hold. The theorem does not assert any other facts about the state, the receiver, side‑effects of the operations, or any additional requirements beyond the listed conditions."
   },
   {
    "id": "unlock-redeem-1to1",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "full",
+   "note": "The theorem guarantees a 1:1 increase in the caller's apxUSD balance after the cooldown condition holds, matching the requirement's core normative claim.",
+   "reading": "Assume we have a protocol state `s`, a receipt identifier `tokenId`, an address `caller`, and a timestamp `now`. Suppose three conditions are true: (1) the unlock receipt with identifier `tokenId` is currently active in `s`; (2) the owner of that receipt in `s` is exactly `caller`; and (3) the current time `now` is at least the cooldown end time recorded for `caller` in `s`. Under these assumptions, define `result` to be the outcome of applying the `claimUnlock tokenId` operation to state `s` with `caller` as the initiator at time `now`. If `result` is a `some` value (i.e., the operation succeeds), let `s'` be the state extracted from `result`. Then the theorem asserts that in the new state `s'` the `apxUSDBal` (apxUSD balance) of `caller` is exactly equal to the original `apxUSDBal` of `caller` in `s` plus the full amount recorded in the unlock receipt `tokenId` in `s`. No other properties are claimed: the theorem does not assert anything about what happens when the preconditions fail, about the case where `result` is `none`, about any other fields of `s'`, or about any fees; it only guarantees this precise balance equality under the stated successful‑execution conditions."
   },
   {
    "id": "unlock-nontransferable",
-   "verdict": "full",
-   "note": "The theorem states that the transferability flag is always false, directly enforcing that the apxUSD_unlock token cannot be transferred, matching the requirement.",
-   "reading": "For every possible State value s, the field unlockReceiptTransferable in s is equal to false."
+   "verdict": "mismatch",
+   "note": "The theorem concerns the effect of a non‑owner calling claimUnlock on balances, not the prohibition of transferring the apxUSD_unlock token itself.",
+   "reading": "For any protocol state `s`, any receipt identifier `tokenId`, and any two addresses `caller` and `other`, assume that in `s` the owner of the unlock receipt `tokenId` is `caller`. Consider the result of executing the `claimUnlock tokenId` operation on `s` at timestamp 0, with `other` acting as the caller of the operation (i.e., `let result := step s (.claimUnlock tokenId) other 0`). The theorem asserts that under these assumptions one of two things must hold: either the operation fails, meaning `result` is `none`; or the operation succeeds, meaning `result` is `some` state, and in that succeeding case the `apxUSDBal` of `other` in the new state is exactly the same as `other`’s `apxUSDBal` in the original state `s`. In other words, when an address that does **not** own a given unlock receipt attempts to claim it, the operation cannot increase that address’s apxUSD balance—it either does nothing (fails) or leaves the balance unchanged. The theorem makes no claim about any other fields of the state, about the balance of the true owner, about whether the receipt becomes inactive, or about which of the two alternatives actually occurs."
   },
   {
    "id": "early-unlock-fee-linear",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "partial",
+   "note": "The theorem captures the linear decline of the fee for the last 20‑day window but omits the behavior when the remaining time is ≥ 20 days and does not explicitly assert that the fee must be applied.",
+   "reading": "Assume we have a protocol state `s`, an address `caller`, a receipt identifier `tokenId`, and a timestamp `unlockTime`. Suppose three conditions hold: (1) the unlock receipt with identifier `tokenId` is active in state `s` (i.e., `s.unlockReceiptActive tokenId = true`); (2) the owner of that receipt is exactly `caller` (i.e., `s.unlockReceiptOwner tokenId = caller`); and (3) the requested unlock time occurs before the caller’s cooldown period ends (i.e., `unlockTime < s.cooldownEnd caller`). Under these assumptions we introduce several auxiliary definitions: let `fee` be the value returned by the state’s `earlyUnlockFee` function applied to `unlockTime` and the caller’s cooldown end; let `timeRemaining` be the difference `s.cooldownEnd caller - unlockTime`; let `totalTime` be the constant `20 * 24 * 3600` (the number of seconds in twenty days); let `feeStart` be the state’s `earlyUnlockFeeStart`; and let `feeEnd` be the state’s `earlyUnlockFeeEnd`. The theorem then states that **if** `timeRemaining` is strictly less than `totalTime`, **then** the fee is given by the linear formula\n\n```\nfee = feeStart - (feeStart - feeEnd) * timeRemaining / totalTime\n```\n\nIn other words, when the remaining time before the cooldown ends is less than the full twenty‑day period, the early‑unlock fee decreases linearly from `feeStart` to `feeEnd` as `timeRemaining` grows, according to the above expression. The theorem makes no claim about the fee when `timeRemaining` is greater than or equal to `totalTime`, nor does it assert anything if any of the three initial conditions fail, nor does it assert any other properties of the involved quantities."
   },
   {
    "id": "unlock-cannot-cancel",
-   "verdict": "partial",
-   "note": "The theorem forces the cancel flag to be false in all states, whereas the requirement only forbids cancellation after an unlock is initiated; it omits the condition that cancellation might be permissible before initiation.",
-   "reading": "For every possible State value s, the field unlockReceiptCancelable of s is equal to false; that is, the unlock‑receipt‑cancelable flag is always false."
+   "verdict": "mismatch",
+   "note": "The theorem concerns the `claimUnlock` operation, not the prohibition of a `cancelUnlock` after initiation, so it does not capture the requirement.",
+   "reading": "For any protocol state `s`, any receipt identifier `tokenId`, any caller address `caller`, and any timestamp `now`, let `result` be the outcome of applying the `claimUnlock tokenId` operation to `s` with `caller` at time `now`. If this operation succeeds (i.e., `result.isSome` holds), then define `s'` as the state extracted from `result` (`s' = result.get!`). In that resulting state `s'`, the field `unlockReceiptActive tokenId` is equal to `false`. The theorem makes no claim about what happens when the operation does not succeed, nor does it assert anything about any other fields of `s'` or about the prior state of the receipt."
   },
   {
    "id": "unlock-convert-after-cooldown",
+   "verdict": "partial",
+   "note": "The theorem shows that conversion succeeds after the cooldown, but it does not assert that conversion is prohibited before the cooldown, so it captures only the sufficient condition, not the full 'only after' requirement.",
+   "reading": "For any protocol state `s`, any receipt identifier `tokenId`, any caller address `caller`, and any timestamp `now`, if three conditions are true—(1) the unlock receipt with identifier `tokenId` is currently active in `s`, (2) the owner of that receipt in `s` is exactly `caller`, and (3) the current time `now` is greater than or equal to the cooldown end time recorded for `caller` in `s`—then executing the `claimUnlock tokenId` operation on state `s` by `caller` at time `now` succeeds: the `step` function applied to these arguments returns `some` state (i.e., it is not `none`). The theorem makes no claim about what happens if any of the three conditions is false, nor does it specify any properties of the resulting state beyond its existence."
+  },
+  {
+   "id": "multiple-unlocks-reset-cooldown",
    "verdict": "missing",
    "note": "no theorem generated"
   },
   {
-   "id": "multiple-unlocks-reset-cooldown",
-   "verdict": "partial",
-   "note": "The theorem resets the cooldown unconditionally on any successful unlock request, omitting the required condition that a previous unlock be pending and that the reset apply to the entire pending amount.",
-   "reading": "For any system state `s`, any address `caller`, and any amount `amount`, consider the result `s'` of applying the `requestUnlock amount` operation by `caller` to `s`. If this operation succeeds and yields a new state `s''` (i.e., `s'` is `some s''`), then in that resulting state the cooldown end time recorded for `caller` is exactly `s.currentTime + COOLDOWN_DURATION`. If the operation does not succeed (i.e., `s'` is `none`), the theorem imposes no condition (the statement is trivially true). The theorem does not claim that the operation must succeed, nor does it make any assertions about other fields of the state."
-  },
-  {
    "id": "withdrawformaxshares-revert-on-slippage",
-   "verdict": "full",
-   "note": "The theorem directly captures the required revert condition when shares needed exceed maxShares, matching the normative requirement.",
-   "reading": "For any vault state `s`, any amounts `assets` and `maxShares`, any receiver address, and any caller address, let `sharesNeeded` be the number of shares that `convertToShares s assets` computes are required to withdraw `assets`. The theorem asserts that if `sharesNeeded` is strictly greater than `maxShares`, then invoking the `step` function with the operation `withdrawForMaxShares assets maxShares receiver` by `caller` yields `none` (i.e., the operation is rejected). It makes no claim about what happens when `sharesNeeded` is less than or equal to `maxShares`, nor does it address any other conditions such as pauses or deny‑list checks."
+   "verdict": "missing",
+   "note": "no theorem generated"
   },
   {
    "id": "redeemforminassets-revert-on-slippage",
-   "verdict": "full",
-   "note": "The theorem directly states that the operation reverts (step returns none) whenever the computed assets out is less than the required minimum, matching the requirement's normative clause.",
-   "reading": "For any vault state `s`, any numbers of shares and a minimum‑asset amount `minAssets`, any receiver address, and any caller address, let `assetsOut` be the product of `shares` and the current exchange rate stored in `s`. If `assetsOut` is strictly less than `minAssets`, then invoking the operation `redeemForMinAssets shares minAssets receiver` as `caller` on state `s` causes the `step` function to return `none` (i.e., the operation fails or reverts). The theorem makes no claim about what happens when `assetsOut` is greater than or equal to `minAssets`, nor does it assert any other properties of the state or the operation."
+   "verdict": "missing",
+   "note": "no theorem generated"
   },
   {
    "id": "single-unlocktoken-instance",
@@ -364,23 +400,24 @@
   },
   {
    "id": "unlocktoken-redeem-after-cooldown",
-   "verdict": "missing",
-   "note": "no theorem generated"
+   "verdict": "full",
+   "note": "The theorem asserts that any call before the cooldown end is rejected, which directly enforces the requirement that redeem may only be callable after the cooldown period.",
+   "reading": "For any protocol state `s`, any receipt identifier `tokenId`, any caller address `caller`, and any timestamp `now`, if the timestamp `now` is strictly earlier than the caller’s cooldown end time recorded in `s` (i.e., `now < s.cooldownEnd caller`), then performing the `claimUnlock tokenId` operation by `caller` at time `now` yields `none` from the `step` function—meaning the operation is rejected and does not produce a new state. The theorem makes no claim about what happens when `now` is not less than the cooldown end, nor does it assert anything about the ownership or activity of the receipt."
   },
   {
    "id": "unlocktoken-no-yield",
-   "verdict": "mismatch",
-   "note": "The theorem forbids the claimUnlock operation entirely during cooldown, whereas the requirement only prohibits earning yield; it does not require the operation to fail.",
-   "reading": "For any vault state `s`, any unlock receipt identifier `tokenId`, and any address `caller`: if the amount recorded for that receipt is greater than zero, and if we let `owner` be the recorded owner of the receipt and `cooldownEnd` be the recorded cooldown‑end timestamp of the receipt, and if `owner` equals `caller` and the current time in the state is strictly earlier than `cooldownEnd`, then executing the `claimUnlock tokenId` operation by `caller` fails – the `step` function returns `none`, so the whole expression `(step s (.claimUnlock tokenId) caller >>= fun s' => pure (s'.apxUsdBal caller))` evaluates to `none`. The theorem makes no claim about what happens when any of these conditions are not met, nor does it assert any other properties of the state or balances."
+   "verdict": "missing",
+   "note": "no theorem generated"
   }
  ],
  "counts": {
-  "missing": 59,
-  "vacuous": 2,
-  "full": 5,
-  "partial": 5,
-  "mismatch": 1
+  "partial": 24,
+  "unformalizable": 3,
+  "missing": 20,
+  "full": 11,
+  "mismatch": 11,
+  "vacuous": 3
  },
- "coverage_full": 0.06944444444444445,
- "coverage_full_or_partial": 0.1388888888888889
+ "coverage_full": 0.1527777777777778,
+ "coverage_full_or_partial": 0.4861111111111111
 }

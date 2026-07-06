@@ -224,6 +224,38 @@ def _metrics(code: str) -> tuple[int, int, int, int]:
             len(re.findall(r"^-- BROKEN:.*\btheorem\b", code, flags=re.M)))
 
 
+# ---------------------------------------------------------------- auto-prove
+
+PROOF_TACTICS = [
+    "simp [step]",
+    "simp_all [step]",
+    "intro h <;> simp_all [step]",
+    "unfold step <;> split <;> simp_all",
+    "omega",
+    "decide",
+]
+
+
+def auto_prove_blocks(cfg: Config, module_name: str, model_region: str,
+                      blocks: list[str], log=print) -> tuple[list[str], int]:
+    """Deterministically try a cheap tactic menu on every `:= sorry` stub.
+    No LLM calls; accepts the first tactic that compiles."""
+    proved = 0
+    for i, b in enumerate(blocks):
+        if not is_theorem_block(b) or not re.search(r":=\s*sorry\s*$", b.rstrip()):
+            continue
+        for tac in PROOF_TACTICS:
+            cand = re.sub(r":=\s*sorry\s*$", f":= by {tac}", b.rstrip())
+            ok, _ = compile_snippet(cfg, module_name, model_region, cand)
+            if ok:
+                name = _thm_name(b) or f"block{i}"
+                log(f"[leancheck]   auto-proved {name} with `{tac}`")
+                blocks[i] = cand
+                proved += 1
+                break
+    return blocks, proved
+
+
 def _thm_name(block: str) -> str | None:
     m = re.search(r"^\s*theorem\s+([A-Za-z0-9_']+)", block, flags=re.M)
     return m.group(1) if m else None
@@ -304,6 +336,15 @@ def check_and_repair(llm: LLM, cfg: Config, module_name: str, lean_code: str,
                             verified.discard(i)
                             fail_counts.pop(i, None)
                 continue
+            blocks, n_auto = auto_prove_blocks(cfg, module_name, model_region, blocks, log=log)
+            if n_auto:
+                log(f"[leancheck] auto-proved {n_auto} stubbed theorems")
+                text, _ = build_file(model_region, blocks, module_name)
+                _write_module(cfg, module_name, text)
+                ok2, out2 = _lake_build(cfg, module_name)
+                if ok2:
+                    out = out2
+                n_sorry, n_thm, n_vac, n_kill = _metrics(text)
             return CheckResult(True, attempt, n_sorry, n_thm, n_vac, n_kill, out, text)
 
         # full build failed though individually-verified: model drift, non-theorem

@@ -1,9 +1,9 @@
 {
  "ok": true,
- "attempts": 4,
- "theorems": 13,
- "sorries": 10,
+ "attempts": 3,
+ "theorems": 49,
+ "sorries": 41,
  "vacuous": 0,
- "killed": 40,
- "proved": 3
+ "killed": 2,
+ "proved": 8
 }
