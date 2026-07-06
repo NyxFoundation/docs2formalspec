@@ -1,0 +1,60 @@
+[lean] generating Apyx.lean
+[leangen] phase 1: domain model
+[leancheck] model gate round 1: ok=False
+[leancheck] model gate round 2: ok=True
+[leangen] phase 2: theorems
+[leangen] theorem batch 1/10
+[leangen] theorem batch 2/10
+[leangen] theorem batch 3/10
+[leangen] theorem batch 4/10
+[leangen] theorem batch 5/10
+[leangen] theorem batch 6/10
+[leangen] theorem batch 7/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 8/10
+[leangen] theorem batch 9/10
+[leangen] theorem batch 10/10
+[leangen] phase 3: extending model for 76 unformalizable reqs
+[leancheck] model gate round 1: ok=False
+[leancheck] model gate round 2: ok=False
+[leancheck] model gate round 3: ok=False
+[leancheck] model gate round 4: ok=False
+[leangen] extension failed compile gate; keeping original model
+[leangen] coverage pass 1: regenerating 1 dropped reqs
+[leangen] theorem batch 1/1
+[leangen] coverage pass 2: regenerating 1 dropped reqs
+[leangen] theorem batch 1/1
+[leancheck] round 1: ok=False theorems=8 sorries=8 vacuous=8 killed=0 verified=8
+[leancheck] round 2: ok=True theorems=8 sorries=8 vacuous=8 killed=0 verified=8
+[leancheck] de-vacuating 8 theorems (pass 1)
+[leancheck]   req_synchronous_withdraw_return_token: targeted repair (1st failure)
+[leancheck]   req_depositforminshares_slippage: targeted repair (1st failure)
+[leancheck]   req_mintformaxassets_slippage: targeted repair (1st failure)
+[leancheck]   req_global_pause_blocks_deposit: targeted repair (1st failure)
+[leancheck]   req_denylist_blocks_deposit: targeted repair (1st failure)
+[leancheck] round 3: ok=False theorems=8 sorries=4 vacuous=1 killed=0 verified=3
+[leancheck]   req_depositforminshares_slippage: sorry-stub (2nd failure)
+[leancheck]   req_global_pause_blocks_deposit: sorry-stub (2nd failure)
+[leancheck] round 4: ok=False theorems=7 sorries=4 vacuous=1 killed=1 verified=7
+[leancheck]   req_global_pause_blocks_deposit: kill (3rd failure)
+[leancheck] round 5: ok=True theorems=6 sorries=3 vacuous=1 killed=2 verified=8
+[leancheck] de-vacuating 1 theorems (pass 2)
+[leancheck] round 6: ok=True theorems=6 sorries=3 vacuous=1 killed=2 verified=8
+[review] round-trip consistency gate
+[review] verdicts={'unformalizable': 50, 'vacuous': 4, 'mismatch': 2, 'missing': 21} full-coverage=0%
+[review] regenerating req_synchronous_withdraw_return_token (vacuous)
+[review] regenerating req_unlock_cooldown (mismatch)
+[review] regenerating req_mintformaxassets_slippage (mismatch)
+[review] regenerating req_totalAssets_includes_vault_balance_and_vested (vacuous)
+[review] regenerating req_withdrawal_pulls_vested (vacuous)
+[review] regenerating req_denylist_blocks_deposit (vacuous)
+[review] 2 theorems regenerated from judge feedback; re-checking
+[leancheck] round 1: ok=True theorems=6 sorries=3 vacuous=1 killed=1 verified=6
+[leancheck] de-vacuating 1 theorems (pass 1)
+[leancheck]   req_withdrawal_pulls_vested: targeted repair (1st failure)
+[leancheck] round 2: ok=False theorems=6 sorries=2 vacuous=0 killed=0 verified=5
+[leancheck]   req_withdrawal_pulls_vested: sorry-stub (2nd failure)
+[leancheck] round 3: ok=True theorems=5 sorries=2 vacuous=0 killed=1 verified=6
+[review] post-feedback verdicts={'unformalizable': 49, 'vacuous': 4, 'missing': 23, 'mismatch': 1} full-coverage=0%
+[done] ok=True theorems=5 sorries=2
+{'outdir': '/home/gohan/workspace/docs2formalspec/outputs/apyx', 'lean_ok': True, 'theorems': 5, 'proved': 3, 'sorries': 2, 'vacuous': 0, 'review': {'unformalizable': 49, 'vacuous': 4, 'missing': 23, 'mismatch': 1}}

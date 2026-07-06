@@ -34,8 +34,7 @@ ingest (URL→trafilatura→markdown | file→text)
 
 ## ステータス (2026-07-06 終了時点)
 - [x] 類似研究サーベイ → docs/01-related-work.md
-- [x] apyx ドキュメント確定 → docs/02-apyx.md
-- [x] フルパイプライン実装(12ラン自己改善、詳細 docs/03-eval-log.md)
+- [x] フルパイプライン実装(評価ケーススタディはapyx、詳細 docs/03-eval-log.md)
   - per-declaration修復エンジン + ブロック単体検証(カスケード誤爆根絶)
   - vacuityゲート / バッチ即時検証 / カバレッジ照合 / cheap-tactic自動証明
   - Clover式ラウンドトリップreview + 審判フィードバック再生成

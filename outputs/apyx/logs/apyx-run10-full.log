@@ -1,0 +1,45 @@
+[ingest] 9 sources
+[ingest] got 9 documents: ['How Apyx Works', 'apxUSD', 'apyUSD', 'Peg Stability Model', 'Yield Distribution', 'Capitalization Framework', 'Overview', 'Locking apxUSD for apyUSD', 'Unlocking apyUSD for apxUSD']
+[extract] extracting requirements
+[extract] 82 requirements (77 formalizable)
+[spec] rendering RFC2119 spec
+[model] summarizing state-transition model
+[lean] generating Apyx.lean
+[leangen] phase 1: domain model
+[leancheck] model gate round 1: ok=False
+[leancheck] model gate round 2: ok=False
+[leancheck] model gate round 3: ok=False
+[leancheck] model gate round 4: ok=False
+[leangen] WARNING: model failed compile gate; proceeding best-effort
+[leangen] phase 2: theorems
+[leangen] theorem batch 1/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 2/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 3/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 4/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 5/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 6/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 7/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 8/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 9/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 10/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] phase 3: extending model for 20 unformalizable reqs
+[leancheck] model gate round 1: ok=False
+[leancheck] model gate round 2: ok=False
+[leancheck] model gate round 3: ok=False
+[leancheck] model gate round 4: ok=False
+[leangen] extension failed compile gate; keeping original model
+[leangen] coverage pass 1: regenerating 27 dropped reqs
+[leangen] theorem batch 1/4
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 2/4
+[leangen]   batch failed pre-validation; regenerating with errors

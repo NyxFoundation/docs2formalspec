@@ -1,0 +1,166 @@
+[lean] generating Apyx.lean
+[leangen] phase 1: domain model
+[leancheck] model gate round 1: ok=False
+[leancheck] model gate round 2: ok=True
+[leangen] phase 2: theorems
+[leangen] theorem batch 1/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 2/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 3/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 4/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 5/10
+[leangen] theorem batch 6/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 7/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 8/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen]   batch fixed on retry
+[leangen] theorem batch 9/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 10/10
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] phase 3: extending model for 33 unformalizable reqs
+[leancheck] model gate round 1: ok=True
+[leangen] theorem batch 1/5
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 2/5
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 3/5
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 4/5
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 5/5
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] coverage pass 1: regenerating 25 dropped reqs
+[leangen] theorem batch 1/4
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen]   batch fixed on retry
+[leangen] theorem batch 2/4
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 3/4
+[leangen]   batch failed pre-validation; regenerating with errors
+[leangen] theorem batch 4/4
+[leangen] coverage pass 2: regenerating 7 dropped reqs
+[leangen] theorem batch 1/1
+[leangen]   batch failed pre-validation; regenerating with errors
+[leancheck]   req_deposit_mint_apxusd: targeted repair (1st failure)
+[leancheck]   req_lock_apxusd: targeted repair (1st failure)
+[leancheck]   req_issuance_price_one: targeted repair (1st failure)
+[leancheck]   req_deposit_permissionless: targeted repair (1st failure)
+[leancheck]   req_token_no_rebase: targeted repair (1st failure)
+[leancheck]   req_flexible_redemption_early_fee: targeted repair (1st failure)
+[leancheck]   req_flexible_redemption_multiple_requests: targeted repair (1st failure)
+[leancheck]   req_arbitrage_mint_access: targeted repair (1st failure)
+[leancheck]   req_mint_immediate: targeted repair (1st failure)
+[leancheck]   req_totalAssets_includes_vault_balance_and_vested: targeted repair (1st failure)
+[leancheck]   req_global_pause_blocks_deposit: targeted repair (1st failure)
+[leancheck]   req_denylist_blocks_deposit: targeted repair (1st failure)
+[leancheck]   req_unlock_claimable_after_3d: targeted repair (1st failure)
+[leancheck]   req_unlock_conversion_after_cooldown: targeted repair (1st failure)
+[leancheck]   req_multiple_unlocks_reset_cooldown: targeted repair (1st failure)
+[leancheck]   req_vault_pulls_vested_yield_before_withdraw: targeted repair (1st failure)
+[leancheck]   req_vault_burns_apyUSD_shares_immediately: targeted repair (1st failure)
+[leancheck]   req_vault_deposits_apxUSD_into_UnlockToken: targeted repair (1st failure)
+[leancheck]   req_unlockToken_mints_apxUSD_unlock_immediately: targeted repair (1st failure)
+[leancheck]   req_unlockToken_redeem_after_cooldown: targeted repair (1st failure)
+[leancheck]   req_singleton_unlockToken_instance: targeted repair (1st failure)
+[leancheck]   req_vault_operator_of_UnlockToken: targeted repair (1st failure)
+[leancheck]   req_mint_price: targeted repair (1st failure)
+[leancheck]   req_redemption_value: targeted repair (1st failure)
+[leancheck]   req_apyusd_value_increase: targeted repair (1st failure)
+[leancheck]   req_redeem_access_whitelist: targeted repair (1st failure)
+[leancheck]   req_linear_vest_implementation: targeted repair (1st failure)
+[leancheck]   req_continuous_stream: targeted repair (1st failure)
+[leancheck]   req_yield_rate_dollar_terms: targeted repair (1st failure)
+[leancheck]   req_unlock_token_nontransferable: targeted repair (1st failure)
+[leancheck]   req_withdraw_for_max_shares_revert_if_exceeds_max_shares: targeted repair (1st failure)
+[leancheck]   req_redeem_for_min_assets_revert_if_below_min_assets: targeted repair (1st failure)
+[leancheck]   req_redeem_liquidate_usdc: targeted repair (1st failure)
+[leancheck]   req_withdrawal_pulls_vested: targeted repair (1st failure)
+[leancheck]   req_redeemForMinAssets_revert_if_below_minAssets: targeted repair (1st failure)
+[leancheck] round 1: ok=False theorems=64 sorries=51 vacuous=2 killed=0 verified=29
+[leancheck]   req_deposit_mint_apxusd: sorry-stub (2nd failure)
+[leancheck]   req_lock_apxusd: sorry-stub (2nd failure)
+[leancheck]   req_issuance_price_one: sorry-stub (2nd failure)
+[leancheck]   req_deposit_permissionless: sorry-stub (2nd failure)
+[leancheck]   req_token_no_rebase: sorry-stub (2nd failure)
+[leancheck]   req_flexible_redemption_early_fee: sorry-stub (2nd failure)
+[leancheck]   req_flexible_redemption_multiple_requests: sorry-stub (2nd failure)
+[leancheck]   req_arbitrage_mint_access: sorry-stub (2nd failure)
+[leancheck]   req_totalAssets_includes_vault_balance_and_vested: sorry-stub (2nd failure)
+[leancheck]   req_global_pause_blocks_deposit: sorry-stub (2nd failure)
+[leancheck]   req_denylist_blocks_deposit: sorry-stub (2nd failure)
+[leancheck]   req_unlock_claimable_after_3d: sorry-stub (2nd failure)
+[leancheck]   req_unlock_conversion_after_cooldown: sorry-stub (2nd failure)
+[leancheck]   req_multiple_unlocks_reset_cooldown: sorry-stub (2nd failure)
+[leancheck]   req_vault_pulls_vested_yield_before_withdraw: sorry-stub (2nd failure)
+[leancheck]   req_vault_burns_apyUSD_shares_immediately: sorry-stub (2nd failure)
+[leancheck]   req_vault_deposits_apxUSD_into_UnlockToken: sorry-stub (2nd failure)
+[leancheck]   req_unlockToken_mints_apxUSD_unlock_immediately: sorry-stub (2nd failure)
+[leancheck]   req_unlockToken_redeem_after_cooldown: sorry-stub (2nd failure)
+[leancheck]   req_singleton_unlockToken_instance: sorry-stub (2nd failure)
+[leancheck]   req_vault_operator_of_UnlockToken: sorry-stub (2nd failure)
+[leancheck]   req_mint_price: sorry-stub (2nd failure)
+[leancheck]   req_apyusd_value_increase: sorry-stub (2nd failure)
+[leancheck]   req_redeem_access_whitelist: sorry-stub (2nd failure)
+[leancheck]   req_linear_vest_implementation: sorry-stub (2nd failure)
+[leancheck]   req_yield_rate_dollar_terms: sorry-stub (2nd failure)
+[leancheck]   req_unlock_token_nontransferable: sorry-stub (2nd failure)
+[leancheck]   req_withdraw_for_max_shares_revert_if_exceeds_max_shares: sorry-stub (2nd failure)
+[leancheck]   req_redeem_for_min_assets_revert_if_below_min_assets: sorry-stub (2nd failure)
+[leancheck]   req_withdrawal_pulls_vested: sorry-stub (2nd failure)
+[leancheck] round 2: ok=False theorems=59 sorries=60 vacuous=2 killed=6 verified=39
+[leancheck]   req_deposit_mint_apxusd: kill (3rd failure)
+[leancheck]   req_lock_apxusd: kill (3rd failure)
+[leancheck]   req_issuance_price_one: kill (3rd failure)
+[leancheck]   req_deposit_permissionless: kill (3rd failure)
+[leancheck]   req_flexible_redemption_multiple_requests: kill (3rd failure)
+[leancheck]   req_denylist_blocks_deposit: kill (3rd failure)
+[leancheck]   req_unlock_conversion_after_cooldown: kill (3rd failure)
+[leancheck]   req_multiple_unlocks_reset_cooldown: kill (3rd failure)
+[leancheck]   req_vault_pulls_vested_yield_before_withdraw: kill (3rd failure)
+[leancheck]   req_vault_burns_apyUSD_shares_immediately: kill (3rd failure)
+[leancheck]   req_apyusd_value_increase: kill (3rd failure)
+[leancheck]   req_redeem_access_whitelist: kill (3rd failure)
+[leancheck]   req_unlock_token_nontransferable: kill (3rd failure)
+[leancheck]   req_withdraw_for_max_shares_revert_if_exceeds_max_shares: kill (3rd failure)
+[leancheck]   req_withdrawal_pulls_vested: kill (3rd failure)
+[leancheck] round 3: ok=True theorems=44 sorries=42 vacuous=2 killed=24 verified=64
+[leancheck] de-vacuating 2 theorems (pass 1)
+[leancheck]   req_cooldown_no_yield: targeted repair (1st failure)
+[leancheck]   req_configurable_vesting_period: targeted repair (1st failure)
+[leancheck] round 4: ok=False theorems=44 sorries=41 vacuous=0 killed=24 verified=62
+[leancheck]   req_cooldown_no_yield: sorry-stub (2nd failure)
+[leancheck]   req_configurable_vesting_period: sorry-stub (2nd failure)
+[leancheck] round 5: ok=False theorems=44 sorries=42 vacuous=0 killed=24 verified=62
+[leancheck]   req_cooldown_no_yield: kill (3rd failure)
+[leancheck] round 6: ok=True theorems=43 sorries=41 vacuous=0 killed=25 verified=64
+[leancheck]   auto-proved req_global_pause_blocks_deposit with `simp_all [step]`
+[leancheck]   auto-proved req_unlock_claimable_after_3d with `simp_all [step]`
+[leancheck]   auto-proved req_redeem_for_min_assets_revert_if_below_min_assets with `simp_all [step]`
+[leancheck]   auto-proved req_synchronous_withdraw_return_token with `simp [step]`
+[leancheck] auto-proved 4 stubbed theorems
+[review] round-trip consistency gate
+[review] verdicts={'missing': 23, 'partial': 27, 'unformalizable': 12, 'full': 9, 'mismatch': 4, 'vacuous': 2} full-coverage=12%
+[review] regenerating req_redemption_exchange_rate_multiplier (mismatch)
+[review] regenerating req_configurable_vesting_period (vacuous)
+[review] regenerating req_totalAssets_includes_vault_balance_and_vested (mismatch)
+[review] regenerating req_yield_distributor_credit (mismatch)
+[review] regenerating req_yield_rate_dollar_terms (mismatch)
+[review] regenerating req_synchronous_withdraw_return_token (vacuous)
+[review] 4 theorems regenerated from judge feedback; re-checking
+[leancheck] round 1: ok=True theorems=43 sorries=37 vacuous=0 killed=22 verified=43
+[leancheck]   auto-proved req_mint_access_whitelist with `simp [step]`
+[leancheck]   auto-proved req_single_pending_redemption_per_user with `simp [step]`
+[leancheck]   auto-proved req_global_pause_blocks_deposit with `simp [step]`
+[leancheck]   auto-proved req_redemption_value with `simp [step]`
+[leancheck]   auto-proved req_redemption_settlement_value with `simp [step]`
+[leancheck]   auto-proved req_yield_rate_dollar_terms with `simp [step]`
+[leancheck] auto-proved 6 stubbed theorems
+[review] post-feedback verdicts={'missing': 25, 'full': 14, 'partial': 22, 'unformalizable': 10, 'mismatch': 4, 'vacuous': 2} full-coverage=18%
+[done] ok=True theorems=43 sorries=36
+{'outdir': '/home/gohan/workspace/docs2formalspec/outputs/apyx', 'lean_ok': True, 'theorems': 43, 'proved': 7, 'sorries': 36, 'vacuous': 0, 'review': {'missing': 25, 'full': 14, 'partial': 22, 'unformalizable': 10, 'mismatch': 4, 'vacuous': 2}}

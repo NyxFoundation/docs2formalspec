@@ -1,0 +1,40 @@
+[ingest] 9 sources
+[ingest] got 9 documents: ['How Apyx Works', 'apxUSD', 'apyUSD', 'Peg Stability Model', 'Yield Distribution', 'Capitalization Framework', 'Overview', 'Locking apxUSD for apyUSD', 'Unlocking apyUSD for apxUSD']
+[extract] extracting requirements
+[extract] 83 requirements (72 formalizable)
+[spec] rendering RFC2119 spec
+[model] summarizing state-transition model
+[lean] generating Apyx.lean
+[leangen] phase 1: domain model
+[leangen] phase 2: theorems
+[leangen] theorem batch 1/9
+[leangen] theorem batch 2/9
+[leangen] theorem batch 3/9
+[leangen] theorem batch 4/9
+[leangen] theorem batch 5/9
+[leangen] theorem batch 6/9
+[leangen] theorem batch 7/9
+[leangen] theorem batch 8/9
+[leangen] theorem batch 9/9
+[leangen] phase 3: extending model for 37 unformalizable reqs
+[leangen] theorem batch 1/5
+[leangen] theorem batch 2/5
+[leangen] theorem batch 3/5
+[leangen] theorem batch 4/5
+[leangen] theorem batch 5/5
+[leancheck] round 1: ok=False theorems=56 sorries=13 vacuous=2
+[leancheck] round 2: ok=False theorems=56 sorries=13 vacuous=2
+[leancheck] round 3: ok=False theorems=56 sorries=13 vacuous=2
+[leancheck] round 4: ok=False theorems=56 sorries=13 vacuous=2
+[leancheck] round 5: ok=False theorems=56 sorries=13 vacuous=2
+[leancheck] sorry-stubbed 6 failing proofs (deterministic fallback)
+[leancheck] round 6: ok=False theorems=56 sorries=16 vacuous=2
+[leancheck] sorry-stubbed 51 failing proofs (deterministic fallback)
+[leancheck] round 7: ok=False theorems=56 sorries=51 vacuous=2
+[leancheck] sorry-stubbed 51 failing proofs (deterministic fallback)
+[leancheck] round 8: ok=False theorems=56 sorries=51 vacuous=2
+[leancheck] sorry-stubbed 51 failing proofs (deterministic fallback)
+[review] round-trip consistency gate
+[review] verdicts={'full': 7, 'vacuous': 16, 'mismatch': 12, 'missing': 17, 'partial': 20} full-coverage=10%
+[done] ok=False theorems=56 sorries=51
+{'outdir': '/home/gohan/workspace/docs2formalspec/outputs/apyx', 'spec': '/home/gohan/workspace/docs2formalspec/outputs/apyx/SPEC.md', 'lean_ok': False, 'theorems': 56, 'sorries': 51, 'requirements': 83}

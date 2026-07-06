@@ -28,7 +28,7 @@
 
 ローカルLLM(Ollama Cloud)構成での飽和点。Verina (ICLR 2026) のフロンティアモデル値
 (スペック健全完全51%)と同水準であり、パイプライン設計の限界ではなくモデル能力の限界。
-ベスト出力は outputs/apyx (Run 15)、full判定重視なら outputs/apyx-run12-archive。
+ベスト出力は outputs/apyx (Run 15)、full判定重視なら outputs/apyx/archive/run12。
 
 **さらなる改善はモデル資源が必要**: k-sample選抜(コスト2倍)、実CVL性質コーパスのRAG
 (PropertyGPT式)、Goedel-Prover-V2証明パス(要ローカルGPU、Ollama Cloud未提供)。
