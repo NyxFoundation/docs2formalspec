@@ -2743,9 +2743,6 @@ theorem req_new_locked_receives_yield (s : State) (amount : Nat) (caller : Addre
     apply Nat.div_le_div_left ?_ hpos
     simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
 
--- BROKEN: /-- REQ cooldown_removal: When apyUSD enters the cooldown phase, it MUST be removed from the yield pool, causing remaining apyUSD to receive a higher percentage yield. -/
--- BROKEN: -- UNFORMALIZABLE req_cooldown_removal: The model does not explicitly track individual apyUSD allocations in the yield pool or compute yield distribution percentages.
-
 /-- REQ synchronous_withdraw_return_token: The apyUSD vault MUST execute withdrawals and redeems synchronously and MUST return apxUSD_unlock tokens immediately. -/
 theorem req_synchronous_withdraw_return_token (s : State) (assets : Nat) (receiver caller : Address)
     (h1 : s.globalPause = false)
@@ -3205,5 +3202,46 @@ theorem req_unlock_token_nontransferable (s : State) (op : Op) (caller : Address
         | (cases Option.some.inj h_step;
            exact ⟨fun i hi => h_fresh i hi, fun id owner h_own => Or.inl h_own⟩)
         | exact absurd h_step (by simp)
+
+/-- REQ cooldown-removal: When apyUSD enters the cooldown phase, it MUST be removed from
+the yield pool, causing remaining apyUSD to receive a higher percentage yield. (Model: the
+yield pool is the outstanding apyUSD share supply — yield credits are distributed pro-rata
+over `totalSupply_apyUSD` through the exchange rate. Entering cooldown is `Op.redeem` /
+`Op.withdraw`: the exiting shares are burned out of the supply in the very same step, and
+the exiting value is frozen as a fixed-amount unlock position that accrues nothing further
+(cf. `req_cooldown_no_yield`). Because any future yield credit `y` is split over the
+smaller remaining supply, the per-share slice `y·ray / supply` of every remaining holder
+is weakly higher than it would have been over the pre-cooldown supply — the removed shares'
+share of the yield is redistributed to those who stay.) -/
+theorem req_cooldown_removal (s : State) :
+    (∀ (shares : Nat) (receiver caller : Address) (s' : State),
+      step s (Op.redeem shares receiver) caller = some s' →
+      -- the shares entering cooldown leave the yield pool in the same step
+      s'.totalSupply_apyUSD = s.totalSupply_apyUSD - shares ∧
+      -- and are frozen as a fixed-amount unlock position outside the pool
+      s'.unlockTokenAmount s.nextUnlockId = redeemAssets shares s.exchangeRate ∧
+      -- so each remaining share's slice of any future yield credit is weakly higher
+      (∀ y : Nat, 0 < s.totalSupply_apyUSD - shares →
+        y * ray / s.totalSupply_apyUSD ≤ y * ray / (s.totalSupply_apyUSD - shares))) ∧
+    (∀ (assets : Nat) (receiver caller : Address) (s' : State),
+      step s (Op.withdraw assets receiver) caller = some s' →
+      s'.totalSupply_apyUSD = s.totalSupply_apyUSD - withdrawShares assets s.exchangeRate ∧
+      s'.unlockTokenAmount s.nextUnlockId = assets ∧
+      (∀ y : Nat, 0 < s.totalSupply_apyUSD - withdrawShares assets s.exchangeRate →
+        y * ray / s.totalSupply_apyUSD
+          ≤ y * ray / (s.totalSupply_apyUSD - withdrawShares assets s.exchangeRate))) := by
+  constructor
+  · intro shares receiver caller s' h_step
+    obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
+    subst hs'
+    refine ⟨?_, ?_, fun y hpos => Nat.div_le_div_left (Nat.sub_le _ _) hpos⟩
+    · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+    · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  · intro assets receiver caller s' h_step
+    obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
+    subst hs'
+    refine ⟨?_, ?_, fun y hpos => Nat.div_le_div_left (Nat.sub_le _ _) hpos⟩
+    · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+    · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
 
 end Apyx
