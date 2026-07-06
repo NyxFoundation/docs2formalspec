@@ -3299,4 +3299,38 @@ theorem req_erc4626_compliance (s : State) :
   · intro h a
     simp [maxDeposit, maxMint, maxWithdraw, maxRedeem, h]
 
+/-- REQ yield-distribution-period: The Onchain Vault MUST distribute received yield to
+apyUSD holders over a 20-day period. (Model: received yield is `Op.creditYield`, which
+adds the amount to the vault's linear vest stream and re-anchors the stream at the credit
+time; the distribution window is the configurable `vestPeriod` (cf.
+`req_configurable_vesting_period`), which per this requirement the spec fixes at 20 days.
+Under that configuration — `vestPeriod = 20 * day` — a credit is distributed to holders
+over exactly a 20-day period: the stream (re)starts at the moment of the credit with
+nothing yet distributed, distributes monotonically as time passes, and completes —
+the full credited total having reached the asset pool backing apyUSD — exactly 20 days
+after the credit, neither as an upfront lump sum nor over any longer horizon.) -/
+theorem req_yield_distribution_period (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.creditYield amount) caller = some s')
+    (h_cfg : s.vestPeriod = 20 * day) :
+    s'.vestPeriod = 20 * day ∧
+    s'.vestStart = s.now ∧
+    s'.vestTotal = s.vestTotal + amount ∧
+    vestedAmount s' s'.vestStart = 0 ∧
+    vestedAmount s' (s'.vestStart + 20 * day) = s'.vestTotal ∧
+    (∀ n m, n ≤ m → vestedAmount s' n ≤ vestedAmount s' m) := by
+  simp only [step] at h_step
+  split at h_step
+  · cases Option.some.inj h_step
+    have hper : ({ s with
+        usdcReserve := s.usdcReserve + amount
+        vestTotal := s.vestTotal + amount
+        vestStart := s.now } : State).vestPeriod = 20 * day := h_cfg
+    have hpos : 0 < ({ s with
+        usdcReserve := s.usdcReserve + amount
+        vestTotal := s.vestTotal + amount
+        vestStart := s.now } : State).vestPeriod := by rw [hper]; decide
+    obtain ⟨hz, hfull, hmono⟩ := req_continuous_stream _ hpos
+    exact ⟨hper, rfl, rfl, hz, by rw [← h_cfg]; exact hfull, hmono⟩
+  · exact absurd h_step (by simp)
+
 end Apyx
