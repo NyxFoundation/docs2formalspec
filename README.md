@@ -2,6 +2,21 @@
 
 Documentation URLs / file paths in → **RFC 2119-conformant specification** + **Lean 4 formal verification code** out. Runs entirely on local-class LLMs via Ollama Cloud (OpenAI-compatible). Destined to become a harness plugin callable from the [SPECA](https://github.com/NyxFoundation/speca) repository.
 
+## Status
+
+Evaluated over 15 iterative runs against [Apyx](https://docs.apyx.fi) (a dividend-backed stablecoin protocol). Current best result (`outputs/apyx/`):
+
+| Metric | Value |
+|---|---|
+| Requirements extracted (formalizable) | 82 (77) |
+| Lean 4 compilation | ✅ passes |
+| Theorems generated (live / killed) | 55 / 9 |
+| Mechanically proved | 4 |
+| Vacuous theorems (`: True`) | 0 |
+| Faithful coverage (full + partial review) | 53% |
+
+This is roughly on par with frontier-model results reported in Verina (ICLR 2026, ~51% spec-sound-complete), suggesting the pipeline has reached the ceiling of what local-class models (via Ollama Cloud) can achieve rather than a design limitation. Further gains likely require more model budget — k-sample selection, retrieval-augmented property generation, or a local-GPU proof-search pass. Full run-by-run history and failure-mode analysis in [`docs/03-eval-log.md`](docs/03-eval-log.md).
+
 ## Usage
 
 ```bash
