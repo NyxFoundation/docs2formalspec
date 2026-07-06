@@ -94,8 +94,10 @@ Write the MODEL ONLY (no theorems) for file `{module_name}.lean`:
 - do NOT close the namespace (theorems will be appended)
 Balance maps as functions: `bal : Address -> Nat`, updated via
 `fun a => if a = receiver then bal a + amt else bal a`.
-
-{exemplar}
+COMPLETENESS IS MANDATORY: the State must contain every quantitative variable the
+requirement themes mention (balances, total supply, caps, collateral/redemption
+values, buffers, exchange rate, vesting schedule, cooldowns, receipts) — a State
+holding only access-control fields is useless and will be rejected.
 """
 
 THEOREM_SYSTEM = """\
@@ -161,8 +163,7 @@ def gen_model(llm: LLM, cfg: Config, system_name: str, module_name: str,
         cfg.modelgen_model,
         MODEL_SYSTEM,
         MODEL_USER_TMPL.format(system_name=system_name, module_name=module_name,
-                               model_summary=model_summary, themes=themes[:12_000],
-                               exemplar=EXEMPLAR),
+                               model_summary=model_summary, themes=themes[:12_000]),
         max_tokens=16_000,
     )
     return strip_lean_block(text)
@@ -258,22 +259,34 @@ def gen_lean(llm: LLM, cfg: Config, system_name: str, module_name: str,
     the gate are still used (best effort) but extensions that fail are discarded.
     batch_gate: optional (model_code, chunk) -> (ok, errors) for immediate
     per-batch statement validation."""
-    log("[leangen] phase 1: domain model")
-    # a broken model poisons every downstream stage; resample rather than proceed
-    for sample in range(1, 4):
-        model_code = gen_model(llm, cfg, system_name, module_name, model_summary, reqs)
-        if not compile_gate:
-            break
-        ok, model_code = compile_gate(model_code)
-        if ok:
-            break
-        log(f"[leangen] model sample {sample} failed compile gate; resampling")
-    else:
-        raise RuntimeError("model generation failed compile gate after 3 samples")
-    log("[leangen] phase 2: theorems")
     gate_for = (lambda m: (lambda chunk: batch_gate(m, chunk))) if batch_gate else (lambda m: None)
-    theorems_code = gen_theorems(llm, cfg, model_code, reqs, log=log,
-                                 batch_gate=gate_for(model_code))
+    formalizable_n = sum(r.formalizable for r in reqs) or 1
+
+    # A stub model (e.g. access-control fields only) makes the theorem stage declare
+    # nearly everything unformalizable. Detect via the unformalizable rate and
+    # resample the model once before accepting.
+    theorems_code = ""
+    model_code = ""
+    for model_attempt in range(1, 3):
+        log(f"[leangen] phase 1: domain model (attempt {model_attempt})")
+        # a broken model poisons every downstream stage; resample rather than proceed
+        for sample in range(1, 4):
+            model_code = gen_model(llm, cfg, system_name, module_name, model_summary, reqs)
+            if not compile_gate:
+                break
+            ok, model_code = compile_gate(model_code)
+            if ok:
+                break
+            log(f"[leangen] model sample {sample} failed compile gate; resampling")
+        else:
+            raise RuntimeError("model generation failed compile gate after 3 samples")
+        log("[leangen] phase 2: theorems")
+        theorems_code = gen_theorems(llm, cfg, model_code, reqs, log=log,
+                                     batch_gate=gate_for(model_code))
+        unform_rate = len(find_unformalizable(theorems_code)) / formalizable_n
+        if unform_rate < 0.5:
+            break
+        log(f"[leangen] {unform_rate:.0%} declared unformalizable — model too poor, resampling")
 
     # model-extension feedback round: if requirements were declared unformalizable,
     # extend the model to support them and regenerate just those theorems
