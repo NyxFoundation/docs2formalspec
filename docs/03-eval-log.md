@@ -49,6 +49,31 @@ pay-to-non-cooldown, unlockToken-mints-apxUSD_unlock-immediately)のうち
 monthly-yield-rate-set はモデルにカレンダー/月概念が一切ないという、
 今回とは別種のモデル拡張(時間の月次区切り)が必要な、より大掛かりな課題。
 
+## 第4弾: カレンダー概念導入 + 残りmismatch再挑戦 — 2026-07-07
+
+ユーザー判断: monthly-yield-rate-set を回避せずモデル拡張で解消。`State`に
+`lastRateSetTime`(前回設定時刻)と `collateralYieldBase`(前月の担保由来利回り
+基準値)を追加、`monthPeriod := 30日` 定数を新設。`Op.setYieldRate` を
+「admin かつ前回設定から1ヶ月以上経過 かつ新レートがcollateralYieldBase以下」
+というゲート付きにし、成功時に両フィールドを前進させる。cadence・派生・
+livenessの3命題を実証明。pay-to-non-cooldownも creditYield 実行時の
+「現在apyUSD保有者(=cooldown外)の按分請求権は厳密に増加、cooldown中の
+残高は不変」という切り口で再証明に成功。unlockToken-mints-apxUSD_unlock-
+immediately は原文("Minting occurs instantly after the vault deposits
+assets")を確認した結果、既存の定式化(vaultがUnlockTokenへapxUSDを
+入金するのと同一stepでのmint)が正しく、審判(LLM judge)側が「deposit」を
+初回vault入金と誤読していると判断、docstringを原文に即して明確化するに留めた。
+
+**重要な発見(測定手法上の注意)**: この後review判定を再実行したところ
+full+partial が86%→82%へ低下したが、`git show` で当該3コミットの差分を
+確認した結果、新たにmismatch判定された5件(redeem-liquidate-usdc等)は
+**今回一切変更していない**コードだった。つまりこれはコード側の後退では
+なく、**ラウンドトリップ審判(LLM judge)自体のサンプリング揺らぎ**
+(full/partial/mismatchの境界事例で判定が run ごとに変動する)。
+これまでの4回の計測で observed range は 78%〜86%(平均約82%)。
+以後この揺らぎ幅を「真の忠実カバレッジ」として認識し、単一runの数値を
+過信しないこと。
+
 副産物として `src/d2fs/review.py` のバグを発見・修正: ラウンドトリップ審査が
 theorem名→要件idの逆引きに `name.removeprefix("req_").replace("_", "-")` という
 素朴な変換を使っており、id内に大文字が残るもの(`apyUSD`, `UnlockToken`,

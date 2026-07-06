@@ -13,9 +13,9 @@ Evaluated over 15 iterative runs against [Apyx](https://docs.apyx.fi) (a dividen
 | Theorems (live / killed) | 74 / 9 |
 | Mechanically proved | 74 (0 sorry) |
 | Vacuous theorems (`: True`) | 0 |
-| Faithful coverage (full + partial review) | 86% |
+| Faithful coverage (full + partial review) | 78–86% (run-to-run judge variance; see note) |
 
-The automated pipeline (local-class LLMs via Ollama Cloud) plateaus around 53% faithful coverage with a 4/55 proof rate — roughly on par with frontier-model results reported in Verina (ICLR 2026, ~51% spec-sound-complete). A higher-grade model doing the same hand-editing task (proof by real tactics instead of `sorry`, plus formalizing the requirements the pipeline had left missing/mismatched) pushed proof rate to 100% and faithful coverage to 78%, confirming the plateau is a model-grade limit rather than a pipeline-design limit. Full run-by-run history and failure-mode analysis in [`docs/03-eval-log.md`](docs/03-eval-log.md).
+The automated pipeline (local-class LLMs via Ollama Cloud) plateaus around 53% faithful coverage with a 4/55 proof rate — roughly on par with frontier-model results reported in Verina (ICLR 2026, ~51% spec-sound-complete). A higher-grade model doing the same hand-editing task (proof by real tactics instead of `sorry`, formalizing requirements the pipeline had left missing/mismatched, and twice extending the domain model itself — an explicit UnlockToken contract identity/operator, and a monthly rate-setting calendar) pushed proof rate to 100% and faithful coverage into the 78–86% range, confirming the plateau is a model-grade limit rather than a pipeline-design limit. Note: the round-trip review is itself an LLM judge and its full/partial/mismatch calls have observed run-to-run variance of several points on borderline cases even with zero code changes — treat any single review run's percentage as a point in that range, not an exact figure. Full run-by-run history and failure-mode analysis in [`docs/03-eval-log.md`](docs/03-eval-log.md).
 
 ## Usage
 
