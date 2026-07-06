@@ -1017,17 +1017,19 @@ theorem req_monthly_yield_rate_set (s : State) (bps : Nat) :
   ⟨{ s with yieldRateMonth := bps }, by simp [step], rfl⟩
 
 /-- REQ pay-to-non-cooldown: Yield MUST be paid to all apyUSD tokens that are not currently
-undergoing cooldown. (Model: credited yield increases the vesting pool backing every
-outstanding apyUSD share pro-rata, while frozen unlock positions — whose tokens were burned
-on request — receive nothing.) -/
-theorem req_pay_to_non_cooldown (s : State) (amount : Nat) (s' : State)
-    (h : step s (Op.creditYield amount) s.yieldDistributor = some s') :
-    s'.vestTotal = s.vestTotal + amount ∧
-    (∀ id, s'.unlockTokenAmount id = s.unlockTokenAmount id) ∧
-    (∀ a, s'.apyUSDBal a = s.apyUSDBal a) := by
-  simp [step] at h
-  subst h
-  exact ⟨rfl, fun _ => rfl, fun _ => rfl⟩
+undergoing cooldown. (Model: yield is paid pro-rata through the vault exchange rate, which
+rises as credited yield vests. Every address still holding apyUSD — tokens undergoing
+cooldown were burned at request time, leaving their holders with frozen apxUSD_unlock
+positions instead — sees the apxUSD assets redeemable for its shares grow (weakly) as time
+passes, while a frozen cooldown position's payout amount receives none of the vesting
+yield.) -/
+theorem req_pay_to_non_cooldown (s : State) (holder : Address) (dt : Nat) :
+    redeemAssets (s.apyUSDBal holder) (computeExchangeRate s)
+      ≤ redeemAssets (s.apyUSDBal holder) (computeExchangeRate { s with now := s.now + dt }) ∧
+    (∀ id, ({ s with now := s.now + dt }).unlockTokenAmount id = s.unlockTokenAmount id) := by
+  constructor
+  · exact Nat.div_le_div_right (Nat.mul_le_mul_left _ (computeExchangeRate_mono_now s dt))
+  · intro id; rfl
 
 /-- REQ unlock-cooldown: The apxUSD_unlock token MAY be redeemed for apxUSD only after a
 cooldown period has elapsed: claiming strictly before the recorded deadline reverts. -/
