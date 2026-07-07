@@ -50,6 +50,10 @@ namespace Apyx
     (pullVestedYield s).nextUnlockId = s.nextUnlockId := by
   unfold pullVestedYield; dsimp only; split <;> rfl
 
+@[simp] private theorem pvS_vaultApxUSDBal (s : State) :
+    (pullVestedYield s).vaultApxUSDBal = s.vaultApxUSDBal + vestedAmount s s.now := by
+  unfold pullVestedYield; dsimp only; split <;> simp_all
+
 /-! ## Local step-inversion lemmas
 
 (Re-derived: the equivalents in `BlastRadius.lean` are `private`.) Each characterizes
@@ -587,5 +591,250 @@ theorem solvency_preserved (s : State) (σ : List (Op × Address))
       refine ih s1 hsolvent1 ?_ htail
       intro n
       simpa [execTrace, hstep] using h_wf (n + 1)
+
+/-! ## S3 `rounding_favors_protocol` — vault conversions round in the protocol's favor
+
+Pure `Nat`-arithmetic strengthening of `req_erc4626_compliance` (`Apyx.lean`), which
+already proves (2) both conversion round-trips never credit the user (`convertToAssets
+∘ convertToShares ≤ id` and its mirror `convertToShares ∘ convertToAssets ≤ id`) and (3)
+`previewDeposit ≤ previewWithdraw` (`lockShares` rounds down relative to
+`withdrawShares`'s round-up). New here is the direct payoff of that withdraw-side
+rounding: redeeming the shares `withdrawShares` prescribes for a target asset amount
+returns *at least* that amount back, i.e. the vault never under-collects shares for
+what it pays out. No `step`/`Op` case analysis anywhere in this section — these are
+small, self-contained facts about `Nat` division, so there is no deep-recursion risk. -/
+
+/-- Ceiling division always rounds its own numerator down against itself: for any
+positive divisor `d`, `(n + d - 1) / d * d ≥ n`. Core `Nat` fact, no protocol
+definitions involved. -/
+private theorem nat_ceilDiv_mul_ge (n d : Nat) (hd : 0 < d) :
+    n ≤ (n + d - 1) / d * d := by
+  rw [Nat.mul_comm]
+  have hdm : d * ((n + d - 1) / d) + (n + d - 1) % d = n + d - 1 :=
+    Nat.div_add_mod (n + d - 1) d
+  have hmod : (n + d - 1) % d < d := Nat.mod_lt _ hd
+  omega
+
+/-- The `withdrawShares` conversion rounds up: burning the number of shares it
+prescribes for a target `assets` amount, then converting those shares back through
+`redeemAssets`, returns *at least* the originally requested `assets` — the vault never
+under-collects shares for what it pays out. The mirror image of the round-down
+direction already established by `req_erc4626_compliance`. -/
+theorem withdrawShares_rounds_up (assets rate : Nat) (hrate : 0 < rate) :
+    assets ≤ redeemAssets (withdrawShares assets rate) rate := by
+  have hray : 0 < ray := Nat.pow_pos (by decide)
+  unfold redeemAssets withdrawShares
+  exact (Nat.le_div_iff_mul_le hray).mpr (nat_ceilDiv_mul_ge (assets * ray) rate hrate)
+
+/-- **S3 `rounding_favors_protocol`** (docs/06-safety-properties.md, Tier A): the
+vault's share/asset conversions round in the protocol's favor in every direction of
+both conversion families, so no user can extract value purely through rounding.
+
+(1) and (2) restate the two round-trip bounds already proved in `req_erc4626_compliance`
+(`Apyx.lean`): converting assets to shares and back (`convertToShares` then
+`convertToAssets`), or shares to assets and back, never credits the user more value
+than they started with — ERC-4626's core rounding mandate, "round against the user."
+
+(3) is new: applying the same mandate to the *withdraw* direction. `withdrawShares` —
+used by `Op.withdraw` to compute how many shares to burn for a target asset amount —
+rounds up (`withdrawShares_rounds_up`, built on `nat_ceilDiv_mul_ge`), the mirror image
+of `convertToShares`'s round-down. So redeeming the prescribed shares back through
+`convertToAssets` returns at least the originally requested amount: the vault never
+under-collects shares for what it pays out on a withdrawal. Together, (1)-(3) show
+every conversion direction in the vault rounds against the depositor/withdrawer and in
+favor of the protocol's solvency. -/
+theorem rounding_favors_protocol (s : State) :
+    (∀ assets, convertToAssets s (convertToShares s assets) ≤ assets) ∧
+    (∀ shares, convertToShares s (convertToAssets s shares) ≤ shares) ∧
+    (∀ assets, 0 < s.exchangeRate →
+      assets ≤ convertToAssets s (withdrawShares assets s.exchangeRate)) :=
+  ⟨(req_erc4626_compliance s).2.2.2.2.1,
+   (req_erc4626_compliance s).2.2.2.2.2.1,
+   fun assets hrate => withdrawShares_rounds_up assets s.exchangeRate hrate⟩
+
+/-! ## S4 `no_dilution` — a new deposit does not reduce an existing holder's
+redeemable value
+
+`req_exchange_rate_non_decreasing` (`Apyx.lean`) only tracks monotonicity across the
+*passage of time* (`s.now := s.now + dt`); it says nothing about monotonicity across a
+`lockApxUSD` deposit by someone else, which is the actual dilution question. That fact
+is established fresh here: floor-rounding the newly minted shares
+(`lockShares amount s.exchangeRate = amount * ray / s.exchangeRate`) means a deposit can
+only raise, never lower, the implied exchange rate of the enlarged pool — new shares
+are minted at a rate no more generous than the true backing ratio, so existing
+holders' claim per share cannot fall. Proved via the single-op inversion lemma
+`inv_lockApxUSD` plus this fresh arithmetic fact — no `cases op`. -/
+
+/-- Pure `Nat` fact underlying `no_dilution`: minting `amount * ray / R` new shares
+against `TA + amount` enlarged backing (a fresh `lockApxUSD amount` deposit priced at
+rate `R`) never lowers `R`, provided `R` does not already overstate the pre-deposit
+backing (`R * TS ≤ TA * ray`, satisfied whenever `R` is the true `computeExchangeRate`
+of the pre-state) and there is at least one pre-existing share (`TS > 0`, i.e. an
+existing holder to protect from dilution). -/
+@[simp] private theorem computeExchangeRate_emitEvent (s : State) (n : String) (a : List Nat) :
+    computeExchangeRate (emitEvent s n a) = computeExchangeRate s := by
+  simp [emitEvent, computeExchangeRate, totalAssets, vestedAmount]
+
+@[simp] private theorem computeExchangeRate_updateExchangeRate (s : State) :
+    computeExchangeRate (updateExchangeRate s) = computeExchangeRate s := by
+  simp [updateExchangeRate, computeExchangeRate, totalAssets, vestedAmount]
+
+private theorem rate_non_decreasing_of_deposit
+    (TA TS amount R : Nat) (hTS : 0 < TS) (hbacked : R * TS ≤ TA * ray) :
+    R ≤ (TA + amount) * ray / (TS + amount * ray / R) := by
+  have hshpos : 0 < TS + amount * ray / R :=
+    calc 0 < TS := hTS
+      _ ≤ TS + amount * ray / R := Nat.le_add_right _ _
+  rw [Nat.le_div_iff_mul_le hshpos]
+  have h2 : R * (amount * ray / R) ≤ amount * ray := by
+    rw [Nat.mul_comm]; exact Nat.div_mul_le_self _ _
+  calc R * (TS + amount * ray / R)
+      = R * TS + R * (amount * ray / R) := Nat.mul_add R TS (amount * ray / R)
+    _ ≤ TA * ray + amount * ray := Nat.add_le_add hbacked h2
+    _ = (TA + amount) * ray := (Nat.add_mul TA amount ray).symm
+
+/-- **S4 `no_dilution`** (docs/06-safety-properties.md, Tier A): a new deposit by a
+different caller does not reduce an existing holder's redeemable apxUSD value.
+
+For a holder `h` distinct from the depositing `caller`: (a) `h`'s apyUSD balance is
+untouched by the lock (`Op.lockApxUSD` mints only to `caller`, via `inv_lockApxUSD`),
+and (b) the implied exchange rate does not fall (`rate_non_decreasing_of_deposit`),
+given the pre-state rate `s.exchangeRate` does not already overstate backing
+(`hbacked`) and there is at least one existing share (`hTS`, i.e. someone to protect).
+Combining (a) and (b): `h`'s redeemable value under `convertToAssets`, computed at the
+same (unchanged) share balance, can only rise. -/
+theorem no_dilution (s : State) (amount : Nat) (caller h : Address) (s' : State)
+    (h_step : step s (Op.lockApxUSD amount) caller = some s')
+    (hh : h ≠ caller) (hTS : 0 < s.totalSupply_apyUSD)
+    (hbacked : s.exchangeRate * s.totalSupply_apyUSD ≤ totalAssets s * ray) :
+    s'.apyUSDBal h = s.apyUSDBal h ∧
+    convertToAssets s (s.apyUSDBal h) ≤ convertToAssets s' (s'.apyUSDBal h) := by
+  obtain ⟨-, -, hs'⟩ := inv_lockApxUSD s amount caller s' h_step
+  have hbal : s'.apyUSDBal h = s.apyUSDBal h := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD, hh]
+  have hvs : s'.vestStart = s.vestStart := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  have hvt : s'.vestTotal = s.vestTotal := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  have hnow : s'.now = s.now := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  have hvp : s'.vestPeriod = s.vestPeriod := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  have hvbal : s'.vaultApxUSDBal = s.vaultApxUSDBal + amount := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  have hva : vestedAmount s' s'.now = vestedAmount s s.now := by
+    unfold vestedAmount; rw [hvs, hvt, hnow, hvp]
+  have hTA : totalAssets s' = totalAssets s + amount := by
+    unfold totalAssets; rw [hvbal, hva]; omega
+  have hTS' : s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount s.exchangeRate := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD, lockShares]
+  have hTSpos : s'.totalSupply_apyUSD ≠ 0 := by rw [hTS']; omega
+  have hcomp : s'.exchangeRate = computeExchangeRate s' := by
+    rw [hs']
+    simp [emitEvent, updateExchangeRate, computeExchangeRate, totalAssets, vestedAmount,
+      mintApyUSD, burnApxUSD]
+  have hrate : s'.exchangeRate
+      = (totalAssets s + amount) * ray / (s.totalSupply_apyUSD + lockShares amount s.exchangeRate) := by
+    rw [hcomp]; unfold computeExchangeRate
+    rw [if_neg hTSpos, hTA, hTS']
+  have hmono : s.exchangeRate ≤ s'.exchangeRate := by
+    rw [hrate]
+    exact rate_non_decreasing_of_deposit (totalAssets s) s.totalSupply_apyUSD amount
+      s.exchangeRate hTS hbacked
+  refine ⟨hbal, ?_⟩
+  rw [hbal]
+  unfold convertToAssets redeemAssets
+  exact Nat.div_le_div_right (Nat.mul_le_mul_left _ hmono)
+
+/-! ## S5 `no_inflation_attack` — vault custody cannot be inflated for free
+
+The classic ERC-4626 donation/inflation attack — an attacker directly injecting assets
+into the vault's custody balance without minting shares, to skew the exchange rate
+against later depositors' rounding — requires a "raw transfer into custody" primitive.
+`req_no_rehypothecation` (`Apyx.lean`) already proves, by exhaustive case analysis over
+all constructors of the closed `Op` type, that only three operations can ever change
+`vaultApxUSDBal` at all: `lockApxUSD`, `withdraw`, `redeem`. We reuse that theorem
+directly (rather than re-deriving it, which is what risks the kernel deep-recursion
+this file must avoid) to characterize exactly when `vaultApxUSDBal` can *rise*.
+
+**Narrowing versus the anticipated shape.** The original working hypothesis (see the
+design memo) was that `lockApxUSD` and `creditYield` are the two channels able to raise
+`vaultApxUSDBal`. That hypothesis is refined by this audit in two directions:
+
+* `creditYield` is **refuted** as a same-step raising channel: `step_creditYield_exact`
+  (`BlastRadius.lean`) shows a single `creditYield` step touches only
+  `usdcReserve`/`vestTotal`/`vestStart`, leaving `vaultApxUSDBal` completely unchanged
+  (`donation_free_no_creditYield` below). `creditYield` funds the *future* vesting
+  stream; it does not itself move custody.
+* `withdraw`/`redeem` are **added**: both first call `pullVestedYield` internally
+  (realizing the vault's already-vested-but-not-yet-materialized yield into custody)
+  before paying assets out. If the payout is smaller than the freshly realized vested
+  amount, custody nets *higher* than before the step. This is not a donation, though:
+  `totalAssets` (`vaultApxUSDBal` plus the *unrealized* vested remainder) is exactly
+  conserved by `pullVestedYield` — realizing vested yield only moves value from the
+  unrealized column to the realized one, never creates it — so the realized-side rise
+  is capped by, and exactly offset within, `vestedAmount s s.now`, a quantity that only
+  the privileged `creditYield` (yield-distributor) channel can ever grow, and one
+  already priced into every holder's `convertToAssets` (via `exchangeRate`/
+  `totalAssets`) even before it is realized. -/
+
+/-- Narrowing note: a single `creditYield` step never changes `vaultApxUSDBal` at all
+(so in particular it never raises it) — refuting the audit's initial working
+hypothesis that `creditYield` was a second same-step raising channel alongside
+`lockApxUSD`. -/
+theorem donation_free_no_creditYield (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.creditYield amount) caller = some s') :
+    s'.vaultApxUSDBal = s.vaultApxUSDBal := by
+  obtain ⟨-, hs'⟩ := step_creditYield_exact s amount caller s' h_step
+  rw [hs']
+
+/-- **S5 `donation_free`** (single-step): whenever a step strictly raises the vault's
+custody balance, it is exactly one of the three channels `req_no_rehypothecation`
+identifies, with the exact arithmetic of the rise pinned down: `lockApxUSD` raises it
+by precisely the deposited `amount`; `withdraw`/`redeem` can raise it only up to
+`vestedAmount s s.now` above the pre-state value (bounded realization of already-vested,
+already-priced-in yield — see the module docstring above for why this is not a
+donation). -/
+theorem donation_free (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') (h_gt : s.vaultApxUSDBal < s'.vaultApxUSDBal) :
+    (∃ amount, op = Op.lockApxUSD amount ∧ s'.vaultApxUSDBal = s.vaultApxUSDBal + amount) ∨
+    (∃ amount r, op = Op.withdraw amount r ∧
+      s'.vaultApxUSDBal ≤ s.vaultApxUSDBal + vestedAmount s s.now) ∨
+    (∃ shares r, op = Op.redeem shares r ∧
+      s'.vaultApxUSDBal ≤ s.vaultApxUSDBal + vestedAmount s s.now) := by
+  have h_ne : s'.vaultApxUSDBal ≠ s.vaultApxUSDBal := by omega
+  obtain ⟨h_case, h_lock, h_wd, h_rd⟩ := req_no_rehypothecation s op caller s' h_step
+  rcases h_case h_ne with ⟨x, hx⟩ | ⟨x, r, hx⟩ | ⟨x, r, hx⟩
+  · exact Or.inl ⟨x, hx, h_lock x hx⟩
+  · refine Or.inr (Or.inl ⟨x, r, hx, ?_⟩)
+    rw [h_wd x r hx, pvS_vaultApxUSDBal]; omega
+  · refine Or.inr (Or.inr ⟨x, r, hx, ?_⟩)
+    rw [h_rd x r hx, pvS_vaultApxUSDBal]; omega
+
+/-- **S5 `no_inflation_attack`** (docs/06-safety-properties.md, Tier A): the classic
+ERC-4626 donation/inflation attack is structurally impossible in this model for an
+ordinary (non-privileged) attacker. Restated positively from `donation_free`: whenever
+a single step raises the vault's custody balance, either (a) it is `lockApxUSD`, and
+the raise is exactly the caller's own paid-in deposit — one-for-one matched by an equal
+debit to the caller's own apxUSD balance (`inv_lockApxUSD`'s `amount ≤ s.apxUSDBal
+caller`) — a purchase, not a donation; or (b)/(c) it is `withdraw`/`redeem` realizing
+already-vested yield ahead of paying it out, a channel only the privileged `creditYield`
+role can ever grow and which is already priced into every holder's redeemable value
+before realization. There is no operation in the closed `Op` type — exhaustively, by
+`req_no_rehypothecation` — that credits `vaultApxUSDBal` outside these two accounted,
+backed channels: no "raw donation" primitive exists. -/
+theorem no_inflation_attack (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') (h_gt : s.vaultApxUSDBal < s'.vaultApxUSDBal) :
+    (∃ amount, op = Op.lockApxUSD amount ∧ amount ≤ s.apxUSDBal caller ∧
+      s'.vaultApxUSDBal = s.vaultApxUSDBal + amount) ∨
+    (∃ amount r, op = Op.withdraw amount r) ∨
+    (∃ shares r, op = Op.redeem shares r) := by
+  rcases donation_free s op caller s' h_step h_gt with
+    ⟨x, hx, heq⟩ | ⟨x, r, hx, -⟩ | ⟨x, r, hx, -⟩
+  · subst hx
+    obtain ⟨-, hle, -⟩ := inv_lockApxUSD s x caller s' h_step
+    exact Or.inl ⟨x, rfl, hle, heq⟩
+  · exact Or.inr (Or.inl ⟨x, r, hx⟩)
+  · exact Or.inr (Or.inr ⟨x, r, hx⟩)
 
 end Apyx
