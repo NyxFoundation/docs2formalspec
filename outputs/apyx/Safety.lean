@@ -1128,5 +1128,56 @@ theorem vest_no_early_drain (s : State) :
   ⟨fun _ _ h => vestedAmount_monotone s h, vestedAmount_le_vestTotal s,
    pullVestedYield_moves_exactly_vested s⟩
 
+/-! ## Investigation — does `creditYield`'s `vestStart` reset forfeit already-accrued
+yield? (design memo §4b)
+
+`Op.creditYield` (`yieldDistributor`-gated; see `step_creditYield_exact`, `BlastRadius.lean`)
+sets `vestStart := s.now` and `vestTotal := s.vestTotal + amount`, but does **not** first
+call `pullVestedYield` to realize the *old* stream's already-accrued
+`vestedAmount s s.now` into `vaultApxUSDBal`. The theorem below settles the question
+formally: it **forfeits** (temporarily displaces) exactly that pending amount.
+
+**Verdict: forfeits, not conserves — but as a timing displacement, not a permanent burn.**
+Resetting `vestStart` to `s.now` makes `elapsed = 0` for the *entire* new pool (old
+remaining total plus the fresh `amount`), so `vestedAmount` immediately after the credit is
+`0` (Lean's `if elapsed ≥ vestPeriod` branch is not taken once `vestPeriod > 0`), regardless
+of how much of the old stream had already vested. Since `vaultApxUSDBal` itself is untouched
+by `creditYield` (`donation_free_no_creditYield` above), `totalAssets` — the
+protocol-accounted realizable value (`vaultApxUSDBal + vestedAmount s s.now`) — drops by
+*exactly* the old stream's unrealized-but-accrued `vestedAmount s s.now` at the instant of
+the credit. Concretely: `totalAssets s' = totalAssets s - vestedAmount s s.now` (not `+
+amount` as one might expect from "crediting more yield"). This is a real accounting defect:
+any `withdraw`/`redeem`/exchange-rate read taken *immediately* after a `creditYield` quotes
+a lower `totalAssets` — hence a lower `exchangeRate` and lower payout per apyUSD share —
+than it would have without the reset, exactly by the amount that had already vested and was
+about to become spendable. The value is not permanently destroyed: because `vestTotal` is
+not reduced by the old `vestedAmount` (only increased by `amount`), the *entire* enlarged
+pool — including the portion that was already vested — vests again from scratch over the
+new `vestPeriod`, so given enough elapsed time with no further reset it is eventually
+released in full. But each subsequent `creditYield` re-triggers the same reset, so a
+distributor calling `creditYield` more often than once per `vestPeriod` can perpetually
+postpone realization of the pending portion — a genuine, privileged-role accounting bug
+(not an ordinary-attacker exploit; `creditYield` is `yieldDistributor`-gated), and exactly
+the kind of finding this verification effort exists to surface. -/
+theorem creditYield_forfeits_pending_vest (s : State) (amount : Nat) (caller : Address)
+    (s' : State) (h_step : step s (Op.creditYield amount) caller = some s')
+    (hvp : 0 < s.vestPeriod) (hpos : 0 < vestedAmount s s.now) :
+    vestedAmount s' s'.now = 0 ∧
+    totalAssets s' + vestedAmount s s.now = totalAssets s ∧
+    totalAssets s' < totalAssets s := by
+  obtain ⟨-, hs'⟩ := step_creditYield_exact s amount caller s' h_step
+  have hvbal : s'.vaultApxUSDBal = s.vaultApxUSDBal := by rw [hs']
+  have hvz : vestedAmount s' s'.now = 0 := by
+    rw [hs']
+    unfold vestedAmount
+    dsimp only
+    rw [if_neg (by omega), if_neg (by omega)]
+    simp
+  have hTA' : totalAssets s' = s.vaultApxUSDBal := by
+    unfold totalAssets
+    rw [hvbal, hvz]
+    omega
+  have hTA : totalAssets s = s.vaultApxUSDBal + vestedAmount s s.now := rfl
+  refine ⟨hvz, ?_, ?_⟩ <;> rw [hTA', hTA] <;> omega
 
 end Apyx
