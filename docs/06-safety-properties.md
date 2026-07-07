@@ -93,7 +93,11 @@
 
 1. **S5訂正**: `creditYield` は `vaultApxUSDBal` を動かさない(当初仮説の誤り)。`withdraw`/`redeem` が `pullVestedYield` 経由で金庫を増やしうるが `vestedAmount` 上限内で、donationではない。結論(生donationインフレ攻撃の構造的不可能性)は不変。
 
-2. **`creditYield_forfeits_pending_vest`(確定)**: `Op.creditYield` は `vestStart := now` をリセットするが、旧ストリームの成熟済み・未実現分 `vestedAmount s s.now` を先に pull しない。証明で確定: creditYield直後 `vestedAmount s' s'.now = 0` となり、事前に未実現vestが正なら `totalAssets s' < totalAssets s`(実現可能価値が瞬間的に**下がる**)。`vestTotal` は減らないので時間をかければ再vestするが、**yieldDistributorが `vestPeriod` より速く creditYield を呼び続けると実現を恒久的に先送りできる**。永久焼却ではなく「タイミング変位」型の欠陥。→ 実装側で creditYield 前に `pullVestedYield` を呼ぶ修正を推奨。
+2. **`creditYield_forfeits_pending_vest` → 実コントラクト照合で決着(2026-07-07): モデルの不忠実、コントラクトは正しい**。
+   - **モデルでの証明内容**: `Op.creditYield` は `vestStart := now` をリセットするが成熟済み分 `vestedAmount s s.now` を先に確定しない。証明で確定: creditYield直後 `vestedAmount s' s'.now = 0`、事前に未実現vestが正なら `totalAssets s' < totalAssets s`(実現可能価値が瞬間的に下がる)。
+   - **実コントラクト照合**(`apyx-labs/evm-contracts` の `src/LinearVestV0.sol`): `depositYield`(=creditYield相当)の168行目が `fullyVestedAmount += newlyVestedAmount();` を**タイムスタンプ・リセットの前に**実行しており、成熟済み分を別アキュムレータ `fullyVestedAmount` に退避している。→ **実コントラクトは取りこぼさない。正しい。** `setVestingPeriod` も同じ正しいパターン。
+   - **根本原因**: モデルは実装の2アキュムレータ設計(`vestingAmount` 未成熟プール + `fullyVestedAmount` 成熟済み・未pull、および2タイムスタンプ `lastDepositTimestamp`/`lastTransferTimestamp`)を単一の `vestTotal`/`vestStart` に**畳み込んで単純化**し、その過程で168行目相当の退避ステップを落とした。**プロトコル欠陥ではなくモデル忠実性ギャップ**。
+   - **意義**: 形式証明が「ここは確認すべき」という具体的な問いを生み、実コード照合で決着した好例。同時に「モデルレベル証明は実装と乖離しうる」という本ツールの根本的限界の具体化でもある。**モデル修正案**: `State` に `fullyVestedAmount` フィールドを追加し `creditYield`/`setVestPeriod` に退避ステップを入れれば忠実になり、forfeit定理は保存定理に置き換わる(`setVestPeriod` の単純化も同様に要修正)。
 
 **S5証明中の設計仮説の訂正**(memoの当初仮説 vs 実際のモデル):
 - `creditYield` は `vaultApxUSDBal` を**動かさない**(`usdcReserve`/`vestTotal`/`vestStart` のみ)。当初「lockとcreditYieldが金庫を増やす」としたが誤り。
