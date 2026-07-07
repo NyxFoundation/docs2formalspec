@@ -77,7 +77,7 @@
 
 ## 4b. 進捗と証明中に判明した設計上の発見(2026-07-07)
 
-**S1-S7 すべて証明完了**。`outputs/apyx/Safety.lean`(namespace `Apyx`、公開定理23本、sorry 0、全て `propext`/`Quot.sound` のみ、`Apyx.lean`/`BlastRadius.lean` 無傷)。
+**S1-S7 すべて証明完了**。`outputs/apyx/Safety.lean`(namespace `Apyx`、公開定理24本、sorry 0、全て `propext`/`Quot.sound` のみ、`Apyx.lean`/`BlastRadius.lean` 無傷)。
 
 | # | 定理 | 状態 |
 |---|---|---|
@@ -106,6 +106,14 @@
 - 結論は不変: **一般攻撃者による生donationインフレ攻撃は構造的に不可能**(`donation_free`/`no_inflation_attack` で `lockApxUSD` の金庫増加が caller 自身の入金と1:1であることを証明済み)。
 
 **⚠ 潜在的な設計上の懸念(要調査、S7の前段)**: `Op.creditYield` は `vestStart := now` をリセットする際、既存vestストリームの `vestedAmount s s.now`(部分的に成熟済みだが未だ `pullVestedYield` で実現されていない分)を**先に確定しない**。もし旧ストリームが部分成熟済みで未実現なら、その分が黙って失われうる。これは「利回りの取りこぼし」型の実際の設計欠陥候補であり、S7(vest先取り不可)の証明前に専用調査が必要 — **証明作業が実コードの懸念点を炙り出した好例**。
+
+## 4c. レビュー後の追加強化(2026-07-07、独立レビュー由来)
+
+3本の Lean ファイルの独立レビューで炙り出した弱点を、`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみを維持したまま順次修正した:
+
+- **`setVestPeriod_preserves_accrued_vest` 追加**(Safety、公開定理 23→24本): `creditYield_preserves_accrued_vest` の双子。accrue-first の `setVestPeriod` 経路は散文でのみ「取りこぼさない」と主張され定理が無かった弱点を解消(`vestedAmount`/`totalAssets` 保存を証明)。
+- **弱い/誤解を招く要件定理の強化**(Apyx、要件定理数は不変=書き換え): `req_yield_rate_dollar_terms`(`∃x,y=x` の空虚→`setYieldRate` が dollar `collateralYieldBase` で上界する実質へ)、`req_linear_vest_implementation`(`⟨rfl,rfl⟩`→前アンカー0・時間単調・プール上界・満期100%・2アキュムレータ和)、`req_deposit_immediate`/`req_mint_immediate`(`apyUSDBal to ≥ apyUSDBal to` の自明→ vault の同期 mint 経路 `Op.lockApxUSD` の厳密な同一step share 交付)、`*_emits_event`(5引数存在→厳密タプル固定)。
+- **`single-pending-redemption-per-user` を遷移系に忠実実装**(モデル変更): `Op.requestUnlock` を `requestUnlockStep` 経由にし、既存の標準ポジションを**追加更新(top-up、cooldown リセット)**して2つ目を作らないよう変更。要件「ユーザーあたり pending 1件」が単発の per-user `unlockRequestId` ポインタで遷移系自体に強制される。top-up 分岐は**自己検証的**(記録上の所有者が caller のポジションのみ更新)なので、`Penniless`(`no_free_value_trace`)等の unlockRequests 系不変条件をレジストリ整合性仮説なしで維持。影響したレジストリ定理(`req_redemption_async_process`/`req_redemption_cooldown_period` は caller のトラッキングポジションでの branch-agnostic 形に、`req_unlock_token_nontransferable`/`unlock_position_created_only_by_vault_ops`/`req_unlock_cannot_be_cancelled` は branch-aware 証明に、`no_role_seizes_unlock_position` はレジストリ well-formedness 仮説付き)を全て修復。`req_single_pending_redemption_per_user`/`req_multiple_unlocks_reset_cooldown` を helper テストから**到達可能な step レベル不変条件**へ格上げ。
 
 ## 5. ロードマップ(推奨順)
 

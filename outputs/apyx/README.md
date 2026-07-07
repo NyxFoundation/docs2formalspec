@@ -20,7 +20,7 @@ kernel). Three complementary bodies of proof were produced:
 2. **Key-compromise blast-radius** (§6) — 56 theorems bounding user-asset loss when a
    privileged operator key is *stolen* (the "what if our multisig / oracle / admin gets phished" question,
    which — per Chainalysis — is the cause of ~44% of real crypto theft, not contract bugs).
-3. **In-scope design safety** (§7) — 23 theorems checking the *design itself* for flaws exploitable by an
+3. **In-scope design safety** (§7) — 24 theorems checking the *design itself* for flaws exploitable by an
    ordinary (honest-roles) attacker using only legitimate operations (the "can someone drain us via a
    clever sequence of normal calls" question: no-free-value, solvency preservation, rounding-in-our-favor,
    no share dilution, inflation-attack immunity). This pillar's proof effort surfaced a genuine
@@ -113,7 +113,7 @@ report are a **majority vote over 3 independent runs**, not a single sample.
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine (actors, state variables, operations, guarantees) |
 | [`Apyx.lean`](Apyx.lean) | **The formal model and all 82 requirement proofs** — `State`, `Op`, `step`, and one `theorem req_*` per formalizable requirement, each with an RFC 2119 docstring |
 | [`BlastRadius.lean`](BlastRadius.lean) | **The 56 key-compromise blast-radius proofs** (§6) — trace executor, per-role damage bounds, and the rate-limit / timelock defense wrappers, all imported from and additive to `Apyx.lean` (which it leaves untouched) |
-| [`Safety.lean`](Safety.lean) | **The 23 in-scope design-safety proofs** (§7) — no-free-value, solvency preservation, rounding, no-dilution, inflation-attack immunity, and the vesting properties (whose proof surfaced the model-fidelity finding), additive to `Apyx.lean`/`BlastRadius.lean` |
+| [`Safety.lean`](Safety.lean) | **The 24 in-scope design-safety proofs** (§7) — no-free-value, solvency preservation, rounding, no-dilution, inflation-attack immunity, and the vesting properties (whose proof surfaced the model-fidelity finding), additive to `Apyx.lean`/`BlastRadius.lean` |
 | [`leancheck.json`](leancheck.json) | Compile status: `82` requirement theorems, `0` sorry, `0` vacuous, `82` mechanically proved |
 | [`review.json`](review.json) | Faithfulness verdicts (majority vote over 3 runs) + per-requirement vote records |
 | [`review_run1.json`](review_run1.json), [`review_run2.json`](review_run2.json), [`review_run3.json`](review_run3.json) | Raw per-run judge output, kept for reproducibility of the majority vote |
@@ -298,7 +298,7 @@ roadmap: [`docs/05-blast-radius.md`](https://github.com/NyxFoundation/docs2forma
 
 ---
 
-## 7. In-scope design-safety analysis (23 theorems, 0 `sorry`)
+## 7. In-scope design-safety analysis (24 theorems, 0 `sorry`)
 
 Where §4 asks "does the model match the docs" and §6 asks "what if a key is stolen", this pillar asks the
 hardest question: **does the protocol's *design* have a flaw an ordinary attacker can exploit using only
