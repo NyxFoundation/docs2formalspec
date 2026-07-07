@@ -183,7 +183,40 @@ judgeノイズを追加ラウンドで潰すのではなく、測定手法自体
 **最終確定値**: 定理81件、証明済み81件(sorry 0、100%)、忠実カバレッジ
 (3回多数決)**93.5%**(full 23 / partial 49 / mismatch 3 / unformalizable 2)。
 単一run値(78〜96%)ではなくこの多数決値を正式な最終数値として採用する。
-6ラウンドの手動形式化 + 測定手法の頑健化を経て、本エフォートを終了とする。
+
+## SPEC.md 側の点検 — 2026-07-07
+
+ユーザーから「6ラウンドの手動形式化を経て、RFC2119スペック文書(SPEC.md)側も
+きちんと修正されているのか」という指摘。実際に `requirements.json`(82件)と
+`SPEC.md` を突合した結果、2つの実際の齟齬を発見:
+
+1. **完全な欠落**: `token-no-rebase` と `cooldown-no-yield` は
+   `requirements.json` に抽出済みだったが、**SPEC.md には一度も
+   レンダリングされていなかった**(render_specステージの抜け漏れ)。
+   該当セクション(State / Arithmetic)に行を追加して解消。
+2. **要件文言そのものの曖昧さ**: `unlockToken-mints-apxUSD_unlock-immediately`
+   の文言("immediately after the deposit")が、"どの deposit か"を
+   明示していなかった。これが3ラウンドにわたり judge が一貫して
+   mismatch判定を出し続けた**真因**であり、ノイズでもLean側の不備でも
+   なかったことが判明: `requirements.json` の statement を「vaultが
+   UnlockTokenへapxUSDを入金する方のdeposit(ユーザーの当初のvault入金
+   ではない)」と明記した上で、**同一の(変更していない)Lean定理を
+   3回再判定した結果、3/3でfullに反転**。要件抽出/文書化段階の曖昧さが
+   下流の忠実性判定を継続的に汚染していた実例として記録に値する。
+
+この修正で `review.json` の多数決カバレッジは **93.5%→94.8%** に上昇。
+`requirements.json`/`SPEC.md` の両方を修正したのは、judgeへの入力
+(requirements.json)とドキュメント(SPEC.md)の内容が乖離すると
+同じ曖昧さが再発するため。
+
+**教訓**: 忠実カバレッジの伸び悩みは必ずしもLean形式化側の問題とは限らず、
+上流の要件抽出/文書化段階の曖昧さに起因することがある。今後同様の
+持続的mismatchに遭遇した場合は、Lean側を疑う前にまず該当要件の
+`source_quote`/原文コンテキストへ立ち返り、requirements.json の
+statement自体が一意に読めるか確認すべき。
+
+6ラウンドの手動形式化 + 測定手法の頑健化 + SPEC.md整合性点検を経て、
+本エフォートを終了とする。
 
 副産物として `src/d2fs/review.py` のバグを発見・修正: ラウンドトリップ審査が
 theorem名→要件idの逆引きに `name.removeprefix("req_").replace("_", "-")` という
