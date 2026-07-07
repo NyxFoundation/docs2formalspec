@@ -10,8 +10,8 @@ Evaluated over 15 iterative runs against [Apyx](https://docs.apyx.fi) (a dividen
 |---|---|
 | Requirements extracted (formalizable) | 82 (77) |
 | Lean 4 compilation | ✅ passes |
-| Theorems (live / killed) | 80 / 8 |
-| Mechanically proved | 80 (0 sorry) |
+| Theorems (live / killed) | 81 / 8 |
+| Mechanically proved | 81 (0 sorry) |
 | Vacuous theorems (`: True`) | 0 |
 | Faithful coverage (full + partial review) | ~85–92% (run-to-run judge variance; see note) |
 
