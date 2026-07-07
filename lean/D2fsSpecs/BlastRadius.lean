@@ -1447,4 +1447,61 @@ theorem reserve_outflow_only_via_redemption (s : State) (op : Op) (caller : Addr
         | (cases Option.some.inj h_step; exact absurd h_dec (by simp <;> omega))
         | exact absurd h_step (by simp)
 
+/-! ## T5 `no_theft_ledger` — first-principles conservation for a passive bystander
+
+The trace-level unification of T4: a fixed victim address `a` who **signs nothing**
+(never a caller anywhere in `σ`) and is **never the user-argument of an
+`executeRFQRedemption`** anywhere in `σ` cannot lose any of their transferable
+holdings, no matter what operations — including every privileged-role operation, in
+any order — the attacker interleaves around them. This is the memo's headline "even
+if the whole team is phished, your balance can't be moved," stated over the whole
+trace.
+
+Ledger design (per Task 2): rather than adding a ledger field to `State` (which would
+touch the ground-truth 81-theorem file), the ledger is a **module-local derived
+function over the trace state** — `netHoldings`, the sum of an address's three
+transferable balances. Conservation is then "`netHoldings` is non-decreasing across
+the trace for the passive `a`", proved by combining the three per-field bounds. The
+governance token is separately, absolutely immutable
+(`governance_token_balances_immutable`), so it is not part of the mutable ledger. -/
+
+/-- The per-address transferable-holdings ledger: the sum of an address's apxUSD,
+apyUSD vault shares, and external USDC. A module-local derived quantity over the
+trace state — no field is added to `State`. -/
+def netHoldings (s : State) (a : Address) : Nat :=
+  s.apxUSDBal a + s.apyUSDBal a + s.usdcBal a
+
+/-- T5 `no_theft_ledger` (docs/05-blast-radius.md, Tier 2) — no-theft conservation
+for a passive bystander.
+
+Threat model: **every** privileged key at once (admin, oracle, pauseController,
+yieldDistributor, governance) plus any number of ordinary accounts is the attacker,
+running an arbitrarily long trace `σ`.
+
+Hypotheses (the two carve-outs stated explicitly):
+* `h_never_signs`: `a` is never the caller of any operation in `σ`;
+* `h_never_rfq_target`: `a` is never the user-argument of an `executeRFQRedemption`
+  anywhere in `σ` (the one compensated-swap pathway that can debit a non-caller; it
+  is a priced swap, not theft, and is carved out here — pricing it is T6).
+
+Claim: each of `a`'s three transferable balances is non-decreasing across the entire
+trace, hence so is the derived ledger `netHoldings`. A passive bystander who signs
+nothing and is not RFQ-targeted cannot be made to lose a single unit of any holding.
+Proved by lifting the single-step non-custodial lemmas
+(`no_role_transfers_user_funds`/`no_role_burns_user_shares`/`no_role_debits_usdc`)
+through the trace — the induction is packaged in
+`user_assets_immune_to_total_key_compromise`. -/
+theorem no_theft_ledger (s : State) (σ : List (Op × Address)) (a : Address)
+    (h_never_signs : ∀ p ∈ σ, p.2 ≠ a)
+    (h_never_rfq_target : ∀ p ∈ σ, ∀ amount, p.1 ≠ Op.executeRFQRedemption a amount) :
+    s.apxUSDBal a ≤ (execTrace s σ).apxUSDBal a ∧
+    s.apyUSDBal a ≤ (execTrace s σ).apyUSDBal a ∧
+    s.usdcBal a ≤ (execTrace s σ).usdcBal a ∧
+    netHoldings s a ≤ netHoldings (execTrace s σ) a := by
+  obtain ⟨hapx, hapy, husdc, _⟩ :=
+    user_assets_immune_to_total_key_compromise s σ a h_never_signs h_never_rfq_target
+  refine ⟨hapx, hapy, husdc, ?_⟩
+  unfold netHoldings
+  omega
+
 end Apyx
