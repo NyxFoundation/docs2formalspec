@@ -120,7 +120,7 @@ private theorem inv_lockApxUSD (s : State) (amount : Nat) (caller : Address) (s'
 private theorem inv_requestUnlock (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.requestUnlock amount) caller = some s') :
     s.globalPause = false ∧ amount ≤ s.apxUSDBal caller ∧
-    s' = createStandardUnlock (burnApxUSD s caller amount) caller amount := by
+    s' = requestUnlockStep s caller amount := by
   simp only [step] at h
   split at h
   · exact absurd h (by simp)
@@ -345,20 +345,14 @@ private theorem penniless_step (s : State) (op : Op) (caller : Address) (s' : St
   case requestUnlock amount =>
     obtain ⟨-, hle, hs'⟩ := inv_requestUnlock _ _ _ _ h_step
     subst hs'
-    refine ⟨?_, by simp [createStandardUnlock, burnApxUSD, hu], ?_,
-      by simpa [createStandardUnlock, burnApxUSD] using hflex⟩
-    · by_cases hac : a = caller
+    refine ⟨?_, by simpa using hu, ?_, by simpa using hflex⟩
+    · rw [requestUnlockStep_apxUSDBal]
+      by_cases hac : a = caller
       · subst hac
         have h0 : amount = 0 := by omega
-        simp [createStandardUnlock, burnApxUSD, h0, hx]
-      · simp [createStandardUnlock, burnApxUSD, hac, hx]
-    · intro id amt ce hreq
-      simp only [createStandardUnlock, burnApxUSD] at hreq
-      split at hreq
-      · obtain ⟨hca, hamt, -⟩ := Prod.mk.injEq .. ▸ Option.some.inj hreq
-        subst hca
-        omega
-      · exact hstd id amt ce hreq
+        simp [burnApxUSD, h0, hx]
+      · simp [burnApxUSD, hac, hx]
+    · exact requestUnlockStep_std_penniless s caller amount a hstd (fun h => by rw [h] at hle; omega)
   case claimUnlock id =>
     obtain ⟨owner, amount, cooldownEnd, hreq, -, -, -, hs'⟩ := inv_claimUnlock _ _ _ _ h_step
     subst hs'

@@ -227,13 +227,51 @@ private theorem inv_lockApxUSD (s : State) (amount : Nat) (caller : Address) (s'
 private theorem inv_requestUnlock (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.requestUnlock amount) caller = some s') :
     s.globalPause = false ∧ amount ≤ s.apxUSDBal caller ∧
-    s' = createStandardUnlock (burnApxUSD s caller amount) caller amount := by
+    s' = requestUnlockStep s caller amount := by
   simp only [step] at h
   split at h
   · exact absurd h (by simp)
   · split at h
     · exact absurd h (by simp)
     · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+
+/-- A standard `requestUnlock` only ever assigns an unlock-token owner at the current
+registry counter; any other position keeps its owner. (Re-derived locally over
+`requestUnlockStep`.) -/
+private theorem inv_requestUnlock_owner_of_ne (s : State) (caller amount : Nat) {id : Nat}
+    (hid : id ≠ s.nextUnlockId) :
+    (requestUnlockStep s caller amount).unlockTokenOwner id = s.unlockTokenOwner id := by
+  unfold requestUnlockStep
+  (repeat' split) <;> simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+/-- Non-seizure of amounts: given the registry well-formedness that a caller's pending
+standard-request pointer references a position the caller itself owns (an invariant every
+reachable state satisfies, since the pointer is only ever set by the caller's own request),
+a `requestUnlock` by `caller` never changes the recorded amount of a *different* user's
+position — the top-up branch only ever touches the caller's own tracked id. -/
+private theorem inv_requestUnlock_amount_of_other (s : State) (caller amount id : Nat) (u : Address)
+    (h_ne_next : id ≠ s.nextUnlockId)
+    (h_live : s.unlockTokenOwner id = some u) (h_not_owner : caller ≠ u)
+    (h_wf : ∀ i, s.unlockRequestId caller = some i → s.unlockTokenOwner i = some caller) :
+    (requestUnlockStep s caller amount).unlockTokenAmount id = s.unlockTokenAmount id := by
+  unfold requestUnlockStep
+  split
+  · rename_i id' heqptr
+    have hptr : s.unlockRequestId caller = some id' := by simpa [burnApxUSD] using heqptr
+    have hne : id ≠ id' := by
+      intro he
+      rw [he, h_wf id' hptr] at h_live
+      exact h_not_owner (Option.some.inj h_live)
+    split
+    · rename_i o oldAmount oldEnd heqreq
+      by_cases ho : o = caller
+      · rw [if_pos ho]
+        simp only [updateStandardUnlock, heqreq]
+        simp [burnApxUSD, hne]
+      · rw [if_neg ho]
+        simp [createStandardUnlock, burnApxUSD, h_ne_next]
+    · simp [createStandardUnlock, burnApxUSD, h_ne_next]
+  · simp [createStandardUnlock, burnApxUSD, h_ne_next]
 
 private theorem inv_flexibleRequestUnlock (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.flexibleRequestUnlock amount) caller = some s') :
@@ -1210,7 +1248,8 @@ theorem no_role_seizes_unlock_position (s : State) (op : Op) (caller : Address) 
     (id : Nat) (u : Address)
     (h_live : s.unlockTokenOwner id = some u)
     (h_fresh : id < s.nextUnlockId)
-    (h_not_owner : caller ≠ u) :
+    (h_not_owner : caller ≠ u)
+    (h_wf : ∀ i, s.unlockRequestId caller = some i → s.unlockTokenOwner i = some caller) :
     (s'.unlockTokenOwner id = some u ∧ s'.unlockTokenAmount id = s.unlockTokenAmount id) ∨
     (op = Op.claimUnlock id ∧ caller = s.unlockTokenOperator ∧
       ∃ amount cooldownEnd, s.unlockRequests id = some (u, amount, cooldownEnd) ∧
@@ -1241,8 +1280,9 @@ theorem no_role_seizes_unlock_position (s : State) (op : Op) (caller : Address) 
   case requestUnlock amount =>
     obtain ⟨_, _, hs'⟩ := inv_requestUnlock _ _ _ _ h_step
     subst hs'
-    exact Or.inl ⟨by simpa [createStandardUnlock, burnApxUSD, h_ne_next] using h_live,
-      by simp [createStandardUnlock, burnApxUSD, h_ne_next]⟩
+    refine Or.inl ⟨?_, ?_⟩
+    · rw [inv_requestUnlock_owner_of_ne s caller amount h_ne_next]; exact h_live
+    · exact inv_requestUnlock_amount_of_other s caller amount id u h_ne_next h_live h_not_owner h_wf
   case claimUnlock rid =>
     obtain ⟨o, am, ce, hreq, howner, hcaller, hnow, hs'⟩ := inv_claimUnlock _ _ _ _ h_step
     subst hs'

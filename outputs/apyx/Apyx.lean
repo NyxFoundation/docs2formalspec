@@ -172,6 +172,16 @@ def updateStandardUnlock (s : State) (id : Nat) (owner : Address) (addAmount : N
         unlockTokenAmount := fun i => if i = id then newAmount else s.unlockTokenAmount i
     }
 
+/-- Effect of a successful `updateStandardUnlock` (topped-up position present) on the
+`unlockRequests` map: the target `idp` becomes `some (owner, oldAmount + addAmount,
+now + cooldownPeriod)`, every other id is untouched. -/
+theorem updateStandardUnlock_unlockRequests_eq (s : State) (idp : Nat) (owner : Address)
+    (addAmount : Nat) (o oa oe : Nat) (h : s.unlockRequests idp = some (o, oa, oe)) (i : Nat) :
+    (updateStandardUnlock s idp owner addAmount).unlockRequests i
+      = if i = idp then some (owner, oa + addAmount, s.now + cooldownPeriod) else s.unlockRequests i := by
+  unfold updateStandardUnlock
+  rw [h]
+
 def createFlexibleUnlock (s : State) (owner : Address) (amount : Nat) : State :=
   let id := s.nextUnlockId
   let requestTime := s.now
@@ -262,6 +272,231 @@ def previewWithdraw (s : State) (assets : Nat) : Nat :=
 def previewRedeem (s : State) (shares : Nat) : Nat :=
   convertToAssets s shares
 
+/-- The state update performed by a successful standard `Op.requestUnlock`: burn the
+caller's apxUSD, then enforce the "at most one pending standard redemption per user"
+requirement — if the caller already has a live standard unlock position, *top it up*
+(add the burned amount to the existing position and reset its cooldown to `now`, via
+`updateStandardUnlock`) rather than opening a second one; only when the caller has no
+pending standard position is a fresh one created (`createStandardUnlock`). This models
+`req_single_pending_redemption_per_user` / `req_multiple_unlocks_reset_cooldown`: repeated
+requests coalesce into the single position tracked by the per-user `unlockRequestId`
+pointer, with a freshly reset cooldown on the aggregate amount. -/
+def requestUnlockStep (s : State) (caller : Address) (amount : Nat) : State :=
+  match (burnApxUSD s caller amount).unlockRequestId caller with
+  | some id =>
+    match (burnApxUSD s caller amount).unlockRequests id with
+    | some (o, _, _) =>
+        if o = caller then updateStandardUnlock (burnApxUSD s caller amount) id caller amount
+        else createStandardUnlock (burnApxUSD s caller amount) caller amount
+    | none => createStandardUnlock (burnApxUSD s caller amount) caller amount
+  | none => createStandardUnlock (burnApxUSD s caller amount) caller amount
+
+/-- Uniform frame lemmas: `requestUnlockStep` touches only the caller's burned apxUSD
+(`apxUSDBal`, `totalSupply_apxUSD`) and the standard-unlock registry; every other State
+field is left exactly as it was, regardless of which branch (create / top-up) is taken. -/
+@[simp] theorem requestUnlockStep_now (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).now = s.now := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_globalPause (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).globalPause = s.globalPause := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_apyUSDBal (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).apyUSDBal = s.apyUSDBal := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_totalSupply_apyUSD (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).totalSupply_apyUSD = s.totalSupply_apyUSD := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_vaultApxUSDBal (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).vaultApxUSDBal = s.vaultApxUSDBal := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_usdcReserve (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).usdcReserve = s.usdcReserve := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_usdcBal (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).usdcBal = s.usdcBal := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_governanceTokenBal (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).governanceTokenBal = s.governanceTokenBal := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_exchangeRate (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).exchangeRate = s.exchangeRate := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_redemptionValue (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).redemptionValue = s.redemptionValue := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_totalCollateralValue (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).totalCollateralValue = s.totalCollateralValue := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_overcollateralizationBufferField (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).overcollateralizationBuffer = s.overcollateralizationBuffer := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_unlockTokenOperator (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).unlockTokenOperator = s.unlockTokenOperator := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_unlockTokenAddress (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).unlockTokenAddress = s.unlockTokenAddress := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_emergencyFlag (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).emergencyFlag = s.emergencyFlag := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_bufferDeployed (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).bufferDeployed = s.bufferDeployed := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_whitelist (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).whitelist = s.whitelist := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_denylist (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).denylist = s.denylist := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_eventLog (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).eventLog = s.eventLog := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_totalSupply_apxUSD (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).totalSupply_apxUSD = s.totalSupply_apxUSD - amount := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+@[simp] theorem requestUnlockStep_apxUSDBal (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).apxUSDBal = (burnApxUSD s caller amount).apxUSDBal := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+/-- Registry frame: `requestUnlockStep` only ever assigns an unlock-token owner at the
+current registry counter `s.nextUnlockId` (the create branch); the top-up branch touches
+no owner at all. So any position id other than the counter keeps its owner unchanged. -/
+theorem requestUnlockStep_unlockTokenOwner_of_ne (s : State) (caller amount : Nat)
+    {id : Nat} (hid : id ≠ s.nextUnlockId) :
+    (requestUnlockStep s caller amount).unlockTokenOwner id = s.unlockTokenOwner id := by
+  unfold requestUnlockStep
+  (repeat' split) <;> simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+/-- The `(nextUnlockId, unlockTokenOwner)` pair after `requestUnlockStep` is either exactly
+that of the fresh-position (`createStandardUnlock`) path, or exactly the pre-state's (the
+top-up path touches neither field). This lets every registry-counter / owner invariant be
+discharged by the pre-existing `createStandardUnlock` reasoning on one side and by pure
+identity on the other. -/
+theorem requestUnlockStep_owner_counter_cases (s : State) (caller amount : Nat) :
+    ((requestUnlockStep s caller amount).nextUnlockId
+        = (createStandardUnlock (burnApxUSD s caller amount) caller amount).nextUnlockId
+      ∧ (requestUnlockStep s caller amount).unlockTokenOwner
+        = (createStandardUnlock (burnApxUSD s caller amount) caller amount).unlockTokenOwner)
+    ∨ ((requestUnlockStep s caller amount).nextUnlockId = s.nextUnlockId
+      ∧ (requestUnlockStep s caller amount).unlockTokenOwner = s.unlockTokenOwner) := by
+  unfold requestUnlockStep
+  (repeat' split) <;>
+    first
+      | exact Or.inl ⟨rfl, rfl⟩
+      | exact Or.inr ⟨by simp_all [updateStandardUnlock, burnApxUSD], by simp_all [updateStandardUnlock, burnApxUSD]⟩
+
+/-- After a standard `requestUnlock`, the caller's *single* tracked standard position (the
+requirement's "at most one pending redemption per user") holds an aggregated amount with a
+freshly reset cooldown deadline `now + cooldownPeriod` — whether it was newly created or an
+existing position topped up. -/
+theorem requestUnlockStep_caller_position (s : State) (caller amount : Nat) :
+    ∃ id amt, (requestUnlockStep s caller amount).unlockRequestId caller = some id ∧
+      (requestUnlockStep s caller amount).unlockRequests id
+        = some (caller, amt, s.now + cooldownPeriod) := by
+  unfold requestUnlockStep
+  split
+  · rename_i id heq
+    split
+    · rename_i o oldAmount oldEnd heq2
+      by_cases ho : o = caller
+      · rw [if_pos ho]
+        exact ⟨id, oldAmount + amount,
+          by simp_all [updateStandardUnlock, burnApxUSD],
+          by simp_all [updateStandardUnlock, burnApxUSD]⟩
+      · rw [if_neg ho]
+        exact ⟨(burnApxUSD s caller amount).nextUnlockId, amount,
+          by simp [createStandardUnlock], by simp [createStandardUnlock, burnApxUSD]⟩
+    · exact ⟨(burnApxUSD s caller amount).nextUnlockId, amount,
+        by simp [createStandardUnlock], by simp [createStandardUnlock, burnApxUSD]⟩
+  · exact ⟨(burnApxUSD s caller amount).nextUnlockId, amount,
+      by simp [createStandardUnlock], by simp [createStandardUnlock, burnApxUSD]⟩
+
+/-- When the caller has no pending standard position, `requestUnlockStep` takes the
+create branch and coincides exactly with the fresh-position `createStandardUnlock` path —
+letting the pre-existing "fresh registry allocation at the counter" proofs go through
+unchanged for a user's first standard request. -/
+theorem requestUnlockStep_fresh_eq (s : State) (caller amount : Nat)
+    (h : s.unlockRequestId caller = none) :
+    requestUnlockStep s caller amount = createStandardUnlock (burnApxUSD s caller amount) caller amount := by
+  unfold requestUnlockStep
+  simp only [show (burnApxUSD s caller amount).unlockRequestId caller = none from by simp [burnApxUSD, h]]
+
+@[simp] theorem requestUnlockStep_flexibleUnlockRequests (s : State) (caller amount : Nat) :
+    (requestUnlockStep s caller amount).flexibleUnlockRequests = s.flexibleUnlockRequests := by
+  unfold requestUnlockStep; (repeat' split); all_goals simp_all [createStandardUnlock, updateStandardUnlock, burnApxUSD]
+
+/-- Create-branch case of standard-position `Penniless`-preservation. -/
+private theorem std_penniless_create (s : State) (caller amount : Nat) (a : Address)
+    (hstd : ∀ id amt ce, s.unlockRequests id = some (a, amt, ce) → amt = 0)
+    (hcaller0 : caller = a → amount = 0) :
+    ∀ id amt ce, (createStandardUnlock (burnApxUSD s caller amount) caller amount).unlockRequests id
+      = some (a, amt, ce) → amt = 0 := by
+  intro id amt ce hreq
+  simp only [createStandardUnlock, burnApxUSD] at hreq
+  split at hreq
+  · simp only [Option.some.injEq, Prod.mk.injEq] at hreq
+    obtain ⟨hca, hamt, -⟩ := hreq
+    rw [← hamt]; exact hcaller0 hca
+  · exact hstd id amt ce (by simpa [burnApxUSD] using hreq)
+
+/-- Standard-position `Penniless`-preservation: if every standard unlock position owned by
+`a` currently has amount 0, and — when `a` is the caller — `a` has nothing to lock, then
+after a `requestUnlock` every standard position owned by `a` still has amount 0. The
+self-validating top-up branch is what makes this hold with no registry-consistency
+hypothesis: `requestUnlockStep` only ever tops up a position whose *recorded* owner is the
+caller, so it can never inflate a third party's position. -/
+theorem requestUnlockStep_std_penniless (s : State) (caller amount : Nat) (a : Address)
+    (hstd : ∀ id amt ce, s.unlockRequests id = some (a, amt, ce) → amt = 0)
+    (hcaller0 : caller = a → amount = 0) :
+    ∀ id amt ce, (requestUnlockStep s caller amount).unlockRequests id = some (a, amt, ce) → amt = 0 := by
+  intro id amt ce hreq
+  unfold requestUnlockStep at hreq
+  split at hreq
+  · rename_i id' heqptr
+    split at hreq
+    · rename_i o oldAmount oldEnd heqreq
+      by_cases ho : o = caller
+      · rw [if_pos ho] at hreq
+        rw [updateStandardUnlock_unlockRequests_eq (burnApxUSD s caller amount) id' caller amount
+          o oldAmount oldEnd heqreq id] at hreq
+        simp only [burnApxUSD] at hreq
+        split at hreq
+        · simp only [Option.some.injEq, Prod.mk.injEq] at hreq
+          obtain ⟨hca, hamt, -⟩ := hreq
+          have hsid : s.unlockRequests id' = some (a, oldAmount, oldEnd) := by
+            rw [show s.unlockRequests id' = some (o, oldAmount, oldEnd) from by
+              simpa [burnApxUSD] using heqreq, ho, hca]
+          have hoa : oldAmount = 0 := hstd id' oldAmount oldEnd hsid
+          have ham : amount = 0 := hcaller0 hca
+          omega
+        · exact hstd id amt ce hreq
+      · rw [if_neg ho] at hreq
+        exact std_penniless_create s caller amount a hstd hcaller0 id amt ce hreq
+    · rename_i heqreq
+      exact std_penniless_create s caller amount a hstd hcaller0 id amt ce hreq
+  · rename_i heqptr
+    exact std_penniless_create s caller amount a hstd hcaller0 id amt ce hreq
+
 inductive Op
   | depositUSDC (amount : Nat)
   | mintApxUSD (to : Address) (amount : Nat)
@@ -333,10 +568,7 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
   | Op.requestUnlock amount =>
     if s.globalPause then none
     else if s.apxUSDBal caller < amount then none
-    else
-      let s1 := burnApxUSD s caller amount
-      let s2 := createStandardUnlock s1 caller amount
-      some s2
+    else some (requestUnlockStep s caller amount)
   | Op.claimUnlock requestId =>
     match s.unlockRequests requestId with
     | none => none
@@ -850,7 +1082,7 @@ private theorem step_lockApxUSD_some (s : State) (amount : Nat) (caller : Addres
 private theorem step_requestUnlock_some (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.requestUnlock amount) caller = some s') :
     s.globalPause = false ∧ amount ≤ s.apxUSDBal caller ∧
-    s' = createStandardUnlock (burnApxUSD s caller amount) caller amount := by
+    s' = requestUnlockStep s caller amount := by
   simp only [step] at h
   split at h
   · exact absurd h (by simp)
@@ -1165,13 +1397,20 @@ a pending unlock whose cooldown deadline lies in the future, and claiming it in 
 instant reverts.) -/
 theorem req_redemption_async_process (s : State) (amount : Nat) (caller : Address)
     (h1 : s.globalPause = false) (h2 : amount ≤ s.apxUSDBal caller) :
-    ∃ s', step s (Op.requestUnlock amount) caller = some s' ∧
-      s'.unlockRequests s.nextUnlockId = some (caller, amount, s.now + cooldownPeriod) ∧
-      step s' (Op.claimUnlock s.nextUnlockId) caller = none := by
-  refine ⟨createStandardUnlock (burnApxUSD s caller amount) caller amount, ?_, ?_, ?_⟩
+    ∃ s' id amt, step s (Op.requestUnlock amount) caller = some s' ∧
+      s'.unlockRequestId caller = some id ∧
+      s'.unlockRequests id = some (caller, amt, s.now + cooldownPeriod) ∧
+      step s' (Op.claimUnlock id) caller = none := by
+  obtain ⟨id, amt, hptr, hreq⟩ := requestUnlockStep_caller_position s caller amount
+  refine ⟨requestUnlockStep s caller amount, id, amt, ?_, hptr, hreq, ?_⟩
   · simp [step, h1, Nat.not_lt.mpr h2]
-  · simp [createStandardUnlock, burnApxUSD]
-  · simp [step, createStandardUnlock, burnApxUSD, cooldownPeriod, day]
+  · have hnow := requestUnlockStep_now s caller amount
+    simp only [step, hreq]
+    have hlt : (requestUnlockStep s caller amount).now < s.now + cooldownPeriod := by
+      rw [hnow]; simp [cooldownPeriod, day]
+    split
+    · rfl
+    · simp [hlt]
 
 /-- REQ redemption-cooldown-period: After a redemption request is submitted, the system
 MUST enforce a cooldown period of approximately 20 days before a claim can be executed.
@@ -1180,7 +1419,8 @@ deadline and every successful claim happened at or after its recorded deadline.)
 theorem req_redemption_cooldown_period (s : State) :
     cooldownPeriod = 20 * day ∧
     (∀ amount caller s', step s (Op.requestUnlock amount) caller = some s' →
-      s'.unlockRequests s.nextUnlockId = some (caller, amount, s.now + cooldownPeriod)) ∧
+      ∃ id amt, s'.unlockRequestId caller = some id ∧
+        s'.unlockRequests id = some (caller, amt, s.now + cooldownPeriod)) ∧
     (∀ id caller s', step s (Op.claimUnlock id) caller = some s' →
       ∃ owner amount cooldownEnd, s.unlockRequests id = some (owner, amount, cooldownEnd) ∧
         cooldownEnd ≤ s.now) := by
@@ -1188,7 +1428,7 @@ theorem req_redemption_cooldown_period (s : State) :
   · intro amount caller s' h
     obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h
     subst hs'
-    simp [createStandardUnlock, burnApxUSD]
+    exact requestUnlockStep_caller_position s caller amount
   · intro id caller s' h
     obtain ⟨o, a, ce, hreq, _, _, ht, _⟩ := step_claimUnlock_some _ _ _ _ h
     exact ⟨o, a, ce, hreq, ht⟩
@@ -1489,6 +1729,7 @@ theorem req_unlock_token_mints_apx_usd_unlock_immediately (s : State) :
       s'.unlockTokenOwner s.nextUnlockId = some receiver ∧
       s'.unlockTokenAmount s.nextUnlockId = redeemAssets shares s.exchangeRate) ∧
     (∀ (amount : Nat) (caller : Address) (s' : State),
+      s.unlockRequestId caller = none →
       step s (Op.requestUnlock amount) caller = some s' →
       s'.unlockTokenOwner s.nextUnlockId = some caller ∧
       s'.unlockTokenAmount s.nextUnlockId = amount) ∧
@@ -1505,9 +1746,10 @@ theorem req_unlock_token_mints_apx_usd_unlock_immediately (s : State) :
     obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
     subst hs'
     constructor <;> simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-  · intro amount caller s' h_step
+  · intro amount caller s' hfresh h_step
     obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
     subst hs'
+    rw [requestUnlockStep_fresh_eq s caller amount hfresh]
     constructor <;> simp [createStandardUnlock, burnApxUSD]
   · intro amount caller s' h_step
     obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
@@ -1541,9 +1783,12 @@ private theorem unlock_position_created_only_by_vault_ops (s : State) (op : Op) 
   case requestUnlock a =>
     obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
     subst hs'
-    by_cases hid : id = s.nextUnlockId
-    · exact ⟨Or.inl ⟨a, rfl⟩, hid⟩
-    · simp [createStandardUnlock, burnApxUSD, hid, h_new] at h_now
+    rcases requestUnlockStep_owner_counter_cases s caller a with ⟨_, howner⟩ | ⟨_, howner⟩
+    · rw [howner] at h_now
+      by_cases hid : id = s.nextUnlockId
+      · exact ⟨Or.inl ⟨a, rfl⟩, hid⟩
+      · simp [createStandardUnlock, burnApxUSD, hid, h_new] at h_now
+    · rw [howner, h_new] at h_now; cases h_now
   case flexibleRequestUnlock a =>
     obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
     subst hs'
@@ -1903,18 +2148,20 @@ theorem req_redemption_exchange_rate_multiplier (s : State) (shares : Nat)
   exact (Nat.le_div_iff_mul_le hray).mpr (Nat.mul_le_mul_left _ h)
 
 /-- Each user MUST have at most one pending redemption request; if the user adds assets
-to an existing request, the cooldown timer MUST reset to the time of the update.
-(Model: `unlockRequestId` tracks a single request id per user, and topping up an
-existing request via `updateStandardUnlock` resets its cooldown end.) -/
-theorem req_single_pending_redemption_per_user (s : State) (owner : Address)
-    (amount addAmount id oldAmount oldEnd : Nat)
-    (h : s.unlockRequests id = some (owner, oldAmount, oldEnd)) :
-    (createStandardUnlock s owner amount).unlockRequestId owner = some s.nextUnlockId ∧
-    (updateStandardUnlock s id owner addAmount).unlockRequests id
-      = some (owner, oldAmount + addAmount, s.now + cooldownPeriod) := by
-  constructor
-  · simp [createStandardUnlock]
-  · simp [updateStandardUnlock, h]
+to an existing request, the cooldown timer MUST reset to the time of the update. (Model:
+this is now enforced by the transition system itself — `Op.requestUnlock` routes through
+`requestUnlockStep`, which tops up the caller's existing standard position rather than
+opening a second one, keyed on the single per-user `unlockRequestId` pointer. The theorem
+states the *reachable* invariant: after any successful standard redemption request, the
+caller's `unlockRequestId` resolves to exactly one position, holding an aggregated amount
+with a freshly reset cooldown deadline `now + cooldownPeriod`.) -/
+theorem req_single_pending_redemption_per_user (s : State) (amount : Nat) (caller : Address)
+    (s' : State) (h_step : step s (Op.requestUnlock amount) caller = some s') :
+    ∃ id amt, s'.unlockRequestId caller = some id ∧
+      s'.unlockRequests id = some (caller, amt, s.now + cooldownPeriod) := by
+  obtain ⟨-, -, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
+  subst hs'
+  exact requestUnlockStep_caller_position s caller amount
 
 -- BROKEN: theorem req_cooldown_no_yield : Prop :=
 -- BROKEN:   ∀ (s : State) (owner : Address) (amount : Nat) (s' : State),
@@ -2289,14 +2536,29 @@ theorem req_unlock_claimable_after_3d (s : State) (requestId : Nat) (caller : Ad
 
 -- BROKEN: /-- REQ unlock-conversion-after-cooldown: Conversion of apxUSD_unlock to apxUSD MUST only be possible after the cooldown period has elapsed. -/
 
-/-- REQ multiple-unlocks-reset-cooldown: If a user initiates multiple unlocks, the system MUST reset the cooldown period for the total locked amount. -/
-theorem req_multiple_unlocks_reset_cooldown (s : State) (id : Nat) (owner : Address) (addAmount : Nat)
-    (h : s.unlockRequests id = some (owner, 0, 0)) :
-    let s' := updateStandardUnlock s id owner addAmount
-    match s'.unlockRequests id with
-    | some (_, _, newCooldownEnd) => newCooldownEnd = s'.now + cooldownPeriod
-    | none => False := by
-  simp [updateStandardUnlock, h]
+/-- REQ multiple-unlocks-reset-cooldown: If a user initiates multiple unlocks, the system
+MUST reset the cooldown period for the total locked amount. (Model: reachable via `step` —
+when the caller already holds a standard position `id` (their `unlockRequestId` pointer),
+a further `Op.requestUnlock` aggregates the amount into that same position and resets its
+cooldown deadline to `now + cooldownPeriod` on the *total* `oldAmount + amount`.) -/
+theorem req_multiple_unlocks_reset_cooldown (s : State) (amount id oldAmount oldEnd : Nat)
+    (caller : Address) (s' : State)
+    (h_ptr : s.unlockRequestId caller = some id)
+    (h_req : s.unlockRequests id = some (caller, oldAmount, oldEnd))
+    (h_step : step s (Op.requestUnlock amount) caller = some s') :
+    s'.unlockRequests id = some (caller, oldAmount + amount, s.now + cooldownPeriod) := by
+  obtain ⟨-, -, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
+  subst hs'
+  unfold requestUnlockStep
+  have hp : (burnApxUSD s caller amount).unlockRequestId caller = some id := by
+    simpa [burnApxUSD] using h_ptr
+  have hr : (burnApxUSD s caller amount).unlockRequests id = some (caller, oldAmount, oldEnd) := by
+    simpa [burnApxUSD] using h_req
+  rw [hp]
+  simp only [hr, if_pos]
+  rw [updateStandardUnlock_unlockRequests_eq (burnApxUSD s caller amount) id caller amount
+    caller oldAmount oldEnd hr id]
+  simp [burnApxUSD]
 
 -- BROKEN: /-- REQ withdrawForMaxShares-revert-if-exceeds-maxShares: withdrawForMaxShares(uint256 assets, uint256 maxShares, address receiver) MUST revert if the number of apyUSD shares required to withdraw the assets exceeds maxShares. -/
 
@@ -3318,9 +3580,10 @@ theorem req_unlock_cannot_be_cancelled (s : State) (op : Op) (caller : Address) 
     obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
     subst hs'
     by_cases hid : id = s.nextUnlockId
-    · subst hid
-      simp [createStandardUnlock, burnApxUSD] at h_gone
-    · simp [createStandardUnlock, burnApxUSD, hid, h_live] at h_gone
+    · rcases requestUnlockStep_owner_counter_cases s caller a with ⟨_, howner⟩ | ⟨_, howner⟩
+      · rw [howner] at h_gone; subst hid; simp [createStandardUnlock, burnApxUSD] at h_gone
+      · rw [howner, h_live] at h_gone; simp at h_gone
+    · rw [requestUnlockStep_unlockTokenOwner_of_ne s caller a hid, h_live] at h_gone; simp at h_gone
   case flexibleRequestUnlock a =>
     obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
     subst hs'
@@ -3389,15 +3652,19 @@ theorem req_unlock_token_nontransferable (s : State) (op : Op) (caller : Address
   case requestUnlock a =>
     obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
     subst hs'
-    constructor
-    · intro i hi
-      simp only [createStandardUnlock, burnApxUSD] at hi ⊢
-      rw [if_neg (by omega)]
-      exact h_fresh i (by omega)
-    · intro id owner h_own
-      have hid : id ≠ s.nextUnlockId := fun h => by
-        rw [h, h_fresh s.nextUnlockId (Nat.le_refl _)] at h_own; cases h_own
-      exact Or.inl (by simp [createStandardUnlock, burnApxUSD, hid, h_own])
+    rcases requestUnlockStep_owner_counter_cases s caller a with ⟨hcnt, howner⟩ | ⟨hcnt, howner⟩
+    · rw [hcnt, howner]
+      constructor
+      · intro i hi
+        simp only [createStandardUnlock, burnApxUSD] at hi ⊢
+        rw [if_neg (by omega)]
+        exact h_fresh i (by omega)
+      · intro id owner h_own
+        have hid : id ≠ s.nextUnlockId := fun h => by
+          rw [h, h_fresh s.nextUnlockId (Nat.le_refl _)] at h_own; cases h_own
+        exact Or.inl (by simp [createStandardUnlock, burnApxUSD, hid, h_own])
+    · rw [hcnt, howner]
+      exact ⟨h_fresh, fun _ _ h => Or.inl h⟩
   case flexibleRequestUnlock a =>
     obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
     subst hs'
