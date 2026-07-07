@@ -3295,45 +3295,94 @@ theorem req_unlock_token_nontransferable (s : State) (op : Op) (caller : Address
         | exact absurd h_step (by simp)
 
 /-- REQ cooldown-removal: When apyUSD enters the cooldown phase, it MUST be removed from
-the yield pool, causing remaining apyUSD to receive a higher percentage yield. (Model: the
-yield pool is the outstanding apyUSD share supply — yield credits are distributed pro-rata
-over `totalSupply_apyUSD` through the exchange rate. Entering cooldown is `Op.redeem` /
-`Op.withdraw`: the exiting shares are burned out of the supply in the very same step, and
-the exiting value is frozen as a fixed-amount unlock position that accrues nothing further
-(cf. `req_cooldown_no_yield`). Because any future yield credit `y` is split over the
-smaller remaining supply, the per-share slice `y·ray / supply` of every remaining holder
-is weakly higher than it would have been over the pre-cooldown supply — the removed shares'
-share of the yield is redistributed to those who stay.) -/
+the yield pool, causing remaining apyUSD to receive a higher percentage yield. (Model:
+apyUSD enters the cooldown phase through `Op.redeem`/`Op.withdraw`, which place the
+exiting value in a pending unlock whose deadline is `now + cooldownPeriod`. The yield
+pool is the outstanding apyUSD share supply `totalSupply_apyUSD`, over which every yield
+credit is distributed pro-rata. The theorem: in the very same step in which apyUSD enters
+cooldown, the entering shares are burned out of the yield pool — the pool strictly
+shrinks whenever a positive number of shares enters cooldown — so every future yield
+credit `y` is divided among strictly fewer pool shares. "Higher percentage yield" is
+stated both exactly — the per-share fraction `y / supply` is strictly larger after
+removal, compared via cross-multiplication `y · supply' < y · supply` — and in the
+model's floor arithmetic, where the per-share credit `y·ray / supply` is weakly higher
+(floor division can absorb a strict rational increase). `h_bal` (a holder's balance never
+exceeds the total supply) is the standard supply-consistency invariant of reachable
+states.) -/
 theorem req_cooldown_removal (s : State) :
     (∀ (shares : Nat) (receiver caller : Address) (s' : State),
+      -- apyUSD entering the cooldown phase via `redeem` ...
       step s (Op.redeem shares receiver) caller = some s' →
-      -- the shares entering cooldown leave the yield pool in the same step
+      -- ... is placed under cooldown until `now + cooldownPeriod` ...
+      s'.unlockRequests s.nextUnlockId
+        = some (receiver, redeemAssets shares s.exchangeRate, s.now + cooldownPeriod) ∧
+      -- ... and removed from the yield pool in the very same step
       s'.totalSupply_apyUSD = s.totalSupply_apyUSD - shares ∧
-      -- and are frozen as a fixed-amount unlock position outside the pool
-      s'.unlockTokenAmount s.nextUnlockId = redeemAssets shares s.exchangeRate ∧
-      -- so each remaining share's slice of any future yield credit is weakly higher
+      (0 < shares → s.apyUSDBal caller ≤ s.totalSupply_apyUSD →
+        s'.totalSupply_apyUSD < s.totalSupply_apyUSD) ∧
+      -- so remaining apyUSD receive a higher % yield: the exact per-share fraction of
+      -- any future credit y is strictly larger over the shrunken pool ...
+      (∀ y : Nat, 0 < y → 0 < shares → s.apyUSDBal caller ≤ s.totalSupply_apyUSD →
+        y * s'.totalSupply_apyUSD < y * s.totalSupply_apyUSD) ∧
+      -- ... and the floor-arithmetic per-share credit is weakly higher
       (∀ y : Nat, 0 < s.totalSupply_apyUSD - shares →
         y * ray / s.totalSupply_apyUSD ≤ y * ray / (s.totalSupply_apyUSD - shares))) ∧
     (∀ (assets : Nat) (receiver caller : Address) (s' : State),
+      -- apyUSD entering the cooldown phase via `withdraw`: identical consequences
       step s (Op.withdraw assets receiver) caller = some s' →
+      s'.unlockRequests s.nextUnlockId = some (receiver, assets, s.now + cooldownPeriod) ∧
       s'.totalSupply_apyUSD = s.totalSupply_apyUSD - withdrawShares assets s.exchangeRate ∧
-      s'.unlockTokenAmount s.nextUnlockId = assets ∧
+      (0 < withdrawShares assets s.exchangeRate →
+        s.apyUSDBal caller ≤ s.totalSupply_apyUSD →
+        s'.totalSupply_apyUSD < s.totalSupply_apyUSD) ∧
+      (∀ y : Nat, 0 < y → 0 < withdrawShares assets s.exchangeRate →
+        s.apyUSDBal caller ≤ s.totalSupply_apyUSD →
+        y * s'.totalSupply_apyUSD < y * s.totalSupply_apyUSD) ∧
       (∀ y : Nat, 0 < s.totalSupply_apyUSD - withdrawShares assets s.exchangeRate →
         y * ray / s.totalSupply_apyUSD
           ≤ y * ray / (s.totalSupply_apyUSD - withdrawShares assets s.exchangeRate))) := by
+  have hmul : ∀ (y a b : Nat), 0 < y → a < b → y * a < y * b := by
+    intro y a b hy hab
+    calc y * a < y * a + y := by omega
+      _ = y * (a + 1) := (Nat.mul_succ y a).symm
+      _ ≤ y * b := Nat.mul_le_mul_left y hab
   constructor
   · intro shares receiver caller s' h_step
-    obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
+    obtain ⟨_, hshares, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
+    rw [pullVestedYield_apyUSDBal] at hshares
     subst hs'
-    refine ⟨?_, ?_, fun y hpos => Nat.div_le_div_left (Nat.sub_le _ _) hpos⟩
+    have hsup : (emitEvent (updateExchangeRate (createStandardUnlock
+        { burnApyUSD (pullVestedYield s) caller shares with
+          vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller shares).vaultApxUSDBal
+            - redeemAssets shares s.exchangeRate }
+        receiver (redeemAssets shares s.exchangeRate))) "Withdraw"
+        [caller, receiver, caller, redeemAssets shares s.exchangeRate, shares]).totalSupply_apyUSD
+        = s.totalSupply_apyUSD - shares := by
+      simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+    refine ⟨?_, hsup, ?_, ?_, fun y hpos => Nat.div_le_div_left (Nat.sub_le _ _) hpos⟩
     · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-    · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+    · intro hpos hbal; omega
+    · intro y hy hpos hbal
+      rw [hsup]
+      exact hmul _ _ _ hy (by omega)
   · intro assets receiver caller s' h_step
-    obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
+    obtain ⟨_, hshares, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
+    rw [pullVestedYield_apyUSDBal] at hshares
     subst hs'
-    refine ⟨?_, ?_, fun y hpos => Nat.div_le_div_left (Nat.sub_le _ _) hpos⟩
+    have hsup : (emitEvent (updateExchangeRate (createStandardUnlock
+        { burnApyUSD (pullVestedYield s) caller (withdrawShares assets s.exchangeRate) with
+          vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller
+            (withdrawShares assets s.exchangeRate)).vaultApxUSDBal - assets }
+        receiver assets)) "Withdraw"
+        [caller, receiver, caller, assets, withdrawShares assets s.exchangeRate]).totalSupply_apyUSD
+        = s.totalSupply_apyUSD - withdrawShares assets s.exchangeRate := by
+      simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+    refine ⟨?_, hsup, ?_, ?_, fun y hpos => Nat.div_le_div_left (Nat.sub_le _ _) hpos⟩
     · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-    · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+    · intro hpos hbal; omega
+    · intro y hy hpos hbal
+      rw [hsup]
+      exact hmul _ _ _ hy (by omega)
 
 /-- REQ erc4626-compliance: The apyUSD vault contract MUST implement the ERC-4626
 tokenized vault interface. (Model: the interface surface is modeled by
