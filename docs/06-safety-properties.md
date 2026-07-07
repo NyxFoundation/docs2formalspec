@@ -52,7 +52,7 @@
 | S2 | `solvency_preserved` | 全操作列で `totalSupply_apxUSD ≤ totalCollateralValue`(発行総額が担保を超えない)が保存 | 単発版 `req_overcollateralization_limit` 済 → 全op保存則として帰納 |
 | S3 | `rounding_favors_protocol` | `lockShares`/`redeemAssets`/`withdrawShares` の丸めが常にプロトコル有利: 往復変換がユーザーに価値をクレジットしない(`convertToAssets (convertToShares a) ≤ a`) | `req_erc4626_compliance` に一部 → 全変換方向で明示 |
 | S4 | `no_dilution` | 新規 `lockApxUSD`(share mint)が既存holderの per-share 償還価値を下げない | `req_exchange_rate_non_decreasing` 済 → 「他者のmintで自分の`redeemAssets`が減らない」形へ精緻化 |
-| S5 | `no_inflation_attack` | **最重要**: 初回入金者が小額mint→donateで`totalAssets`を膨らませ、後続入金者のshareを丸めで0にする攻撃列が存在しない。`vaultApxUSDBal` への donation 経路(lock以外で`totalAssets`が増える経路)を全op網羅で洗い、丸め下限を証明 | 新規。モデルに donation 経路があるか(直接transfer経路の有無)の調査が前段 |
+| S5 | `no_inflation_attack` | **最重要**: 初回入金者が小額mint→donateで`totalAssets`を膨らませ、後続入金者のshareを丸めで0にする攻撃列が存在しない。**調査で確定(2026-07-07)**: `Op`型の全26操作+`vaultApxUSDBal`全書き込み経路を手動確認した結果、mintApyUSDを迂回して金庫にapxUSDを注入する「生transfer」原始操作は**存在しない**。`vaultApxUSDBal`増加は全て(a)share mint(lock)と対、(b)vest pool(特権`creditYield`のみ)。→ **一般攻撃者によるdonationインフレ攻撃は構造的に不可能**を肯定的に証明する(「金庫資産の非特権増加は必ずshare mintを伴う」)。唯一の疑似donationは特権`creditYield`で、これは第2の柱(脅威モデル)の管轄 | 新規。donation経路の不在は確認済み、あとは構造的免疫を全op網羅で証明 |
 
 ### Tier B: 中規模のモデル作業が必要
 
