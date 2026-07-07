@@ -488,6 +488,9 @@ This is the trace-level contrapositive of the single-step
 `apxUSD_credit_is_backed` (`BlastRadius.lean`): since every apxUSD credit is
 backed by a USDC payment or by settlement of the recipient's own previously
 funded unlock position, an address with no funding source can never be credited. -/
+@[formalMeta "No free value"
+  "No operation sequence of any length — including operations signed by the address itself — lets an address that starts penniless and receives no third-party gift end up holding a single unit of apxUSD: value cannot be created from nothing."
+  mainTheorem]
 theorem no_free_value_trace (s : State) (σ : List (Op × Address)) (a : Address)
     (h0 : Penniless a s)
     (h_no_gift : ∀ p ∈ σ, (∀ n, p.1 ≠ Op.mintApxUSD a n) ∧
@@ -560,6 +563,9 @@ theorem solvency_step (s : State) (op : Op) (caller : Address) (s' : State)
 overcollateralization is preserved across arbitrary traces (revert-skip semantics),
 given that ledger well-formedness holds at every point visited along the way and the
 trace never calls `claimUnlock`/`flexibleClaimUnlock`/`handleStressEvent`. -/
+@[formalMeta "Solvency preservation"
+  "Aggregate overcollateralization (apxUSD supply + buffer ≤ collateral + USDC reserve) is preserved across arbitrary operation traces, given ledger well-formedness at every step and excluding the three documented margin-consuming operations."
+  mainTheorem]
 theorem solvency_preserved (s : State) (σ : List (Op × Address))
     (h_solvent : Solvent s)
     (h_wf : ∀ n, WellFormed (execTrace s (σ.take n)))

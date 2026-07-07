@@ -1615,6 +1615,9 @@ Proved by lifting the single-step non-custodial lemmas
 (`no_role_transfers_user_funds`/`no_role_burns_user_shares`/`no_role_debits_usdc`)
 through the trace — the induction is packaged in
 `user_assets_immune_to_total_key_compromise`. -/
+@[formalMeta "No-theft ledger conservation"
+  "A passive bystander's transferable ledger (apxUSD + apyUSD shares + USDC) is non-decreasing across any operation trace even with every operator key compromised — the ledger form of the non-custodial guarantee."
+  mainTheorem]
 theorem no_theft_ledger (s : State) (σ : List (Op × Address)) (a : Address)
     (h_never_signs : ∀ p ∈ σ, p.2 ≠ a)
     (h_never_rfq_target : ∀ p ∈ σ, ∀ amount, p.1 ≠ Op.executeRFQRedemption a amount) :
@@ -2667,6 +2670,9 @@ their USDC stays 0 — a **total, uncompensated loss of principal**. Contrast ev
 row of `single_key_bounds`, where each key alone extracts 0. This is the memo's
 headline: user-fund security against a compromised admin rests entirely on the RFQ
 counterparty set and on the missing rate-limit / price-floor (T7/T8). -/
+@[formalMeta "Total-loss coalition witness"
+  "The one structural total-loss path, machine-checked: a compromised admin crashes redemptionValue to 0 via catastrophicBackstop, then an approved RFQ counterparty burns the victim's entire apxUSD for 0 USDC — 100% uncompensated loss, requiring two colluding roles."
+  mainTheorem]
 theorem admin_rfq_coalition_drains :
     ∃ (s s1 s2 : State) (victim counterparty amount : Nat),
       0 < amount ∧
