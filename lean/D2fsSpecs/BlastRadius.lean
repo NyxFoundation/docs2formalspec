@@ -3,7 +3,7 @@ import D2fsSpecs.Apyx
 /-!
 # Blast-radius theorems: damage upper bounds under privileged-key compromise
 
-This module proves the Tier-1 theorem list (T1-T4) of `docs/05-blast-radius.md`:
+This module belongs to the Tier-1 theorem list (T1-T4) of `docs/05-blast-radius.md`:
 upper bounds on user-asset loss when a privileged role's key is fully compromised
 (the social-engineering threat model, cf. Bybit 2025).
 
@@ -13,23 +13,28 @@ arbitrary sequence of operations with those callers, interleaved with honest tra
 A failed operation reverts (state unchanged), so a trace executes with revert-skip
 semantics (`execTrace`).
 
-The results are stated in two layers:
+Division of labor with the companion module `D2fsSpecs.ApyxBlastRadius` (which holds
+the single-step balance-field statements of T1-T4 by exhaustive case analysis):
 
-* **Exact-effect (frame) theorems** for every role-gated operation: a successful
-  `pause`/`unpause`/`creditYield`/admin-op/oracle-op is shown to equal the pre-state
-  with only its named non-asset fields overridden, so no balance, supply, reserve, or
-  unlock-position field can move.
-* **Non-custodial theorems (T4)**: for *any* operation by *any* caller, an address
-  that is not the caller can never have its `apyUSDBal`, `usdcBal`, or
-  `governanceTokenBal` decreased, and its `apxUSDBal` can decrease only through the
-  fully-compensated RFQ redemption path (`executeRFQRedemption`, paid in USDC at the
-  current `redemptionValue`). Trace-level corollary: even if **every** operator key
-  is stolen, a user who signs nothing and is not targeted by an approved RFQ
-  counterparty cannot lose a single unit of any balance.
+* **Exact-effect (frame) theorems** for every role-gated operation (here): a
+  successful `pause`/`unpause`/`creditYield`/admin-op/oracle-op is shown to equal the
+  pre-state with only its named non-asset fields overridden, so no balance, supply,
+  reserve, or unlock-position field can move.
+* **Trace forms** (here): the frame results are lifted by induction to arbitrarily
+  long attack traces (`execTrace`), giving the memo's headline shape
+  `userLoss(execSeq s₀ σ) ≤ B(R, s₀)` with `B` read off the surviving fields.
+* **Non-custodial theorems (T4)**: the single-step debit analyses live in the
+  companion module (`no_role_transfers_user_funds`, `no_role_burns_user_shares`,
+  `no_role_debits_usdc`); this module adds the pieces they leave open —
+  governance-token immutability, unlock-position seizure bounds — and the
+  trace-level headline: even if **every** operator key is stolen, a user who signs
+  nothing and is not targeted by an approved RFQ counterparty cannot lose a single
+  unit of any balance.
 
 Everything here is additive: the ground-truth model and its 81 requirement theorems
 in `D2fsSpecs/Apyx.lean` are untouched. Because that file's helper lemmas are
-`private`, the small set of step-inversion lemmas needed here is re-derived locally.
+`private`, the small set of step-inversion lemmas needed here is re-derived locally
+(named `inv_*` to distinguish them from the companion module's local `step_*_some`).
 -/
 
 namespace Apyx
@@ -413,5 +418,78 @@ theorem pauser_trace_blast_radius (s : State) (σ : List (Op × Address))
       calc { execTrace s1 σ with globalPause := b }
           = { s1 with globalPause := b } := ih s1 h_tail b
         _ = { s with globalPause := b } := hframe b
+
+/-! ## T2: `yield_distributor_cannot_extract`
+
+Full compromise of the `yieldDistributor` key cannot extract assets: the only
+operation the role authorizes is `creditYield`, which strictly *adds* funds
+(`usdcReserve` and `vestTotal` both increase by the credited amount) and resets the
+vesting clock. No user balance, supply, or unlock position is reachable.
+
+Liveness caveat (documented, not a safety violation): because `creditYield` resets
+`vestStart := now`, a compromised distributor can repeatedly credit `0` to postpone
+the vesting of already-credited yield indefinitely. The vest pool itself
+(`vestTotal`) and the reserve never decrease, so no asset is lost. -/
+
+/-- Exact effect of `creditYield`: it demands the yieldDistributor role, adds the
+amount to both the USDC reserve and the vest pool, resets the vesting clock, and
+touches nothing else. -/
+theorem step_creditYield_exact (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.creditYield amount) caller = some s') :
+    caller = s.yieldDistributor ∧
+    s' = { s with usdcReserve := s.usdcReserve + amount
+                  vestTotal := s.vestTotal + amount
+                  vestStart := s.now } := by
+  simp only [step] at h
+  split at h
+  · rename_i hc
+    exact ⟨by simpa using hc, (Option.some.inj h).symm⟩
+  · exact absurd h (by simp)
+
+/-- T2 (single step, frame form): a distributor-gated operation demands the
+yieldDistributor role, agrees with the pre-state on every field other than
+`usdcReserve`/`vestTotal`/`vestStart`, and the two asset-bearing fields among those
+can only **increase** — the role can pay in, never extract. (The balance-field
+instantiation of this statement is `Apyx.yield_distributor_cannot_extract` in the
+companion module `D2fsSpecs.ApyxBlastRadius`.) -/
+theorem yield_distributor_frame (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_gated : DistributorOp op) (h_step : step s op caller = some s') :
+    caller = s.yieldDistributor ∧
+    (∀ r v w, { s' with usdcReserve := r, vestTotal := v, vestStart := w }
+            = { s with usdcReserve := r, vestTotal := v, vestStart := w }) ∧
+    s.usdcReserve ≤ s'.usdcReserve ∧
+    s.vestTotal ≤ s'.vestTotal := by
+  obtain ⟨amount, rfl⟩ := h_gated
+  obtain ⟨hc, rfl⟩ := step_creditYield_exact s amount caller s' h_step
+  exact ⟨hc, fun _ _ _ => rfl, Nat.le_add_right _ _, Nat.le_add_right _ _⟩
+
+/-- T2 (trace form): an arbitrarily long attack trace consisting solely of
+distributor-gated operations leaves every field except
+`usdcReserve`/`vestTotal`/`vestStart` unchanged, and the reserve and vest pool
+never decrease. A yieldDistributor compromise cannot remove a single unit of
+value from the system. -/
+theorem yield_distributor_trace_blast_radius (s : State) (σ : List (Op × Address))
+    (h_gated : ∀ p ∈ σ, DistributorOp p.1) :
+    (∀ r v w, { execTrace s σ with usdcReserve := r, vestTotal := v, vestStart := w }
+            = { s with usdcReserve := r, vestTotal := v, vestStart := w }) ∧
+    s.usdcReserve ≤ (execTrace s σ).usdcReserve ∧
+    s.vestTotal ≤ (execTrace s σ).vestTotal := by
+  induction σ generalizing s with
+  | nil => exact ⟨fun _ _ _ => rfl, Nat.le_refl _, Nat.le_refl _⟩
+  | cons p σ ih =>
+    obtain ⟨op, c⟩ := p
+    have h_tail : ∀ q ∈ σ, DistributorOp q.1 :=
+      fun q hq => h_gated q (List.mem_cons_of_mem _ hq)
+    simp only [execTrace]
+    cases hstep : step s op c with
+    | none => exact ih s h_tail
+    | some s1 =>
+      obtain ⟨-, hframe, hres, hvest⟩ :=
+        yield_distributor_frame s op c s1 (h_gated (op, c) List.mem_cons_self) hstep
+      obtain ⟨ihframe, ihres, ihvest⟩ := ih s1 h_tail
+      refine ⟨fun r v w => ?_, Nat.le_trans hres ihres, Nat.le_trans hvest ihvest⟩
+      calc { execTrace s1 σ with usdcReserve := r, vestTotal := v, vestStart := w }
+          = { s1 with usdcReserve := r, vestTotal := v, vestStart := w } := ihframe r v w
+        _ = { s with usdcReserve := r, vestTotal := v, vestStart := w } := hframe r v w
 
 end Apyx
