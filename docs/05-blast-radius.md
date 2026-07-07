@@ -2,6 +2,16 @@
 
 (調査日 2026-07-07。docs2formalspec の次期テーマ: 「モデル内の要件証明」から「モデル外の攻撃に対する被害上限証明」への拡張)
 
+## 実装ステータス(2026-07-07)
+
+`lean/D2fsSpecs/BlastRadius.lean`(単一モジュール、namespace `Apyx`、公開定理35本、sorry 0・vacuous 0、全て `propext`/`Quot.sound` のみに依存)。`Apyx.lean`(81要件定理)は無傷 — blast-radius層は完全に追加的。
+
+- **Tier 1(T1-T4)完了**: pauser/yieldDistributor/admin の各ロール侵害が残高・供給量フィールドに触れないこと(単発+トレースレベル)。T4ヘッドライン `user_assets_immune_to_total_key_compromise` = 全鍵漏洩でも「署名せずRFQ標的でない傍観者」は残高を失わない。
+- **Tier 2(T5-T6)完了**: `no_theft_ledger`(傍観者の transferable 残高がトレース全体で非減少)、`oracle_alone_preserves_balances`(oracle鍵単独では抽出ゼロ)、`redeem_payout_formula` + `redeem_payout_has_no_cap`(払戻額 = `amount × redemptionValue / ray`、`redemptionValue` にクランプが無いため払戻額に上限が存在しないことを witness 付きで証明 — Tier 3 の動機)。
+- **未了**: 能動的no-extraction(caller双対台帳、in-scope安全性の能動的半分)、Tier 3(T7 rate-limit線形上限 / T8 timelock退出保証 / T9 区画化 / T10 結託表 — いずれも base `step` をラップした `step2` が必要)。
+
+インフラ: `execTrace`(revert-skip意味論のトレース実行器)、ロール述語 `PauserOp`/`DistributorOp`/`AdminOp`/`OracleOp`、各opの exact-effect frame lemma、`reserve_outflow_only_via_redemption`(reserve減少はredemption経由のみ = T5/T9/T10 の帰納ステップ)、`redemption_price_admin_only`(redemption価格はadmin `catastrophicBackstop` 専有)。
+
 ## 1. 動機: エクスプロイトの主戦場はもうコードバグではない
 
 - Chainalysis 2025年報告: 盗難額の **43.8% が秘密鍵の漏洩**由来(2024年)。個人ウォレット侵害は2022年の7.3%から2024年には盗難総額の44%へ。
