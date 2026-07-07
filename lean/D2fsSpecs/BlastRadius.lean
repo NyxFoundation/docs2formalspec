@@ -2320,4 +2320,79 @@ theorem timelock_wrapper_is_live :
     [TLOp.queue Op.catastrophicBackstop 0, TLOp.tick, TLOp.execute 0], rfl, ?_⟩
   decide
 
+/-! ## T9 `compartmentalization` — a role compromise's footprint is confined to its subsystem
+
+Base-model theorems (not wrapper/DESIGN): faithful field-level projections of the
+Tier-1 trace frames, stating each compromise's blast radius as a *compartment*.
+
+* The yield-distributor compartment is the **vesting pool and its USDC inflow**
+  (`vestTotal`/`usdcReserve`/`vestStart`): an all-distributor trace leaves every
+  principal field — user apxUSD/apyUSD/USDC/governance balances, both supplies, the
+  vault's apxUSD, i.e. everything users own or that backs what they own — bitwise
+  unchanged, and the two asset-bearing compartment fields can only move **upward**
+  (the role pays in, never out). A distributor compromise can distort *future yield
+  accrual*, never principal.
+* The pauser compartment is the **`globalPause` liveness bit alone**: an all-pauser
+  trace leaves every principal field *and* every pricing parameter unchanged. A
+  pauser compromise is a freeze, never a loss. -/
+
+/-- T9 `distributor_compartmentalized` (docs/05-blast-radius.md, Tier 3):
+a yieldDistributor compromise is confined to the vesting-pool compartment.
+Over any all-`DistributorOp` trace the principal fields are all bitwise unchanged,
+and the only movable asset fields — the vest pool `vestTotal` and the reserve
+`usdcReserve` it feeds — move only upward (`vestStart`, the vesting clock anchor,
+may also be rewritten; that is the liveness caveat documented at T2). Projection of
+`yield_distributor_trace_blast_radius`. -/
+theorem distributor_compartmentalized (s : State) (σ : List (Op × Address))
+    (h_gated : ∀ p ∈ σ, DistributorOp p.1) :
+    (execTrace s σ).apxUSDBal = s.apxUSDBal ∧
+    (execTrace s σ).apyUSDBal = s.apyUSDBal ∧
+    (execTrace s σ).usdcBal = s.usdcBal ∧
+    (execTrace s σ).governanceTokenBal = s.governanceTokenBal ∧
+    (execTrace s σ).vaultApxUSDBal = s.vaultApxUSDBal ∧
+    (execTrace s σ).totalSupply_apxUSD = s.totalSupply_apxUSD ∧
+    (execTrace s σ).totalSupply_apyUSD = s.totalSupply_apyUSD ∧
+    s.usdcReserve ≤ (execTrace s σ).usdcReserve ∧
+    s.vestTotal ≤ (execTrace s σ).vestTotal := by
+  obtain ⟨hframe, hres, hvest⟩ := yield_distributor_trace_blast_radius s σ h_gated
+  have h := hframe 0 0 0
+  exact ⟨by simpa using congrArg State.apxUSDBal h,
+    by simpa using congrArg State.apyUSDBal h,
+    by simpa using congrArg State.usdcBal h,
+    by simpa using congrArg State.governanceTokenBal h,
+    by simpa using congrArg State.vaultApxUSDBal h,
+    by simpa using congrArg State.totalSupply_apxUSD h,
+    by simpa using congrArg State.totalSupply_apyUSD h,
+    hres, hvest⟩
+
+/-- T9 companion, `pauser_compartmentalized`: a pauseController compromise is
+confined to the `globalPause` liveness bit. Over any all-`PauserOp` trace every
+principal field and every pricing parameter — in particular `redemptionValue` — is
+bitwise unchanged. (The complete frame, covering *all* fields at once, is
+`pauser_trace_blast_radius`; this is its named-field projection for the coalition
+table.) -/
+theorem pauser_compartmentalized (s : State) (σ : List (Op × Address))
+    (h_gated : ∀ p ∈ σ, PauserOp p.1) :
+    (execTrace s σ).apxUSDBal = s.apxUSDBal ∧
+    (execTrace s σ).apyUSDBal = s.apyUSDBal ∧
+    (execTrace s σ).usdcBal = s.usdcBal ∧
+    (execTrace s σ).governanceTokenBal = s.governanceTokenBal ∧
+    (execTrace s σ).vaultApxUSDBal = s.vaultApxUSDBal ∧
+    (execTrace s σ).totalSupply_apxUSD = s.totalSupply_apxUSD ∧
+    (execTrace s σ).totalSupply_apyUSD = s.totalSupply_apyUSD ∧
+    (execTrace s σ).usdcReserve = s.usdcReserve ∧
+    (execTrace s σ).vestTotal = s.vestTotal ∧
+    (execTrace s σ).redemptionValue = s.redemptionValue := by
+  have h := pauser_trace_blast_radius s σ h_gated false
+  exact ⟨by simpa using congrArg State.apxUSDBal h,
+    by simpa using congrArg State.apyUSDBal h,
+    by simpa using congrArg State.usdcBal h,
+    by simpa using congrArg State.governanceTokenBal h,
+    by simpa using congrArg State.vaultApxUSDBal h,
+    by simpa using congrArg State.totalSupply_apxUSD h,
+    by simpa using congrArg State.totalSupply_apyUSD h,
+    by simpa using congrArg State.usdcReserve h,
+    by simpa using congrArg State.vestTotal h,
+    by simpa using congrArg State.redemptionValue h⟩
+
 end Apyx
