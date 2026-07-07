@@ -1,5 +1,9 @@
 # docs2formalspec
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+[![Lean 4.31.0](https://img.shields.io/badge/lean-4.31.0-purple.svg)](lean/lean-toolchain)
+
 Turn a protocol's own documentation into **a normative RFC 2119 specification** and **a machine-checked
 Lean 4 formal model** — automatically, then optionally hardened by hand. Runs on local-class LLMs via
 Ollama Cloud (OpenAI-compatible). Destined to become a harness plugin callable from the
@@ -29,19 +33,9 @@ for the survey of adjacent work this design draws on, and
 ## Case study: Apyx
 
 Run end-to-end against [Apyx](https://docs.apyx.fi) (a dividend-backed stablecoin protocol), then taken
-further by hand — see [`outputs/apyx/README.md`](outputs/apyx/README.md) for the full verification report
-and [`docs/03-eval-log.md`](docs/03-eval-log.md) for the complete run history:
-
-| Metric | Automated pipeline (Run 15) | + 6 rounds hand-verification |
-|---|---|---|
-| Requirements extracted (formalizable) | 82 (77) | — |
-| Lean 4 compilation | ✅ passes | ✅ passes |
-| Theorems proved (of theorems generated) | 4 / 55 | **81 / 81 (100%, 0 `sorry`)** |
-| Vacuous theorems | 0 | 0 |
-| Faithful coverage (full + partial, judge majority vote) | 53% | **~95%** |
-
-Two real access-control gaps in the formal model were found and fixed along the way (an unauthorized
-unlock-claim path, and an under-scoped pricing guarantee) — see the case-study README for detail.
+further by hand. Full verification report, results, and methodology:
+[`outputs/apyx/README.md`](outputs/apyx/README.md) (complete run history in
+[`docs/03-eval-log.md`](docs/03-eval-log.md)).
 
 ## Installation
 

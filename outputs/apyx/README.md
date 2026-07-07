@@ -1,12 +1,11 @@
 # Apyx Protocol — Formal Verification Report
 
-**Subject system:** Apyx (apyx.fi) — apxUSD / apyUSD dividend-backed stablecoin protocol
-**Contract addresses (Ethereum mainnet, per ingested source docs):**
-apxUSD [`0x98A878b1Cd98131B271883B390f68D2c90674665`](https://etherscan.io/address/0x98A878b1Cd98131B271883B390f68D2c90674665) ·
-apyUSD [`0x38EEb52F0771140d10c4E9A9a72349A329Fe8a6A`](https://etherscan.io/address/0x38EEb52F0771140d10c4E9A9a72349A329Fe8a6A) ·
-UnlockToken [`0x93775E2dFa4e716c361A1f53F212c7AE031BF4e6`](https://etherscan.io/address/0x93775E2dFa4e716c361A1f53F212c7AE031BF4e6)
-**Tool:** [docs2formalspec](https://github.com/NyxFoundation/docs2formalspec) (docs → RFC 2119 spec → Lean 4 machine-checked model)
-**Report date:** 2026-07-07
+| | |
+|---|---|
+| **Subject system** | Apyx (apyx.fi) — apxUSD / apyUSD dividend-backed stablecoin protocol |
+| **Contract addresses** (Ethereum mainnet, per ingested source docs) | apxUSD [`0x98A8…4665`](https://etherscan.io/address/0x98A878b1Cd98131B271883B390f68D2c90674665) · apyUSD [`0x38EE…8a6A`](https://etherscan.io/address/0x38EEb52F0771140d10c4E9A9a72349A329Fe8a6A) · UnlockToken [`0x9377…BF4e6`](https://etherscan.io/address/0x93775E2dFa4e716c361A1f53F212c7AE031BF4e6) |
+| **Tool** | [docs2formalspec](https://github.com/NyxFoundation/docs2formalspec) (docs → RFC 2119 spec → Lean 4 machine-checked model) |
+| **Report date** | 2026-07-07 |
 
 ## What this is, and what it is not
 
