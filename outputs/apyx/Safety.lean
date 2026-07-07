@@ -52,7 +52,7 @@ namespace Apyx
 
 @[simp] private theorem pvS_vaultApxUSDBal (s : State) :
     (pullVestedYield s).vaultApxUSDBal = s.vaultApxUSDBal + vestedAmount s s.now := by
-  unfold pullVestedYield; dsimp only; split <;> simp_all
+  unfold pullVestedYield vestedAmount; dsimp only; split <;> simp_all
 
 /-! ## Local step-inversion lemmas
 
@@ -673,11 +673,11 @@ of the pre-state) and there is at least one pre-existing share (`TS > 0`, i.e. a
 existing holder to protect from dilution). -/
 @[simp] private theorem computeExchangeRate_emitEvent (s : State) (n : String) (a : List Nat) :
     computeExchangeRate (emitEvent s n a) = computeExchangeRate s := by
-  simp [emitEvent, computeExchangeRate, totalAssets, vestedAmount]
+  simp [emitEvent, computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount]
 
 @[simp] private theorem computeExchangeRate_updateExchangeRate (s : State) :
     computeExchangeRate (updateExchangeRate s) = computeExchangeRate s := by
-  simp [updateExchangeRate, computeExchangeRate, totalAssets, vestedAmount]
+  simp [updateExchangeRate, computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount]
 
 private theorem rate_non_decreasing_of_deposit
     (TA TS amount R : Nat) (hTS : 0 < TS) (hbacked : R * TS ≤ TA * ray) :
@@ -720,10 +720,12 @@ theorem no_dilution (s : State) (amount : Nat) (caller h : Address) (s' : State)
     rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
   have hvp : s'.vestPeriod = s.vestPeriod := by
     rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  have hfv : s'.fullyVestedAmount = s.fullyVestedAmount := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
   have hvbal : s'.vaultApxUSDBal = s.vaultApxUSDBal + amount := by
     rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
   have hva : vestedAmount s' s'.now = vestedAmount s s.now := by
-    unfold vestedAmount; rw [hvs, hvt, hnow, hvp]
+    unfold vestedAmount newlyVestedAmount; rw [hfv, hvs, hvt, hnow, hvp]
   have hTA : totalAssets s' = totalAssets s + amount := by
     unfold totalAssets; rw [hvbal, hva]; omega
   have hTS' : s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount s.exchangeRate := by
@@ -732,7 +734,7 @@ theorem no_dilution (s : State) (amount : Nat) (caller h : Address) (s' : State)
   have hcomp : s'.exchangeRate = computeExchangeRate s' := by
     rw [hs']
     simp [emitEvent, updateExchangeRate, computeExchangeRate, totalAssets, vestedAmount,
-      mintApyUSD, burnApxUSD]
+      newlyVestedAmount, mintApyUSD, burnApxUSD]
   have hrate : s'.exchangeRate
       = (totalAssets s + amount) * ray / (s.totalSupply_apyUSD + lockShares amount s.exchangeRate) := by
     rw [hcomp]; unfold computeExchangeRate
@@ -1063,9 +1065,11 @@ theorem caller_net_nonpositive (s : State) (op : Op) (caller : Address) (s' : St
 
 /-! ## S7 `vest_no_early_drain` — vested yield cannot be pulled forward ahead of schedule
 
-`vestedAmount` is the linear-vesting read of the pool: `min (linear elapsed-based amount)
-vestTotal`. The no-early-drain property is three arithmetic/definitional facts about it and
-about `pullVestedYield`'s interaction with it — no `step`/`Op` case analysis, so no
+`vestedAmount` is the two-accumulator read of the pool: the previously-realized
+`fullyVestedAmount` plus whatever has newly streamed out of the current `vestTotal`/
+`vestStart`/`vestPeriod` clock (`min (linear elapsed-based amount) vestTotal`). The
+no-early-drain property is three arithmetic/definitional facts about it and about
+`pullVestedYield`'s interaction with it — no `step`/`Op` case analysis, so no
 deep-recursion risk. (Re-derived from scratch: the equivalents `vestedAmount_mono`/
 `vestedAmount_le_total` in `Apyx.lean` are `private` to that file.) -/
 
@@ -1077,24 +1081,32 @@ private theorem div_mul_le_total (e P T : Nat) (h : e ≤ P) : e * T / P ≤ T :
   · calc e * T / P ≤ P * T / P := Nat.div_le_div_right (Nat.mul_le_mul_right _ h)
       _ = T := Nat.mul_div_cancel_left _ hp
 
-/-- (b) `vestedAmount` never exceeds the pool total `vestTotal`: the vest stream can never
-realize more value than was ever credited to it. -/
-theorem vestedAmount_le_vestTotal (s : State) (n : Nat) :
-    vestedAmount s n ≤ s.vestTotal := by
-  unfold vestedAmount
+/-- (b) `vestedAmount` never exceeds the previously-realized `fullyVestedAmount`
+accumulator plus the total of the currently-streaming pool `vestTotal`: the vest
+stream (in either accumulator) can never realize more value than was ever credited
+to it. (Two-accumulator model: `vestedAmount s n ≤ s.vestTotal` alone is now FALSE —
+`fullyVestedAmount` can be positive with `vestTotal = 0`, e.g. right after a
+`pullVestedYield`-adjacent credit. This is the re-derived local copy of `Apyx.lean`'s
+private `vestedAmount_le_total`, via the streaming-only bound
+`newlyVestedAmount_le_vestTotal` below.) -/
+private theorem newlyVestedAmount_le_vestTotal (s : State) (n : Nat) :
+    newlyVestedAmount s n ≤ s.vestTotal := by
+  unfold newlyVestedAmount
   dsimp only
   repeat' split
   · exact Nat.zero_le _
   · exact Nat.le_refl _
   · exact div_mul_le_total _ _ _ (by omega)
 
-/-- (a) `vestedAmount` is monotone non-decreasing in the time argument: the realizable
-share of the vest pool never shrinks as time passes, so it cannot be "pulled forward" and
-then un-pulled — realization only ever catches up to the linear schedule, never ahead of
-it (that half is (b)) and never behind where it already was (this half). -/
-theorem vestedAmount_monotone (s : State) {n m : Nat} (h : n ≤ m) :
-    vestedAmount s n ≤ vestedAmount s m := by
-  unfold vestedAmount
+theorem vestedAmount_le_total (s : State) (n : Nat) :
+    vestedAmount s n ≤ s.fullyVestedAmount + s.vestTotal :=
+  Nat.add_le_add_left (newlyVestedAmount_le_vestTotal s n) _
+
+/-- `newlyVestedAmount` is monotone in time (re-derived local copy of `Apyx.lean`'s
+private `newlyVestedAmount_mono`). -/
+private theorem newlyVestedAmount_monotone (s : State) {n m : Nat} (h : n ≤ m) :
+    newlyVestedAmount s n ≤ newlyVestedAmount s m := by
+  unfold newlyVestedAmount
   dsimp only
   repeat' split
   all_goals first
@@ -1103,6 +1115,17 @@ theorem vestedAmount_monotone (s : State) {n m : Nat} (h : n ≤ m) :
     | (exfalso; omega)
     | exact div_mul_le_total _ _ _ (by omega)
     | exact Nat.div_le_div_right (Nat.mul_le_mul_right _ (by omega))
+
+/-- (a) `vestedAmount` is monotone non-decreasing in the time argument: the realizable
+share of the vest pool never shrinks as time passes, so it cannot be "pulled forward" and
+then un-pulled — realization only ever catches up to the linear schedule, never ahead of
+it (that half is (b)) and never behind where it already was (this half). Only the
+streaming portion (`newlyVestedAmount`) depends on `now`; `fullyVestedAmount` is a fixed
+state field, so monotonicity of the sum follows directly from monotonicity of the
+streaming term. -/
+theorem vestedAmount_monotone (s : State) {n m : Nat} (h : n ≤ m) :
+    vestedAmount s n ≤ vestedAmount s m :=
+  Nat.add_le_add_left (newlyVestedAmount_monotone s h) _
 
 /-- (c) `pullVestedYield` moves *exactly* `vestedAmount s s.now` into custody
 (`vaultApxUSDBal`) and no more — restated from the local frame lemma `pvS_vaultApxUSDBal`
@@ -1115,69 +1138,78 @@ theorem pullVestedYield_moves_exactly_vested (s : State) :
 already-vested-but-unrealized yield cannot be pulled forward faster than its linear
 schedule and cannot be over-realized. (a) `vestedAmount` is monotone non-decreasing in
 time — realization only ever advances, never regresses, so there is no way to "double-dip"
-by rewinding the clock. (b) `vestedAmount s n` never exceeds `s.vestTotal` for any `n` — no
-sequence of calls at any times can ever realize more than what was ever credited to the
-pool. (c) `pullVestedYield` — the sole channel by which `withdraw`/`redeem` realize vested
-yield into spendable custody (`vaultApxUSDBal`) — moves *exactly* `vestedAmount s s.now`,
-no more: a single call cannot over-drain the currently-vested amount, and by (a)/(b) no
-sequence of calls (at whatever times) can exceed `vestTotal` in aggregate either. -/
+by rewinding the clock. (b) `vestedAmount s n` never exceeds `s.fullyVestedAmount +
+s.vestTotal` for any `n` — no sequence of calls at any times can ever realize more than
+what was ever credited to the pool, across *either* accumulator of the two-accumulator
+model (the previously-realized `fullyVestedAmount` plus whatever remains in the
+currently-streaming `vestTotal`). (c) `pullVestedYield` — the sole channel by which
+`withdraw`/`redeem` realize vested yield into spendable custody (`vaultApxUSDBal`) —
+moves *exactly* `vestedAmount s s.now`, no more: a single call cannot over-drain the
+currently-vested amount, and by (a)/(b) no sequence of calls (at whatever times) can
+exceed `fullyVestedAmount + vestTotal` in aggregate either. -/
 theorem vest_no_early_drain (s : State) :
     (∀ n m, n ≤ m → vestedAmount s n ≤ vestedAmount s m) ∧
-    (∀ n, vestedAmount s n ≤ s.vestTotal) ∧
+    (∀ n, vestedAmount s n ≤ s.fullyVestedAmount + s.vestTotal) ∧
     (pullVestedYield s).vaultApxUSDBal = s.vaultApxUSDBal + vestedAmount s s.now :=
-  ⟨fun _ _ h => vestedAmount_monotone s h, vestedAmount_le_vestTotal s,
+  ⟨fun _ _ h => vestedAmount_monotone s h, vestedAmount_le_total s,
    pullVestedYield_moves_exactly_vested s⟩
 
 /-! ## Investigation — does `creditYield`'s `vestStart` reset forfeit already-accrued
-yield? (design memo §4b)
+yield? (design memo §4b) — **resolved: no, it does not.**
 
 `Op.creditYield` (`yieldDistributor`-gated; see `step_creditYield_exact`, `BlastRadius.lean`)
-sets `vestStart := s.now` and `vestTotal := s.vestTotal + amount`, but does **not** first
-call `pullVestedYield` to realize the *old* stream's already-accrued
-`vestedAmount s s.now` into `vaultApxUSDBal`. The theorem below settles the question
-formally: it **forfeits** (temporarily displaces) exactly that pending amount.
+resets `vestStart := s.now`, but the *model* — like the underlying `LinearVestV0` contract —
+realizes the currently-streaming portion of the old clock into the `fullyVestedAmount`
+accumulator FIRST (`fullyVestedAmount := s.fullyVestedAmount + newlyVestedAmount s s.now`),
+*before* folding the remainder plus the fresh `amount` into the freshly-restarted
+`vestTotal`/`vestStart` clock (`vestTotal := (s.vestTotal - newlyVestedAmount s s.now) +
+amount`). This is the two-accumulator, "accrue-first" design.
 
-**Verdict: forfeits, not conserves — but as a timing displacement, not a permanent burn.**
-Resetting `vestStart` to `s.now` makes `elapsed = 0` for the *entire* new pool (old
-remaining total plus the fresh `amount`), so `vestedAmount` immediately after the credit is
-`0` (Lean's `if elapsed ≥ vestPeriod` branch is not taken once `vestPeriod > 0`), regardless
-of how much of the old stream had already vested. Since `vaultApxUSDBal` itself is untouched
-by `creditYield` (`donation_free_no_creditYield` above), `totalAssets` — the
-protocol-accounted realizable value (`vaultApxUSDBal + vestedAmount s s.now`) — drops by
-*exactly* the old stream's unrealized-but-accrued `vestedAmount s s.now` at the instant of
-the credit. Concretely: `totalAssets s' = totalAssets s - vestedAmount s s.now` (not `+
-amount` as one might expect from "crediting more yield"). This is a real accounting defect:
-any `withdraw`/`redeem`/exchange-rate read taken *immediately* after a `creditYield` quotes
-a lower `totalAssets` — hence a lower `exchangeRate` and lower payout per apyUSD share —
-than it would have without the reset, exactly by the amount that had already vested and was
-about to become spendable. The value is not permanently destroyed: because `vestTotal` is
-not reduced by the old `vestedAmount` (only increased by `amount`), the *entire* enlarged
-pool — including the portion that was already vested — vests again from scratch over the
-new `vestPeriod`, so given enough elapsed time with no further reset it is eventually
-released in full. But each subsequent `creditYield` re-triggers the same reset, so a
-distributor calling `creditYield` more often than once per `vestPeriod` can perpetually
-postpone realization of the pending portion — a genuine, privileged-role accounting bug
-(not an ordinary-attacker exploit; `creditYield` is `yieldDistributor`-gated), and exactly
-the kind of finding this verification effort exists to surface. -/
-theorem creditYield_forfeits_pending_vest (s : State) (amount : Nat) (caller : Address)
+**Earlier finding, now superseded.** An earlier revision of this model had `creditYield`
+reset `vestStart` *without* first realizing the elapsed portion into any accumulator, so the
+reset silently erased whatever had already linearly vested but not yet been pulled into
+`vaultApxUSDBal` — a genuine forfeiture, captured at the time by a theorem of this name that
+proved `vestedAmount s' s'.now = 0` and `totalAssets s' < totalAssets s` immediately after a
+credit. Cross-checking `LinearVestV0.sol` showed the real contract does **not** have this
+bug: it accrues the streamed portion into its own `fullyVestedAmount`-equivalent accumulator
+before restarting the clock. The model was corrected to match (see `Apyx.lean`'s `State`,
+`pullVestedYield`, `Op.creditYield`, `Op.setVestPeriod`, and
+`req_credit_preserves_accrued_vest`), and the theorem below now proves the conservation the
+contract actually guarantees: crediting new yield never forfeits — nor even moves — any
+value that had already accrued. -/
+
+/-- **`creditYield_preserves_accrued_vest`** (resolves the design-memo §4b forfeiture
+question, now negatively): crediting new yield via `Op.creditYield` does **not** forfeit
+value that has already streamed out of the vest but has not yet been pulled into vault
+custody. Immediately after the credit — evaluated at the unchanged `now`, before any further
+time passes — the total reportable `vestedAmount` is exactly unchanged: the newly credited
+`amount` itself has correctly not yet started streaming (0% elapsed since the clock was just
+re-anchored at `now`), but nothing that had already vested under the old clock is lost — it
+was realized into `fullyVestedAmount` first. Since `vaultApxUSDBal` itself is untouched by
+`creditYield` (`donation_free_no_creditYield` above) and `vestedAmount` is exactly preserved,
+`totalAssets` (`vaultApxUSDBal + vestedAmount s s.now`) is preserved too: a `withdraw`/
+`redeem`/exchange-rate read taken immediately after a `creditYield` quotes exactly the same
+`totalAssets`, `exchangeRate`, and payout per apyUSD share as it would have without the
+credit (the fresh `amount` joins the still-streaming pool for its own future vesting, on
+top). Requires `0 < vestPeriod`: with a degenerate zero-length vesting period every stream
+(old and new) is defined to be 100% vested instantaneously, which is a distinct, correctly
+non-forfeiting degenerate case this theorem does not need to isolate. Mirrors `Apyx.lean`'s
+`req_credit_preserves_accrued_vest`, re-derived here via the public `step_creditYield_exact`
+(`BlastRadius.lean`) rather than unfolding `step` directly. -/
+theorem creditYield_preserves_accrued_vest (s : State) (amount : Nat) (caller : Address)
     (s' : State) (h_step : step s (Op.creditYield amount) caller = some s')
-    (hvp : 0 < s.vestPeriod) (hpos : 0 < vestedAmount s s.now) :
-    vestedAmount s' s'.now = 0 ∧
-    totalAssets s' + vestedAmount s s.now = totalAssets s ∧
-    totalAssets s' < totalAssets s := by
+    (hvp : 0 < s.vestPeriod) :
+    vestedAmount s' s'.now = vestedAmount s s.now ∧
+    totalAssets s' = totalAssets s := by
   obtain ⟨-, hs'⟩ := step_creditYield_exact s amount caller s' h_step
   have hvbal : s'.vaultApxUSDBal = s.vaultApxUSDBal := by rw [hs']
-  have hvz : vestedAmount s' s'.now = 0 := by
+  have hva : vestedAmount s' s'.now = vestedAmount s s.now := by
     rw [hs']
-    unfold vestedAmount
-    dsimp only
-    rw [if_neg (by omega), if_neg (by omega)]
-    simp
-  have hTA' : totalAssets s' = s.vaultApxUSDBal := by
-    unfold totalAssets
-    rw [hvbal, hvz]
-    omega
-  have hTA : totalAssets s = s.vaultApxUSDBal + vestedAmount s s.now := rfl
-  refine ⟨hvz, ?_, ?_⟩ <;> rw [hTA', hTA] <;> omega
+    simp only [vestedAmount, newlyVestedAmount, Nat.sub_self, Nat.zero_mul, Nat.zero_div]
+    repeat' split
+    all_goals omega
+  refine ⟨hva, ?_⟩
+  unfold totalAssets
+  rw [hvbal, hva]
 
 end Apyx
