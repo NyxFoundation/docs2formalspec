@@ -11,9 +11,15 @@
 
 This report documents a **model-based formal verification exercise**: Apyx's public documentation was
 turned into a normative RFC 2119 specification, then into a Lean 4 state-machine model of the protocol,
-against which 81 theorems are mechanically proved by the Lean 4 kernel — the strongest correctness
+against which theorems are mechanically proved by the Lean 4 kernel — the strongest correctness
 guarantee available (not testing, not a heuristic checker; each proof is checked by a trusted, tiny proof
-kernel).
+kernel). Two complementary bodies of proof were produced:
+
+1. **Requirement conformance** (§4) — 81 theorems showing the model satisfies its documented RFC 2119
+   requirements (the "does it do what the docs say" question).
+2. **Key-compromise blast-radius** (§6) — 56 additional theorems bounding user-asset loss when a
+   privileged operator key is *stolen* (the "what if our multisig / oracle / admin gets phished" question,
+   which — per Chainalysis — is the cause of ~44% of real crypto theft, not contract bugs).
 
 **This is not a substitute for a professional smart-contract security audit** (Certora, Quantstamp, Zellic,
 Halborn, etc. — Apyx already has several, see `corpus.md`). It verifies a *hand-built abstract model* of
@@ -100,8 +106,9 @@ report are a **majority vote over 3 independent runs**, not a single sample.
 | [`requirements.json`](requirements.json) | 82 extracted RFC 2119 requirements, each with `id`, `category`, `statement`, `rationale`, `source_quote`, `formalizable` flag |
 | [`SPEC.md`](SPEC.md) | Rendered RFC 2119 specification document (human-readable, organized by category) |
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine (actors, state variables, operations, guarantees) |
-| [`Apyx.lean`](Apyx.lean) | **The formal model and all 81 proofs** — `State`, `Op`, `step`, and one `theorem req_*` per formalizable requirement, each with an RFC 2119 docstring |
-| [`leancheck.json`](leancheck.json) | Compile status: `81` theorems, `0` sorry, `0` vacuous, `81` mechanically proved |
+| [`Apyx.lean`](Apyx.lean) | **The formal model and all 81 requirement proofs** — `State`, `Op`, `step`, and one `theorem req_*` per formalizable requirement, each with an RFC 2119 docstring |
+| [`BlastRadius.lean`](../../lean/D2fsSpecs/BlastRadius.lean) | **The 56 key-compromise blast-radius proofs** (§6) — trace executor, per-role damage bounds, and the rate-limit / timelock defense wrappers, all imported from and additive to `Apyx.lean` (which it leaves untouched) |
+| [`leancheck.json`](leancheck.json) | Compile status: `81` requirement theorems, `0` sorry, `0` vacuous, `81` mechanically proved |
 | [`review.json`](review.json) | Faithfulness verdicts (majority vote over 3 runs) + per-requirement vote records |
 | [`review_run1.json`](review_run1.json), [`review_run2.json`](review_run2.json), [`review_run3.json`](review_run3.json) | Raw per-run judge output, kept for reproducibility of the majority vote |
 | [`archive/`](archive/) | Prior automated-pipeline runs (Run 2, 9, 11, 12, 13), kept for comparison |
@@ -213,13 +220,86 @@ specific gap on any individual requirement.
 
 ---
 
-## 6. Coverage summary
+## 6. Key-compromise blast-radius analysis (56 theorems, 0 `sorry`)
+
+The §4 requirement proofs assume every actor behaves as documented. This section answers a different,
+harder question that documentation never addresses: **if a privileged operator key is stolen — the
+social-engineering / infrastructure-compromise threat that caused the Bybit $1.5B loss and ~44% of 2024
+crypto theft — how much can the attacker take?** All proofs are in
+[`BlastRadius.lean`](../../lean/D2fsSpecs/BlastRadius.lean), machine-checked, additive to and leaving
+`Apyx.lean` untouched.
+
+The threat model: the attacker holds the private key of one or more role addresses (`admin`, `oracle`,
+`pauseController`, `yieldDistributor`) and may submit an arbitrary sequence of operations from those
+addresses, interleaved with honest traffic (modeled by `execTrace`, with reverted operations skipped).
+
+### 6.1 Results about the current protocol model
+
+**No single stolen key can extract principal.** Proved for each role, over arbitrary-length attack traces:
+
+| Stolen key | Proved blast radius | Theorem |
+|---|---|---|
+| `pauseController` | Liveness only (can freeze the protocol; touches no balance) | `pauser_trace_blast_radius` |
+| `yieldDistributor` | Can only *donate* into the vest pool; never debits any holding | `yield_distributor_trace_blast_radius`, `distributor_compartmentalized` |
+| `oracle` | Zero balance movement — can only shift price *parameters* | `oracle_alone_preserves_balances` |
+| `admin` | Cannot move any balance/supply field (only policy parameters) | `admin_cannot_touch_balances` |
+| **any / all of the above** | A user who signs nothing and isn't RFQ-targeted loses **nothing** | `user_assets_immune_to_total_key_compromise`, `no_theft_ledger` |
+
+The headline: **even with every operator key stolen at once, a passive user's four balances cannot
+decrease** (`user_assets_immune_to_total_key_compromise`). This is the formal, machine-checked version of
+"non-custodial: we cannot move your funds even if we wanted to." Its active complement is also proved —
+there is no operation sequence by which *any* caller mints apxUSD for free; every credit is backed by an
+equal USDC payment or the settlement of the recipient's own pre-existing locked position
+(`apxUSD_credit_is_backed`).
+
+**The one total-loss path — a two-key coalition.** The proofs isolate exactly one way user principal can be
+drained, and it requires **two** compromised roles acting together: `admin` **+** an approved RFQ
+counterparty (`admin_rfq_coalition_drains`). The admin drives `redemptionValue` to 0 (via
+`catastrophicBackstop`, which has no lower bound / clamp in the model), after which the RFQ counterparty's
+`executeRFQRedemption` burns a victim's apxUSD for **exactly 0 USDC**. The proofs pin this to precisely two
+channels (`redemption_price_admin_only`, `reserve_outflow_only_via_redemption`), and show it is *unbounded*:
+redemption payout is exactly `amount × redemptionValue / ray` with no in-model cap on `redemptionValue`
+(`redeem_payout_formula`, `redeem_payout_has_no_cap`).
+
+**Actionable conclusion for Apyx:** user funds' safety against a compromised admin rests entirely on (a)
+the trustworthiness of the approved RFQ counterparty set, and (b) the *absence* of three defenses the
+current model lacks — a redemption-price floor, a withdrawal rate limit, and a timelock on admin changes.
+(This mirrors Yearn's real-world finding that Apyx's `ApxUSDRateOracle.setRate` sits behind a 0-second
+timelock.)
+
+### 6.2 Design theorems — what the missing defenses would guarantee
+
+To quantify the value of the defenses (a)–(b), two are formalized as *wrappers* over the base model and
+proved to deliver hard guarantees. **These describe mechanisms the current protocol does not have** — they
+are recommendations backed by proof, not properties of the deployed system:
+
+- **Rate limit** (`rate_limit_linear_bound`): with a per-epoch outflow cap, cumulative reserve loss is
+  provably `≤ cap × (epochs elapsed + 1)` — i.e. **damage is at most linear in time**, no matter how an
+  all-keys attacker sequences operations. (ERC-7265-style circuit breaker.)
+- **Timelock / escape hatch** (`timelock_escape_guarantee`): with a delay queue on privileged operations, a
+  queued admin change provably cannot take effect until `delay` ticks after it was queued — a **guaranteed
+  window for users to exit** before any change lands. The base model is separately proved to have *no* such
+  window (`base_model_has_no_timelock`: admin changes take effect in the same step, instantly).
+
+### 6.3 Scope and honesty caveats
+
+Same model-level caveat as §"What this is not": these are properties of the abstract Lean model, not the
+deployed Solidity. The §6.2 wrapper theorems are explicitly about *hypothetical* defenses. Of the 56
+theorems, 55 depend only on Lean's standard `propext`/`Quot.sound` axioms and one
+(`admin_rfq_coalition_drains`) additionally on `Classical.choice` — all three are the standard trusted
+axioms of Lean's logic; none is `sorry` or an unproved assumption. Full method and the T1–T10 theorem
+roadmap: [`docs/05-blast-radius.md`](https://github.com/NyxFoundation/docs2formalspec/blob/main/docs/05-blast-radius.md).
+
+---
+
+## 7. Coverage summary
 
 | Metric | Value |
 |---|---|
 | Requirements extracted | 82 (77 formalizable, 5 out of scope — §5.1) |
-| Lean 4 compilation | Passes (`lake build D2fsSpecs.Apyx`, zero errors/warnings) |
-| Theorems proved | **81 / 81 (100%, zero `sorry`, zero vacuous)** |
+| Lean 4 compilation | Passes (`lake build D2fsSpecs`, zero errors/warnings) |
+| Requirement theorems proved (§4) | **81 / 81 (100%, zero `sorry`, zero vacuous)** |
+| Blast-radius theorems proved (§6) | **56 (zero `sorry`, zero vacuous)** |
 | Faithful coverage (full + partial, majority of 3 judge runs) | **73 / 77 = 94.8%** |
 | — of which fully faithful (`full`) | 24 |
 | — of which partially faithful (`partial`) | 49 |
