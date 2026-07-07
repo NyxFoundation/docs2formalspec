@@ -77,7 +77,23 @@
 
 ## 4b. 進捗と証明中に判明した設計上の発見(2026-07-07)
 
-`outputs/apyx/Safety.lean`(namespace `Apyx`、S1-S5 証明済み、sorry 0、全て `propext`/`Quot.sound` のみ、`Apyx.lean`/`BlastRadius.lean` 無傷)。
+**S1-S7 すべて証明完了**。`outputs/apyx/Safety.lean`(namespace `Apyx`、公開定理23本、sorry 0、全て `propext`/`Quot.sound` のみ、`Apyx.lean`/`BlastRadius.lean` 無傷)。
+
+| # | 定理 | 状態 |
+|---|---|---|
+| S1 | `no_free_value_trace` | 完全 |
+| S2 | `solvency_preserved` | 完全(WellFormed仮説をトレール各点で再供給する正直形。claimUnlock/handleStressEventはop単位で除外・文書化) |
+| S3 | `rounding_favors_protocol` + `withdrawShares_rounds_up` | 完全(3方向) |
+| S4 | `no_dilution` | 完全 |
+| S5 | `donation_free` + `no_inflation_attack` | 完全(生donation経路の構造的不在) |
+| S6 | `caller_net_nonpositive` | 固定参照レート下の単発版(正直にスコープ限定)。**残る開放問題**: live-rate/トレースレベルの閉包(単一`updateExchangeRate`のレート移動量の限界+トレール合成)は別種の難しい算術問題として明示的に未着手 |
+| S7 | `vest_no_early_drain` | 完全(単調性・上限・pull正確性) |
+
+**証明作業が炙り出した実設計欠陥2件**(いずれも特権ロールの会計問題であって一般攻撃者exploitではない):
+
+1. **S5訂正**: `creditYield` は `vaultApxUSDBal` を動かさない(当初仮説の誤り)。`withdraw`/`redeem` が `pullVestedYield` 経由で金庫を増やしうるが `vestedAmount` 上限内で、donationではない。結論(生donationインフレ攻撃の構造的不可能性)は不変。
+
+2. **`creditYield_forfeits_pending_vest`(確定)**: `Op.creditYield` は `vestStart := now` をリセットするが、旧ストリームの成熟済み・未実現分 `vestedAmount s s.now` を先に pull しない。証明で確定: creditYield直後 `vestedAmount s' s'.now = 0` となり、事前に未実現vestが正なら `totalAssets s' < totalAssets s`(実現可能価値が瞬間的に**下がる**)。`vestTotal` は減らないので時間をかければ再vestするが、**yieldDistributorが `vestPeriod` より速く creditYield を呼び続けると実現を恒久的に先送りできる**。永久焼却ではなく「タイミング変位」型の欠陥。→ 実装側で creditYield 前に `pullVestedYield` を呼ぶ修正を推奨。
 
 **S5証明中の設計仮説の訂正**(memoの当初仮説 vs 実際のモデル):
 - `creditYield` は `vaultApxUSDBal` を**動かさない**(`usdcReserve`/`vestTotal`/`vestStart` のみ)。当初「lockとcreditYieldが金庫を増やす」としたが誤り。
