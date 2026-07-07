@@ -41,6 +41,12 @@ structure State where
   exchangeRate : Nat
   totalCollateralValue : Nat
   redemptionValue : Nat
+  /-- The current secondary-market trading price of apxUSD, in `ray` fixed-point
+  ($1.00 = `ray`, same convention as `exchangeRate`/`redemptionValue`), as reported by
+  the protocol's price oracle (cf. `oracle`, `Op.setApxUSDMarketPrice`). The arbitrage
+  mint pathway (`Op.mintApxUSD`) is only open while apxUSD trades above the $1.00
+  reference, i.e. while `ray < apxUSDMarketPrice`. -/
+  apxUSDMarketPrice : Nat
   overcollateralizationBuffer : Nat
   yieldRateMonth : Nat
   /-- The time at which the monthly yield rate was last set (`Op.setYieldRate` cadence
@@ -253,6 +259,7 @@ inductive Op
   | handleStressEvent (amount : Nat)
   | catastrophicBackstop
   | setVestPeriod (p : Nat)
+  | setApxUSDMarketPrice (price : Nat)
 
 def step (s : State) (op : Op) (caller : Address) : Option State :=
   match op with
@@ -270,9 +277,11 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
       let s3 := emitEvent s2 "Deposit" [caller, caller, caller, amount, amount] -- sender, receiver, owner, assets, shares (1:1)
       some s3
   | Op.mintApxUSD to amount =>
+    -- arbitrage minting pathway: only open while apxUSD trades above $1.00
     if s.globalPause then none
     else if ¬ s.whitelist caller then none
     else if s.denylist caller || s.denylist to then none
+    else if s.apxUSDMarketPrice ≤ ray then none
     else if s.usdcBal caller < amount then none
     else
       let s1 := { s with
@@ -459,6 +468,10 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     else none
   | Op.setVestPeriod p =>
     if caller == s.admin then some { s with vestPeriod := p }
+    else none
+  | Op.setApxUSDMarketPrice price =>
+    -- only the price oracle may report apxUSD's secondary-market trading price
+    if caller == s.oracle then some { s with apxUSDMarketPrice := price }
     else none
 
 /-- ERC-4626 slippage wrappers: revert (return `none`) when the preview violates the
@@ -729,6 +742,7 @@ private theorem step_mintApxUSD_some (s : State) (to : Address) (amount : Nat) (
     (h : step s (Op.mintApxUSD to amount) caller = some s') :
     s.globalPause = false ∧ s.whitelist caller = true ∧
     s.denylist caller = false ∧ s.denylist to = false ∧
+    ray < s.apxUSDMarketPrice ∧
     amount ≤ s.usdcBal caller ∧
     s' = emitEvent (mintApxUSD { s with
         usdcBal := fun a => if a = caller then s.usdcBal a - amount else s.usdcBal a
@@ -743,7 +757,10 @@ private theorem step_mintApxUSD_some (s : State) (to : Address) (amount : Nat) (
       · exact absurd h (by simp)
       · split at h
         · exact absurd h (by simp)
-        · refine ⟨by simp_all, by simp_all, ?_, ?_, by omega, (Option.some.inj h).symm⟩ <;> simp_all
+        · split at h
+          · exact absurd h (by simp)
+          · refine ⟨by simp_all, by simp_all, ?_, ?_, by omega, by omega,
+              (Option.some.inj h).symm⟩ <;> simp_all
 
 private theorem step_lockApxUSD_some (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.lockApxUSD amount) caller = some s') :
@@ -887,7 +904,7 @@ private theorem apyUSDBal_unchanged_of_non_share_op (s : State) (op : Op) (calle
     subst hs'
     simp [emitEvent, mintApxUSD]
   case mintApxUSD to amount =>
-    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
     subst hs'
     simp [emitEvent, mintApxUSD]
   case requestUnlock amount =>
@@ -931,7 +948,7 @@ private theorem step_unlockTokenOperator_unchanged (s : State) (op : Op) (caller
     subst hs'
     simp [emitEvent, mintApxUSD]
   case mintApxUSD to amount =>
-    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
     subst hs'
     simp [emitEvent, mintApxUSD]
   case lockApxUSD a =>
@@ -987,7 +1004,7 @@ private theorem step_unlockTokenAddress_unchanged (s : State) (op : Op) (caller 
     subst hs'
     simp [emitEvent, mintApxUSD]
   case mintApxUSD to amount =>
-    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
     subst hs'
     simp [emitEvent, mintApxUSD]
   case lockApxUSD a =>
@@ -1437,7 +1454,7 @@ private theorem unlock_position_created_only_by_vault_ops (s : State) (op : Op) 
     subst hs'
     simp [emitEvent, mintApxUSD, h_new] at h_now
   case mintApxUSD t a =>
-    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
     subst hs'
     simp [emitEvent, mintApxUSD, h_new] at h_now
   case lockApxUSD a =>
@@ -1836,7 +1853,7 @@ theorem req_overcollateralization_limit (s : State) (op : Op) (caller : Address)
     simp [emitEvent, mintApxUSD]
     omega
   case mintApxUSD t a =>
-    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
     subst hs'
     simp [emitEvent, mintApxUSD]
     omega
@@ -1889,12 +1906,35 @@ theorem req_overcollateralization_limit (s : State) (op : Op) (caller : Address)
         | (cases Option.some.inj h_step; dsimp only; omega)
         | exact absurd h_step (by simp)
 
-/-- REQ arbitrage-mint-access: Only eligible whitelist participants SHALL be permitted to invoke the minting pathway for arbitrage when apxUSD trades above $1.00. -/
+/-- REQ arbitrage-mint-access: Only eligible whitelist participants SHALL be permitted to
+invoke the minting pathway for arbitrage when apxUSD trades above $1.00. (Model:
+`Op.mintApxUSD` is the arbitrage minting pathway — distinct from the standard 1:1 deposit
+pathway `Op.depositUSDC` — and `apxUSDMarketPrice` is the oracle-reported secondary-market
+trading price of apxUSD in `ray` fixed-point, $1.00 = `ray`. The theorem: every successful
+arbitrage mint requires BOTH that the caller is an eligible whitelist participant AND that
+apxUSD is trading above $1.00; a non-whitelisted caller can never invoke the pathway, and
+even a whitelisted participant cannot invoke it unless apxUSD trades above $1.00.) -/
 theorem req_arbitrage_mint_access (s : State) (to : Address) (amount : Nat) (caller : Address) :
-    (step s (Op.mintApxUSD to amount) caller = none) ∨ (s.whitelist caller = true) := by
-  by_cases h : s.whitelist caller
-  · exact Or.inr h
-  · exact Or.inl (by simp [step, h])
+    (∀ s', step s (Op.mintApxUSD to amount) caller = some s' →
+      s.whitelist caller = true ∧ ray < s.apxUSDMarketPrice) ∧
+    (¬ s.whitelist caller → step s (Op.mintApxUSD to amount) caller = none) ∧
+    (s.apxUSDMarketPrice ≤ ray → step s (Op.mintApxUSD to amount) caller = none) := by
+  refine ⟨?_, ?_, ?_⟩
+  · intro s' h
+    obtain ⟨_, hw, _, _, hp, _, _⟩ := step_mintApxUSD_some _ _ _ _ _ h
+    exact ⟨hw, hp⟩
+  · intro h
+    simp [step, h]
+  · intro h
+    simp only [step]
+    split
+    · rfl
+    · split
+      · rfl
+      · split
+        · rfl
+        -- `split` prunes the price-ite to `none` using `h : s.apxUSDMarketPrice ≤ ray`
+        · rfl
 
 /-- REQ arbitrage-redeem-access: Only eligible whitelist participants SHALL be permitted to redeem apxUSD for dollar‑equivalent value when apxUSD trades below $1.00. -/
 theorem req_arbitrage_redeem_access (s : State) (amount : Nat) (caller : Address) :
@@ -1979,7 +2019,7 @@ theorem req_deposit_immediate (s : State) (amount : Nat) (to : Address) (caller 
 theorem req_mint_immediate (s : State) (to : Address) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.mintApxUSD to amount) caller = some s') :
     s'.apyUSDBal to ≥ s.apyUSDBal to := by
-  obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+  obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
   subst hs'
   simp [emitEvent, mintApxUSD]
 
@@ -2100,17 +2140,21 @@ theorem req_deposit_mint_apxusd (s : State) (amount : Nat) (caller : Address)
     subst hs'
     exact ⟨_, rfl, by simp [emitEvent, mintApxUSD], by simp [emitEvent, mintApxUSD]⟩
 
-/-- REQ mint-price: The protocol MUST price newly minted apxUSD at $1 per unit. -/
+/-- REQ mint-price: The protocol MUST price newly minted apxUSD at $1 per unit. (Model:
+`Op.mintApxUSD` is the arbitrage minting pathway, open only while apxUSD trades above
+$1.00 (`h6`, cf. `req_arbitrage_mint_access`); whenever it executes, each newly minted
+apxUSD unit is priced at exactly $1 — `amount` USDC paid for `amount` apxUSD minted.) -/
 theorem req_mint_price (s : State) (amount : Nat) (to : Address) (caller : Address)
     (h1 : s.globalPause = false) (h2 : s.whitelist caller = true) (h3 : s.usdcBal caller ≥ amount)
-    (h4 : s.denylist caller = false) (h5 : s.denylist to = false) :
+    (h4 : s.denylist caller = false) (h5 : s.denylist to = false)
+    (h6 : ray < s.apxUSDMarketPrice) :
     ∃ s', step s (Op.mintApxUSD to amount) caller = some s' ∧
           s'.apxUSDBal to = s.apxUSDBal to + amount ∧
           s'.usdcBal caller = s.usdcBal caller - amount ∧
           s'.totalSupply_apxUSD = s.totalSupply_apxUSD + amount := by
   rcases ho : step s (Op.mintApxUSD to amount) caller with _ | s'
-  · exact absurd ho (by simp [step, h1, h2, h4, h5, Nat.not_lt.mpr h3])
-  · obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ ho
+  · exact absurd ho (by simp [step, h1, h2, h4, h5, Nat.not_lt.mpr h3, Nat.not_le.mpr h6])
+  · obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ ho
     subst hs'
     exact ⟨_, rfl, by simp [emitEvent, mintApxUSD], by simp [emitEvent, mintApxUSD],
            by simp [emitEvent, mintApxUSD]⟩
@@ -2606,7 +2650,7 @@ theorem req_mint_redeem_at_redemption_value (s : State) (amount : Nat) (to calle
       s'.usdcBal caller = s.usdcBal caller + (amount * s.redemptionValue) / ray) := by
   constructor
   · intro s' h_step
-    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
     subst hs'
     exact ⟨by simp [emitEvent, mintApxUSD], by simp [emitEvent, mintApxUSD]⟩
   · intro s' h_step
@@ -2662,7 +2706,7 @@ theorem req_mint_emits_event (s s' : State) (to : Address) (amount : Nat) (calle
     (h_step : step s (Op.mintApxUSD to amount) caller = some s') :
     ∃ sender receiver owner assets shares : Nat,
       ("Deposit", [sender, receiver, owner, assets, shares]) ∈ s'.eventLog := by
-  obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+  obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
   subst hs'
   exact ⟨caller, to, to, amount, amount, by simp [emitEvent]⟩
 
@@ -2907,7 +2951,7 @@ private theorem vaultApxUSDBal_unchanged_of_non_vault_op (s : State) (op : Op) (
     subst hs'
     simp [emitEvent, mintApxUSD]
   case mintApxUSD to amount =>
-    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
     subst hs'
     simp [emitEvent, mintApxUSD]
   case requestUnlock amount =>
@@ -3063,7 +3107,7 @@ theorem req_unlock_cannot_be_cancelled (s : State) (op : Op) (caller : Address) 
     subst hs'
     simp [emitEvent, mintApxUSD, h_live] at h_gone
   case mintApxUSD t a =>
-    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
     subst hs'
     simp [emitEvent, mintApxUSD, h_live] at h_gone
   case lockApxUSD a =>
@@ -3182,7 +3226,7 @@ theorem req_unlock_token_nontransferable (s : State) (op : Op) (caller : Address
     exact ⟨fun i hi => h_fresh i (by simpa [emitEvent, mintApxUSD] using hi),
       fun id owner h_own => Or.inl (by simpa [emitEvent, mintApxUSD] using h_own)⟩
   case mintApxUSD t a =>
-    obtain ⟨_, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
     subst hs'
     exact ⟨fun i hi => h_fresh i (by simpa [emitEvent, mintApxUSD] using hi),
       fun id owner h_own => Or.inl (by simpa [emitEvent, mintApxUSD] using h_own)⟩
