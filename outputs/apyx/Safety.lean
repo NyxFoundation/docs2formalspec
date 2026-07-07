@@ -1061,5 +1061,72 @@ theorem caller_net_nonpositive (s : State) (op : Op) (caller : Address) (s' : St
   · exact caller_value_withdraw_fixedRate s amount r caller s' h_step
   · exact caller_value_redeem_fixedRate s shares r caller s' h_step
 
+/-! ## S7 `vest_no_early_drain` — vested yield cannot be pulled forward ahead of schedule
+
+`vestedAmount` is the linear-vesting read of the pool: `min (linear elapsed-based amount)
+vestTotal`. The no-early-drain property is three arithmetic/definitional facts about it and
+about `pullVestedYield`'s interaction with it — no `step`/`Op` case analysis, so no
+deep-recursion risk. (Re-derived from scratch: the equivalents `vestedAmount_mono`/
+`vestedAmount_le_total` in `Apyx.lean` are `private` to that file.) -/
+
+/-- If `e ≤ P` then `e * T / P ≤ T`. (Re-derived local copy of `Apyx.lean`'s private
+`div_mul_le_total`.) -/
+private theorem div_mul_le_total (e P T : Nat) (h : e ≤ P) : e * T / P ≤ T := by
+  rcases Nat.eq_zero_or_pos P with hp | hp
+  · subst hp; simp [Nat.le_zero.mp h]
+  · calc e * T / P ≤ P * T / P := Nat.div_le_div_right (Nat.mul_le_mul_right _ h)
+      _ = T := Nat.mul_div_cancel_left _ hp
+
+/-- (b) `vestedAmount` never exceeds the pool total `vestTotal`: the vest stream can never
+realize more value than was ever credited to it. -/
+theorem vestedAmount_le_vestTotal (s : State) (n : Nat) :
+    vestedAmount s n ≤ s.vestTotal := by
+  unfold vestedAmount
+  dsimp only
+  repeat' split
+  · exact Nat.zero_le _
+  · exact Nat.le_refl _
+  · exact div_mul_le_total _ _ _ (by omega)
+
+/-- (a) `vestedAmount` is monotone non-decreasing in the time argument: the realizable
+share of the vest pool never shrinks as time passes, so it cannot be "pulled forward" and
+then un-pulled — realization only ever catches up to the linear schedule, never ahead of
+it (that half is (b)) and never behind where it already was (this half). -/
+theorem vestedAmount_monotone (s : State) {n m : Nat} (h : n ≤ m) :
+    vestedAmount s n ≤ vestedAmount s m := by
+  unfold vestedAmount
+  dsimp only
+  repeat' split
+  all_goals first
+    | omega
+    | exact Nat.zero_le _
+    | (exfalso; omega)
+    | exact div_mul_le_total _ _ _ (by omega)
+    | exact Nat.div_le_div_right (Nat.mul_le_mul_right _ (by omega))
+
+/-- (c) `pullVestedYield` moves *exactly* `vestedAmount s s.now` into custody
+(`vaultApxUSDBal`) and no more — restated from the local frame lemma `pvS_vaultApxUSDBal`
+for use as part of the S7 bundle. -/
+theorem pullVestedYield_moves_exactly_vested (s : State) :
+    (pullVestedYield s).vaultApxUSDBal = s.vaultApxUSDBal + vestedAmount s s.now :=
+  pvS_vaultApxUSDBal s
+
+/-- **S7 `vest_no_early_drain`** (docs/06-safety-properties.md, Tier B): the vest pool's
+already-vested-but-unrealized yield cannot be pulled forward faster than its linear
+schedule and cannot be over-realized. (a) `vestedAmount` is monotone non-decreasing in
+time — realization only ever advances, never regresses, so there is no way to "double-dip"
+by rewinding the clock. (b) `vestedAmount s n` never exceeds `s.vestTotal` for any `n` — no
+sequence of calls at any times can ever realize more than what was ever credited to the
+pool. (c) `pullVestedYield` — the sole channel by which `withdraw`/`redeem` realize vested
+yield into spendable custody (`vaultApxUSDBal`) — moves *exactly* `vestedAmount s s.now`,
+no more: a single call cannot over-drain the currently-vested amount, and by (a)/(b) no
+sequence of calls (at whatever times) can exceed `vestTotal` in aggregate either. -/
+theorem vest_no_early_drain (s : State) :
+    (∀ n m, n ≤ m → vestedAmount s n ≤ vestedAmount s m) ∧
+    (∀ n, vestedAmount s n ≤ s.vestTotal) ∧
+    (pullVestedYield s).vaultApxUSDBal = s.vaultApxUSDBal + vestedAmount s s.now :=
+  ⟨fun _ _ h => vestedAmount_monotone s h, vestedAmount_le_vestTotal s,
+   pullVestedYield_moves_exactly_vested s⟩
+
 
 end Apyx
