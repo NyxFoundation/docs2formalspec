@@ -2392,7 +2392,19 @@ theorem req_buffer_not_consumed (s : State) (amount : Nat) (caller : Address) (s
   exact overcollateralizationBuffer_mono _ _ (by simp [emitEvent, burnApxUSD])
     (by simp [emitEvent, burnApxUSD]) (by simp [emitEvent, burnApxUSD])
 
-/-- REQ catastrophic_backstop: Upon detection of a catastrophic scenario, the system MUST set Redemption Value equal to Total Collateral Value and MUST distribute the entire reserve, including the buffer, pro‑rata to remaining holders. -/
+/-- REQ catastrophic_backstop: Upon detection of a catastrophic scenario, the system MUST set
+Redemption Value equal to Total Collateral Value and MUST distribute the entire reserve, including
+the buffer, pro‑rata to remaining holders.
+
+Scope (honest limitation): only the first clause — `redemptionValue := totalCollateralValue` — is
+formalized here. The second clause ("distribute the entire reserve pro‑rata to remaining holders")
+is **outside this model's expressible scope**: a genuine pro‑rata split requires iterating a
+`Σ_holder reserve · balance/totalSupply` over the set of holders, but `apxUSDBal`/`usdcBal` are bare
+`Address → Nat` maps carrying no finite-support/summation structure (the same ledger limitation
+documented for the per-address bound in `Safety.solvency_preserved`). Rather than encode a fictional
+distribution, the setting of the redemption basis — the on‑chain trigger that *makes* every holder's
+claim track collateral — is proved, and the distribution mechanics are left to an
+implementation-level (bytecode) audit. -/
 theorem req_catastrophic_backstop (s : State) (s' : State)
     (h_step : step s Op.catastrophicBackstop s.admin = some s') :
     s'.redemptionValue = s'.totalCollateralValue := by
