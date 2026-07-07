@@ -2395,4 +2395,176 @@ theorem pauser_compartmentalized (s : State) (σ : List (Op × Address))
     by simpa using congrArg State.vestTotal h,
     by simpa using congrArg State.redemptionValue h⟩
 
+/-! ## T10 `coalition_bound` — quantifying the worst coalition (base-model theorems)
+
+The headline finding. Two results contrasting single-key impotence with a specific
+two-key coalition that drains a victim's principal:
+
+* `single_key_bounds`: a corollary **table** — for any victim `u`, over any
+  single-role attack trace, **no single key extracts principal**. Oracle-alone,
+  pauser-alone, and admin-alone leave every user balance *and* the reserve bitwise
+  unchanged; distributor-alone leaves user balances unchanged and can only *grow*
+  the reserve (it pays in). Each row is a projection of the corresponding Tier-1/2
+  trace theorem.
+* `admin_rfq_coalition_drains`: the **quantitative coalition** result. The
+  `{admin, approved-RFQ-counterparty}` pair drains a victim's entire apxUSD for
+  zero USDC — the admin publishes `redemptionValue = 0` via `catastrophicBackstop`
+  (dropping it from a healthy `ray`), after which the counterparty's
+  `executeRFQRedemption` burns all of the victim's apxUSD and credits exactly
+  `amount * 0 / ray = 0` USDC. Net loss = 100% of holdings, in stark contrast to
+  the single-key rows.
+
+Headline conclusion (see the docstrings): the security of user funds against a
+compromised admin rests **entirely** on the RFQ counterparty set and on the absence
+of a rate limit / redemption-price floor — exactly the mechanisms T7 (rate limit)
+and T8 (timelock) add. In the current model neither exists, so the coalition drain
+is unbounded (cf. T6 `redeem_payout_has_no_cap`). -/
+
+/-- The RFQ redemption's exact effect on the targeted user, unconditionally: a
+successful `executeRFQRedemption user amount` burns `amount` of the user's apxUSD
+and credits them exactly `amount * redemptionValue / ray` USDC — the payout is a
+bare linear function of the admin-controlled redemption price, with no floor. (The
+counterparty-initiated dual of `redeem_payout_formula`; specialization of
+`inv_executeRFQRedemption`.) -/
+theorem rfq_payout_formula (s : State) (user : Address) (amount : Nat) (caller : Address)
+    (s' : State) (h_step : step s (Op.executeRFQRedemption user amount) caller = some s') :
+    s'.apxUSDBal user = s.apxUSDBal user - amount ∧
+    s'.usdcBal user = s.usdcBal user + amount * s.redemptionValue / ray := by
+  obtain ⟨_, _, _, _, hs'⟩ := inv_executeRFQRedemption _ _ _ _ _ h_step
+  subst hs'
+  exact ⟨by simp [burnApxUSD], by simp [burnApxUSD]⟩
+
+/-- Forward direction for `catastrophicBackstop`: the admin's call always succeeds
+and publishes `redemptionValue := totalCollateralValue`. -/
+private theorem step_catastrophicBackstop_forward (s : State) :
+    step s Op.catastrophicBackstop s.admin
+      = some { s with redemptionValue := s.totalCollateralValue, emergencyFlag := true } := by
+  show (if (s.admin == s.admin) = true then
+          some { s with redemptionValue := s.totalCollateralValue, emergencyFlag := true }
+        else none) = _
+  rw [if_pos (beq_self_eq_true _)]
+
+/-- Forward direction for `executeRFQRedemption`: with the four guards discharged,
+the call succeeds and its exact effect is the `burnApxUSD` of the user plus the
+priced USDC credit. -/
+private theorem step_executeRFQRedemption_forward (s : State) (user : Address)
+    (amount : Nat) (caller : Address)
+    (hgp : s.globalPause = false)
+    (hcp : s.rfqCounterparties.contains caller = true)
+    (hbal : amount ≤ s.apxUSDBal user)
+    (hres : amount * s.redemptionValue / ray ≤ s.usdcReserve) :
+    step s (Op.executeRFQRedemption user amount) caller
+      = some { burnApxUSD s user amount with
+          usdcReserve := (burnApxUSD s user amount).usdcReserve - amount * s.redemptionValue / ray
+          usdcBal := fun a => if a = user then
+              (burnApxUSD s user amount).usdcBal a + amount * s.redemptionValue / ray
+            else (burnApxUSD s user amount).usdcBal a } := by
+  simp only [step]
+  rw [if_neg (by rw [hgp]; decide), if_neg (by rw [hcp]; decide),
+      if_neg (by omega), if_neg (by omega)]
+
+/-- T10 `single_key_bounds` (docs/05-blast-radius.md, Tier 3) — **no single
+compromised key extracts principal.**
+
+For an arbitrary victim `u` and four independent attack traces, each consisting
+solely of one role's operations:
+
+* **oracle alone** (`oracle_alone_preserves_balances`): every apxUSD balance and the
+  USDC reserve are bitwise unchanged — extraction 0;
+* **pauser alone** (`pauser_compartmentalized`): likewise unchanged — extraction 0;
+* **distributor alone** (`distributor_compartmentalized`): user apxUSD balances
+  unchanged and the reserve only *grows* — the role pays in, extraction 0;
+* **admin alone** (`admin_trace_blast_radius`): balances and reserve untouched —
+  extraction 0 (the admin's power is over *future* pricing/liveness, not recorded
+  holdings; cf. `admin_cannot_touch_balances`).
+
+The contrast with `admin_rfq_coalition_drains` (two keys ⇒ 100% loss) is the value
+of key separation: it takes a *coalition* to touch principal. -/
+theorem single_key_bounds (s : State) (σO σP σD σA : List (Op × Address))
+    (hO : ∀ p ∈ σO, OracleOp p.1) (hP : ∀ p ∈ σP, PauserOp p.1)
+    (hD : ∀ p ∈ σD, DistributorOp p.1) (hA : ∀ p ∈ σA, AdminOp p.1) :
+    ((execTrace s σO).apxUSDBal = s.apxUSDBal ∧
+      (execTrace s σO).usdcReserve = s.usdcReserve) ∧
+    ((execTrace s σP).apxUSDBal = s.apxUSDBal ∧
+      (execTrace s σP).usdcReserve = s.usdcReserve) ∧
+    ((execTrace s σD).apxUSDBal = s.apxUSDBal ∧
+      s.usdcReserve ≤ (execTrace s σD).usdcReserve) ∧
+    ((execTrace s σA).apxUSDBal = s.apxUSDBal ∧
+      (execTrace s σA).usdcReserve = s.usdcReserve) := by
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · obtain ⟨ho1, _, _, _, ho5, _⟩ := oracle_alone_preserves_balances s σO hO
+    exact ⟨ho1, ho5⟩
+  · obtain ⟨hp1, _, _, _, _, _, _, hp8, _⟩ := pauser_compartmentalized s σP hP
+    exact ⟨hp1, hp8⟩
+  · obtain ⟨hd1, _, _, _, _, _, _, hd8, _⟩ := distributor_compartmentalized s σD hD
+    exact ⟨hd1, hd8⟩
+  · have h := admin_trace_blast_radius s σA hA
+      s.whitelist s.denylist 0 0 0 0 0 false 0
+    exact ⟨by simpa using congrArg State.apxUSDBal h,
+      by simpa using congrArg State.usdcReserve h⟩
+
+/-- Witness for the coalition drain: a victim (address `0`) holds 100 apxUSD and no
+USDC, the redemption price is healthy (`ray` = $1.00) but `totalCollateralValue` is
+0, the admin is address `1`, and the approved RFQ counterparty is address `2`. -/
+private def coalWitness : State :=
+  { (default : State) with
+      admin := 1
+      rfqCounterparties := [2]
+      apxUSDBal := fun a => if a = 0 then 100 else 0
+      redemptionValue := ray
+      totalCollateralValue := 0 }
+
+/-- T10 `admin_rfq_coalition_drains` (docs/05-blast-radius.md, Tier 3) — **the worst
+coalition, quantified: `{admin, RFQ-counterparty}` inflicts 100% loss.**
+
+Threat model: the admin key and one approved RFQ-counterparty key are both
+compromised. The victim (address `0`) holds 100 apxUSD, no USDC, and the redemption
+price starts healthy at `ray` (= $1.00 — the victim could redeem 100 apxUSD for 100
+USDC).
+
+The coalition acts in two steps:
+1. the **admin** calls `catastrophicBackstop`, which publishes
+   `redemptionValue := totalCollateralValue = 0` (`redemption_price_admin_only`;
+   the price crashes from `ray` to 0 with no floor and no delay — cf. T8's
+   `base_model_has_no_timelock`);
+2. the approved **RFQ counterparty** calls `executeRFQRedemption victim 100`, which
+   burns all 100 of the victim's apxUSD and credits them `100 * 0 / ray = 0` USDC
+   (`rfq_payout_formula`).
+
+Outcome (proved on the concrete witness): the victim's apxUSD goes 100 → 0 while
+their USDC stays 0 — a **total, uncompensated loss of principal**. Contrast every
+row of `single_key_bounds`, where each key alone extracts 0. This is the memo's
+headline: user-fund security against a compromised admin rests entirely on the RFQ
+counterparty set and on the missing rate-limit / price-floor (T7/T8). -/
+theorem admin_rfq_coalition_drains :
+    ∃ (s s1 s2 : State) (victim counterparty amount : Nat),
+      0 < amount ∧
+      s.apxUSDBal victim = amount ∧ s.usdcBal victim = 0 ∧
+      ray ≤ s.redemptionValue ∧
+      s.rfqCounterparties.contains counterparty = true ∧
+      step s Op.catastrophicBackstop s.admin = some s1 ∧
+      s1.redemptionValue = 0 ∧
+      step s1 (Op.executeRFQRedemption victim amount) counterparty = some s2 ∧
+      s2.apxUSDBal victim = 0 ∧ s2.usdcBal victim = 0 := by
+  -- step 1: admin publishes redemptionValue = totalCollateralValue = 0
+  let R : State :=
+    { coalWitness with redemptionValue := coalWitness.totalCollateralValue,
+                       emergencyFlag := true }
+  have h1 : step coalWitness Op.catastrophicBackstop coalWitness.admin = some R :=
+    step_catastrophicBackstop_forward coalWitness
+  have hgp : R.globalPause = false := rfl
+  have hcp : R.rfqCounterparties.contains 2 = true := rfl
+  have hbal : (100 : Nat) ≤ R.apxUSDBal 0 := Nat.le_refl _
+  have hres : 100 * R.redemptionValue / ray ≤ R.usdcReserve := by
+    rw [show R.redemptionValue = 0 from rfl, Nat.mul_zero, Nat.zero_div]
+    exact Nat.zero_le _
+  -- step 2: the approved RFQ counterparty burns the victim's entire apxUSD for 0 USDC
+  have h2 := step_executeRFQRedemption_forward R 0 100 2 hgp hcp hbal hres
+  obtain ⟨hapx, husdc⟩ := rfq_payout_formula R 0 100 2 _ h2
+  refine ⟨coalWitness, R, _, 0, 2, 100, by decide, rfl, rfl, Nat.le_refl _, by decide,
+    h1, rfl, h2, ?_, ?_⟩
+  · rw [hapx, show R.apxUSDBal 0 = 100 from rfl]
+  · rw [husdc, show R.redemptionValue = 0 from rfl, show R.usdcBal 0 = 0 from rfl,
+      Nat.mul_zero, Nat.zero_div]
+
 end Apyx
