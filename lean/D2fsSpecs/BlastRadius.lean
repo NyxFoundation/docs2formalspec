@@ -1008,4 +1008,163 @@ theorem user_assets_immune_to_total_key_compromise
       exact ⟨Nat.le_trans h_apx ih_apx, Nat.le_trans h_apy ih_apy,
         Nat.le_trans h_usdc ih_usdc, ih_gov.trans h_gov⟩
 
+/-! ## Toward Tier 2 (T5 `no_theft_ledger` / T6 `oracle_blast_radius`)
+
+Two single-step characterizations that are the induction steps for the Tier-2
+ledger arguments. They also settle the *attribution* question for T6 in this model:
+the redemption price is not an oracle-controlled quantity at all — it is writable
+exclusively by the admin's `catastrophicBackstop` (the model's `updateRedemptionValue`
+is a placeholder no-op). The real-world analogue (Yearn's finding that Apyx's
+`ApxUSDRateOracle.setRate` sits behind a 0-second timelock) therefore maps to the
+*admin coalition* here: worst case, `handleStressEvent` drives
+`totalCollateralValue` to 0 and `catastrophicBackstop` publishes
+`redemptionValue = 0`, after which an approved RFQ counterparty can burn users'
+apxUSD for zero USDC. Pricing that coalition is T10's table; the theorems below pin
+down the only channels through which it can act. -/
+
+/-- The redemption price is admin-gated: if a step changes `redemptionValue`, the
+operation was `catastrophicBackstop`, the caller held the admin role, and the new
+value is the recorded `totalCollateralValue`. In particular the oracle role has
+**no** influence over the redemption price in this model. -/
+theorem redemption_price_admin_only (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s')
+    (h_changed : s'.redemptionValue ≠ s.redemptionValue) :
+    op = Op.catastrophicBackstop ∧ caller = s.admin ∧
+    s'.redemptionValue = s.totalCollateralValue := by
+  cases op
+  case catastrophicBackstop =>
+    obtain ⟨hc, rfl⟩ := step_catastrophicBackstop_exact s caller s' h_step
+    exact ⟨rfl, hc, rfl⟩
+  case depositUSDC amount =>
+    obtain ⟨_, _, _, _, hs'⟩ := inv_depositUSDC _ _ _ _ h_step
+    subst hs'
+    exact absurd (by simp [emitEvent, mintApxUSD]) h_changed
+  case mintApxUSD to amount =>
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := inv_mintApxUSD _ _ _ _ _ h_step
+    subst hs'
+    exact absurd (by simp [emitEvent, mintApxUSD]) h_changed
+  case lockApxUSD amount =>
+    obtain ⟨_, _, hs'⟩ := inv_lockApxUSD _ _ _ _ h_step
+    subst hs'
+    exact absurd (by simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]) h_changed
+  case requestUnlock amount =>
+    obtain ⟨_, _, hs'⟩ := inv_requestUnlock _ _ _ _ h_step
+    subst hs'
+    exact absurd (by simp [createStandardUnlock, burnApxUSD]) h_changed
+  case claimUnlock id =>
+    obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := inv_claimUnlock _ _ _ _ h_step
+    subst hs'
+    exact absurd (by simp [mintApxUSD, burnUnlockNFT]) h_changed
+  case redeemApxUSD amount =>
+    obtain ⟨_, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
+    subst hs'
+    exact absurd (by simp [emitEvent, burnApxUSD]) h_changed
+  case withdraw assets receiver =>
+    obtain ⟨_, _, _, hs'⟩ := inv_withdraw _ _ _ _ _ h_step
+    subst hs'
+    exact absurd (by simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD])
+      h_changed
+  case redeem shares receiver =>
+    obtain ⟨_, _, _, hs'⟩ := inv_redeem _ _ _ _ _ h_step
+    subst hs'
+    exact absurd (by simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD])
+      h_changed
+  case flexibleRequestUnlock amount =>
+    obtain ⟨_, _, hs'⟩ := inv_flexibleRequestUnlock _ _ _ _ h_step
+    subst hs'
+    exact absurd (by simp [createFlexibleUnlock, burnApxUSD]) h_changed
+  case flexibleClaimUnlock id =>
+    obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := inv_flexibleClaimUnlock _ _ _ _ h_step
+    subst hs'
+    exact absurd (by simp [mintApxUSD, burnUnlockNFT]) h_changed
+  case executeRFQRedemption user amount =>
+    obtain ⟨_, _, _, _, hs'⟩ := inv_executeRFQRedemption _ _ _ _ _ h_step
+    subst hs'
+    exact absurd (by simp [burnApxUSD]) h_changed
+  all_goals
+    simp only [step] at h_step
+    split at h_step <;>
+      first
+        | (cases Option.some.inj h_step; exact absurd rfl h_changed)
+        | exact absurd h_step (by simp)
+
+/-- Reserve outflows happen only through redemption, and every unit that leaves the
+reserve is paid to the address whose apxUSD is simultaneously burned, priced at the
+recorded `redemptionValue`. This is the induction step for T5's no-theft ledger:
+USDC can exit the system only against a matching apxUSD burn of the payee, via
+`redeemApxUSD` (self-initiated) or `executeRFQRedemption` (counterparty-initiated,
+same pricing). -/
+theorem reserve_outflow_only_via_redemption (s : State) (op : Op) (caller : Address)
+    (s' : State) (h_step : step s op caller = some s')
+    (h_dec : s'.usdcReserve < s.usdcReserve) :
+    ∃ user amount,
+      ((op = Op.redeemApxUSD amount ∧ user = caller) ∨
+        op = Op.executeRFQRedemption user amount) ∧
+      amount ≤ s.apxUSDBal user ∧
+      s'.apxUSDBal user = s.apxUSDBal user - amount ∧
+      s'.usdcBal user = s.usdcBal user + amount * s.redemptionValue / ray ∧
+      s'.usdcReserve = s.usdcReserve - amount * s.redemptionValue / ray ∧
+      s'.totalSupply_apxUSD = s.totalSupply_apxUSD - amount := by
+  cases op
+  case redeemApxUSD amount =>
+    obtain ⟨_, _, hbal, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
+    subst hs'
+    exact ⟨caller, amount, Or.inl ⟨rfl, rfl⟩, hbal,
+      by simp [emitEvent, burnApxUSD],
+      by simp [emitEvent, burnApxUSD],
+      by simp [emitEvent, burnApxUSD],
+      by simp [emitEvent, burnApxUSD]⟩
+  case executeRFQRedemption user amount =>
+    obtain ⟨_, _, hbal, _, hs'⟩ := inv_executeRFQRedemption _ _ _ _ _ h_step
+    subst hs'
+    exact ⟨user, amount, Or.inr rfl, hbal,
+      by simp [burnApxUSD],
+      by simp [burnApxUSD],
+      by simp [burnApxUSD],
+      by simp [burnApxUSD]⟩
+  case depositUSDC amount =>
+    obtain ⟨_, _, _, _, hs'⟩ := inv_depositUSDC _ _ _ _ h_step
+    subst hs'
+    exact absurd h_dec (by simp [emitEvent, mintApxUSD] <;> omega)
+  case mintApxUSD to amount =>
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := inv_mintApxUSD _ _ _ _ _ h_step
+    subst hs'
+    exact absurd h_dec (by simp [emitEvent, mintApxUSD] <;> omega)
+  case lockApxUSD amount =>
+    obtain ⟨_, _, hs'⟩ := inv_lockApxUSD _ _ _ _ h_step
+    subst hs'
+    exact absurd h_dec (by simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD])
+  case requestUnlock amount =>
+    obtain ⟨_, _, hs'⟩ := inv_requestUnlock _ _ _ _ h_step
+    subst hs'
+    exact absurd h_dec (by simp [createStandardUnlock, burnApxUSD])
+  case claimUnlock id =>
+    obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := inv_claimUnlock _ _ _ _ h_step
+    subst hs'
+    exact absurd h_dec (by simp [mintApxUSD, burnUnlockNFT])
+  case withdraw assets receiver =>
+    obtain ⟨_, _, _, hs'⟩ := inv_withdraw _ _ _ _ _ h_step
+    subst hs'
+    exact absurd h_dec
+      (by simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD])
+  case redeem shares receiver =>
+    obtain ⟨_, _, _, hs'⟩ := inv_redeem _ _ _ _ _ h_step
+    subst hs'
+    exact absurd h_dec
+      (by simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD])
+  case flexibleRequestUnlock amount =>
+    obtain ⟨_, _, hs'⟩ := inv_flexibleRequestUnlock _ _ _ _ h_step
+    subst hs'
+    exact absurd h_dec (by simp [createFlexibleUnlock, burnApxUSD])
+  case flexibleClaimUnlock id =>
+    obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := inv_flexibleClaimUnlock _ _ _ _ h_step
+    subst hs'
+    exact absurd h_dec (by simp [mintApxUSD, burnUnlockNFT])
+  all_goals
+    simp only [step] at h_step
+    split at h_step <;>
+      first
+        | (cases Option.some.inj h_step; exact absurd h_dec (by simp <;> omega))
+        | exact absurd h_step (by simp)
+
 end Apyx
