@@ -492,4 +492,268 @@ theorem yield_distributor_trace_blast_radius (s : State) (σ : List (Op × Addre
           = { s1 with usdcReserve := r, vestTotal := v, vestStart := w } := ihframe r v w
         _ = { s with usdcReserve := r, vestTotal := v, vestStart := w } := hframe r v w
 
+/-! ## T3: `admin_cannot_touch_balances`, frame and trace forms
+
+Full compromise of the `admin` key reaches exactly nine fields — the two access
+lists and seven pricing/schedule parameters — and no balance, supply, reserve, or
+unlock-position field. The single-step balance statement is
+`Apyx.admin_cannot_touch_balances` in `D2fsSpecs.ApyxBlastRadius`; here each of the
+eight admin-gated operations gets an *exact-effect* lemma (the entire post-state is
+the pre-state with named fields overridden), and the frames are lifted to
+arbitrary-length admin-only traces.
+
+Scope caveats (what a compromised admin CAN do, all deferred effects on future
+operations rather than debits of recorded holdings):
+* `removeFromWhitelist`/`addToDenylist` block a user's future deposits/redemptions
+  (liveness attack; cf. T8 `timelock_escape_guarantee` — admin changes are
+  immediate in this model, so there is no escape window);
+* `handleStressEvent` + `catastrophicBackstop` rewrite `totalCollateralValue` and
+  then set `redemptionValue := totalCollateralValue`, repricing all *future*
+  redemptions (including RFQ redemptions executed against a user by a counterparty)
+  — quantifying that channel is Tier 2's T6 `oracle_blast_radius`;
+* `setYieldRate`/`setVestPeriod` distort future yield accrual timing. -/
+
+/-- Exact effect of `addToWhitelist`. -/
+theorem step_addToWhitelist_exact (s : State) (a : Address) (caller : Address) (s' : State)
+    (h : step s (Op.addToWhitelist a) caller = some s') :
+    caller = s.admin ∧
+    s' = { s with whitelist := fun x => if x = a then true else s.whitelist x } := by
+  simp only [step] at h
+  split at h
+  · rename_i hc
+    exact ⟨by simpa using hc, (Option.some.inj h).symm⟩
+  · exact absurd h (by simp)
+
+/-- Exact effect of `removeFromWhitelist`. -/
+theorem step_removeFromWhitelist_exact (s : State) (a : Address) (caller : Address) (s' : State)
+    (h : step s (Op.removeFromWhitelist a) caller = some s') :
+    caller = s.admin ∧
+    s' = { s with whitelist := fun x => if x = a then false else s.whitelist x } := by
+  simp only [step] at h
+  split at h
+  · rename_i hc
+    exact ⟨by simpa using hc, (Option.some.inj h).symm⟩
+  · exact absurd h (by simp)
+
+/-- Exact effect of `addToDenylist`. -/
+theorem step_addToDenylist_exact (s : State) (a : Address) (caller : Address) (s' : State)
+    (h : step s (Op.addToDenylist a) caller = some s') :
+    caller = s.admin ∧
+    s' = { s with denylist := fun x => if x = a then true else s.denylist x } := by
+  simp only [step] at h
+  split at h
+  · rename_i hc
+    exact ⟨by simpa using hc, (Option.some.inj h).symm⟩
+  · exact absurd h (by simp)
+
+/-- Exact effect of `removeFromDenylist`. -/
+theorem step_removeFromDenylist_exact (s : State) (a : Address) (caller : Address) (s' : State)
+    (h : step s (Op.removeFromDenylist a) caller = some s') :
+    caller = s.admin ∧
+    s' = { s with denylist := fun x => if x = a then false else s.denylist x } := by
+  simp only [step] at h
+  split at h
+  · rename_i hc
+    exact ⟨by simpa using hc, (Option.some.inj h).symm⟩
+  · exact absurd h (by simp)
+
+/-- Exact effect of `setYieldRate` (also surfaces its cadence guard). -/
+theorem step_setYieldRate_exact (s : State) (bps : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.setYieldRate bps) caller = some s') :
+    caller = s.admin ∧ s.lastRateSetTime + monthPeriod ≤ s.now ∧
+    bps ≤ s.collateralYieldBase ∧
+    s' = { s with yieldRateMonth := bps
+                  lastRateSetTime := s.now
+                  collateralYieldBase := overcollateralizationBuffer s } := by
+  simp only [step] at h
+  split at h
+  · rename_i hc
+    exact ⟨hc.1, hc.2.1, hc.2.2, (Option.some.inj h).symm⟩
+  · exact absurd h (by simp)
+
+/-- Exact effect of `handleStressEvent`. -/
+theorem step_handleStressEvent_exact (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.handleStressEvent amount) caller = some s') :
+    caller = s.admin ∧
+    s' = { s with totalCollateralValue := s.totalCollateralValue - amount
+                  emergencyFlag := true } := by
+  simp only [step] at h
+  split at h
+  · rename_i hc
+    exact ⟨by simpa using hc, (Option.some.inj h).symm⟩
+  · exact absurd h (by simp)
+
+/-- Exact effect of `catastrophicBackstop`. -/
+theorem step_catastrophicBackstop_exact (s : State) (caller : Address) (s' : State)
+    (h : step s Op.catastrophicBackstop caller = some s') :
+    caller = s.admin ∧
+    s' = { s with redemptionValue := s.totalCollateralValue
+                  emergencyFlag := true } := by
+  simp only [step] at h
+  split at h
+  · rename_i hc
+    exact ⟨by simpa using hc, (Option.some.inj h).symm⟩
+  · exact absurd h (by simp)
+
+/-- Exact effect of `setVestPeriod`. -/
+theorem step_setVestPeriod_exact (s : State) (p : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.setVestPeriod p) caller = some s') :
+    caller = s.admin ∧ s' = { s with vestPeriod := p } := by
+  simp only [step] at h
+  split at h
+  · rename_i hc
+    exact ⟨by simpa using hc, (Option.some.inj h).symm⟩
+  · exact absurd h (by simp)
+
+/-- T3 (single step, frame form): an admin-gated operation demands the admin role
+and agrees with the pre-state on **every** field other than the nine
+admin-parameter fields (`whitelist`, `denylist`, `yieldRateMonth`,
+`lastRateSetTime`, `collateralYieldBase`, `totalCollateralValue`,
+`redemptionValue`, `emergencyFlag`, `vestPeriod`). In particular no balance,
+supply, reserve, vest-pool, or unlock-registry field is reachable from the admin
+role. -/
+theorem admin_frame (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_gated : AdminOp op) (h_step : step s op caller = some s') :
+    caller = s.admin ∧
+    ∀ wl dl yr lt cy tcv rv ef vp,
+      { s' with whitelist := wl, denylist := dl, yieldRateMonth := yr,
+                lastRateSetTime := lt, collateralYieldBase := cy,
+                totalCollateralValue := tcv, redemptionValue := rv,
+                emergencyFlag := ef, vestPeriod := vp }
+    = { s with whitelist := wl, denylist := dl, yieldRateMonth := yr,
+               lastRateSetTime := lt, collateralYieldBase := cy,
+               totalCollateralValue := tcv, redemptionValue := rv,
+               emergencyFlag := ef, vestPeriod := vp } := by
+  obtain ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨bps, rfl⟩ | ⟨amt, rfl⟩ | rfl | ⟨p, rfl⟩ :=
+    h_gated
+  · obtain ⟨hc, rfl⟩ := step_addToWhitelist_exact s a caller s' h_step
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+  · obtain ⟨hc, rfl⟩ := step_removeFromWhitelist_exact s a caller s' h_step
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+  · obtain ⟨hc, rfl⟩ := step_addToDenylist_exact s a caller s' h_step
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+  · obtain ⟨hc, rfl⟩ := step_removeFromDenylist_exact s a caller s' h_step
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+  · obtain ⟨hc, -, -, rfl⟩ := step_setYieldRate_exact s bps caller s' h_step
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+  · obtain ⟨hc, rfl⟩ := step_handleStressEvent_exact s amt caller s' h_step
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+  · obtain ⟨hc, rfl⟩ := step_catastrophicBackstop_exact s caller s' h_step
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+  · obtain ⟨hc, rfl⟩ := step_setVestPeriod_exact s p caller s' h_step
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+
+/-- T3 (trace form): an arbitrarily long attack trace consisting solely of
+admin-gated operations leaves every field outside the nine admin-parameter fields
+unchanged. A compromised admin key can rewrite access lists and pricing/schedule
+parameters at will — with the deferred consequences listed in the section header —
+but cannot move a single unit of any recorded balance, supply, reserve, or unlock
+position. -/
+theorem admin_trace_blast_radius (s : State) (σ : List (Op × Address))
+    (h_gated : ∀ p ∈ σ, AdminOp p.1) :
+    ∀ wl dl yr lt cy tcv rv ef vp,
+      { execTrace s σ with whitelist := wl, denylist := dl, yieldRateMonth := yr,
+                           lastRateSetTime := lt, collateralYieldBase := cy,
+                           totalCollateralValue := tcv, redemptionValue := rv,
+                           emergencyFlag := ef, vestPeriod := vp }
+    = { s with whitelist := wl, denylist := dl, yieldRateMonth := yr,
+               lastRateSetTime := lt, collateralYieldBase := cy,
+               totalCollateralValue := tcv, redemptionValue := rv,
+               emergencyFlag := ef, vestPeriod := vp } := by
+  induction σ generalizing s with
+  | nil => intro _ _ _ _ _ _ _ _ _; rfl
+  | cons p σ ih =>
+    obtain ⟨op, c⟩ := p
+    intro wl dl yr lt cy tcv rv ef vp
+    have h_tail : ∀ q ∈ σ, AdminOp q.1 := fun q hq => h_gated q (List.mem_cons_of_mem _ hq)
+    simp only [execTrace]
+    cases hstep : step s op c with
+    | none => exact ih s h_tail wl dl yr lt cy tcv rv ef vp
+    | some s1 =>
+      obtain ⟨-, hframe⟩ :=
+        admin_frame s op c s1 (h_gated (op, c) List.mem_cons_self) hstep
+      calc { execTrace s1 σ with whitelist := wl, denylist := dl, yieldRateMonth := yr,
+                                 lastRateSetTime := lt, collateralYieldBase := cy,
+                                 totalCollateralValue := tcv, redemptionValue := rv,
+                                 emergencyFlag := ef, vestPeriod := vp }
+          = { s1 with whitelist := wl, denylist := dl, yieldRateMonth := yr,
+                      lastRateSetTime := lt, collateralYieldBase := cy,
+                      totalCollateralValue := tcv, redemptionValue := rv,
+                      emergencyFlag := ef, vestPeriod := vp } :=
+            ih s1 h_tail wl dl yr lt cy tcv rv ef vp
+        _ = { s with whitelist := wl, denylist := dl, yieldRateMonth := yr,
+                     lastRateSetTime := lt, collateralYieldBase := cy,
+                     totalCollateralValue := tcv, redemptionValue := rv,
+                     emergencyFlag := ef, vestPeriod := vp } :=
+            hframe wl dl yr lt cy tcv rv ef vp
+
+/-! ## Oracle role: direct frame (the indirect channel is Tier 2's T6)
+
+The oracle's two operations are `updateRedemptionValue` (a no-op placeholder in
+this model — notably, `redemptionValue` is writable only through the admin's
+`catastrophicBackstop`) and `setApxUSDMarketPrice`. Their *direct* blast radius is
+exactly the reported market-price field; the security-relevant channel is indirect:
+`apxUSDMarketPrice` gates the arbitrage mint pathway (`ray < apxUSDMarketPrice` in
+`Op.mintApxUSD`), which still takes 1 USDC per apxUSD minted from the *minter*.
+Quantifying worst-case extraction through mispricing is T6 (`oracle_blast_radius`,
+Tier 2). -/
+
+/-- Exact effect of `updateRedemptionValue`: demands the oracle role and — in this
+model — changes nothing at all. -/
+theorem step_updateRedemptionValue_exact (s : State) (caller : Address) (s' : State)
+    (h : step s Op.updateRedemptionValue caller = some s') :
+    caller = s.oracle ∧ s' = s := by
+  simp only [step] at h
+  split at h
+  · rename_i hc
+    exact ⟨by simpa using hc, (Option.some.inj h).symm⟩
+  · exact absurd h (by simp)
+
+/-- Exact effect of `setApxUSDMarketPrice`: demands the oracle role and overrides
+only the reported market price. -/
+theorem step_setApxUSDMarketPrice_exact (s : State) (price : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.setApxUSDMarketPrice price) caller = some s') :
+    caller = s.oracle ∧ s' = { s with apxUSDMarketPrice := price } := by
+  simp only [step] at h
+  split at h
+  · rename_i hc
+    exact ⟨by simpa using hc, (Option.some.inj h).symm⟩
+  · exact absurd h (by simp)
+
+/-- Oracle frame (single step): an oracle-gated operation demands the oracle role
+and agrees with the pre-state on every field other than `apxUSDMarketPrice`. -/
+theorem oracle_frame (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_gated : OracleOp op) (h_step : step s op caller = some s') :
+    caller = s.oracle ∧
+    ∀ mp, { s' with apxUSDMarketPrice := mp } = { s with apxUSDMarketPrice := mp } := by
+  obtain rfl | ⟨price, rfl⟩ := h_gated
+  · obtain ⟨hc, rfl⟩ := step_updateRedemptionValue_exact s caller s' h_step
+    exact ⟨hc, fun _ => rfl⟩
+  · obtain ⟨hc, rfl⟩ := step_setApxUSDMarketPrice_exact s price caller s' h_step
+    exact ⟨hc, fun _ => rfl⟩
+
+/-- Oracle trace form: an arbitrarily long attack trace consisting solely of
+oracle-gated operations changes nothing except the reported market price. The
+oracle's entire direct blast radius is one price field; all asset movement it can
+cause is mediated by *other* parties' subsequent operations (T6, Tier 2). -/
+theorem oracle_trace_blast_radius (s : State) (σ : List (Op × Address))
+    (h_gated : ∀ p ∈ σ, OracleOp p.1) :
+    ∀ mp, { execTrace s σ with apxUSDMarketPrice := mp }
+        = { s with apxUSDMarketPrice := mp } := by
+  induction σ generalizing s with
+  | nil => intro _; rfl
+  | cons p σ ih =>
+    obtain ⟨op, c⟩ := p
+    intro mp
+    have h_tail : ∀ q ∈ σ, OracleOp q.1 := fun q hq => h_gated q (List.mem_cons_of_mem _ hq)
+    simp only [execTrace]
+    cases hstep : step s op c with
+    | none => exact ih s h_tail mp
+    | some s1 =>
+      obtain ⟨-, hframe⟩ :=
+        oracle_frame s op c s1 (h_gated (op, c) List.mem_cons_self) hstep
+      calc { execTrace s1 σ with apxUSDMarketPrice := mp }
+          = { s1 with apxUSDMarketPrice := mp } := ih s1 h_tail mp
+        _ = { s with apxUSDMarketPrice := mp } := hframe mp
+
 end Apyx
