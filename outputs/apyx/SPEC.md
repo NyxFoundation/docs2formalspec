@@ -172,6 +172,7 @@ The following terms have the meanings defined below. The definitions use the key
 | **REQ‑redemption‑exchange‑rate‑multiplier** | **When a user redeems apyUSD, the system MUST transfer an amount of apxUSD equal to the number of apyUSD redeemed multiplied by the current exchange rate, which MUST be greater than or equal to 1.** |
 | **REQ‑yield‑distributor‑credit** | **The YieldDistributor MUST credit converted apxUSD proceeds to the apyUSD vault.** |
 | **REQ‑linear‑vest‑implementation** | **The LinearVestV0 contract MUST implement a linear vesting mechanism for yield credited to the apyUSD vault.** |
+| **REQ‑credit‑preserves‑accrued‑vest** | **When new yield is deposited or the vesting period is changed, the LinearVestV0 contract MUST accrue the already‑vested‑but‑not‑yet‑transferred amount into a separate fully‑vested accumulator BEFORE resetting the vesting clock, so previously accrued yield is preserved (not forfeited) across the reset.** |
 | **REQ‑continuous‑stream** | **Yield MUST be streamed continuously over a configurable period rather than as a lump‑sum distribution.** |
 | **REQ‑monthly‑yield‑rate‑set** | **Each month, the system MUST set the yield rate for the following month based on the prior month’s collateral‑base yield.** |
 | **REQ‑yield‑rate‑dollar‑terms** | **The yield rate MUST be expressed in dollar terms for the month.** |

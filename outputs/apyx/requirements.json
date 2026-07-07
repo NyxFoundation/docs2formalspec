@@ -431,6 +431,17 @@
   ]
  },
  {
+  "id": "credit-preserves-accrued-vest",
+  "category": "arithmetic",
+  "statement": "When new yield is deposited or the vesting period is changed, the LinearVestV0 contract MUST accrue the already-vested-but-not-yet-transferred amount into a separate fully-vested accumulator BEFORE resetting the vesting clock, so that previously accrued yield is preserved (not forfeited) across the reset.",
+  "rationale": "depositYield/setVestingPeriod reset the vesting period; without first capturing the newly-vested portion, accrued yield would be re-thrown into the unvested pool and its realization postponed. The contract preserves it via `fullyVestedAmount += newlyVestedAmount()` prior to the timestamp reset.",
+  "source_quote": "Add new amount to fully vested and unvested amount / fullyVestedAmount += newlyVestedAmount(); vestingAmount = unvestedAmount() + amount;",
+  "formalizable": true,
+  "sources": [
+   "https://github.com/apyx-labs/evm-contracts/blob/main/src/LinearVestV0.sol"
+  ]
+ },
+ {
   "id": "continuous-stream",
   "category": "temporal",
   "statement": "Yield MUST be streamed continuously over a configurable period rather than as a lump‑sum distribution.",

@@ -35,6 +35,8 @@
 | `globalPause` | `bool` | `true` ⇒ all deposit/mint ops revert. |
 | `yieldRateMonth` | `uint256` (basis points) | Monthly yield applied to the vault’s assets. |
 | `vestPeriod` | `uint256` (seconds) | Linear vesting period for `LinearVestV0`. |
+| `vestTotal` (contract: `vestingAmount`) | `uint256` | The unvested yield pool, vesting linearly from `vestStart` over `vestPeriod`. |
+| `fullyVestedAmount` | `uint256` | Yield that has already vested but not yet been pulled into the vault. Preserved across deposits/period-changes (`vestedAmount = fullyVestedAmount + newlyVested`). |
 | `unlockTokenId → (owner, amount, requestTime)` | `struct` | NFT representing a pending unlock. |
 | `unlockTokenAddress` | `address` (constant) | Identifies the single UnlockToken contract instance holding the unlock registry. |
 | `unlockTokenOperator` | `address` | Address authorized to initiate a claim on behalf of a recorded unlock-position owner (the apyUSD vault). |
@@ -59,9 +61,9 @@
 | **addToWhitelist / removeFromWhitelist** | `addr` | `msg.sender` has `ADMIN_ROLE` | `whitelist[addr] = true / false`. |
 | **addToDenylist / removeFromDenylist** | `addr` | `msg.sender` has `ADMIN_ROLE` | `denylist[addr] = true / false`. |
 | **setYieldRate** | `bps` | `msg.sender == admin` ∧ `now ≥ lastRateSetTime + 30 days` (monthly cadence) ∧ `bps ≤ collateralYieldBase` (bounded by the prior month's collateral-derived yield) | `yieldRateMonth = bps`; `lastRateSetTime = now`; `collateralYieldBase` refreshed from the current collateral state (becomes next month's basis). |
-| **creditYield** | `amount` (USDC) | `msg.sender` == `YieldDistributor` | `LinearVestV0.deposit(amount)`; updates internal vesting schedule. |
+| **creditYield** | `amount` (USDC) | `msg.sender` == `YieldDistributor` | Accrue the already-vested portion first (`fullyVestedAmount += newlyVested`), then rebase the pool (`vestTotal := unvested + amount`) and reset `vestStart := now` — so previously accrued yield is **preserved**, not forfeited (REQ‑credit‑preserves‑accrued‑vest). Also `usdcReserve += amount`. |
 | **setApxUSDMarketPrice** | `price` | `msg.sender == oracle` | `apxUSDMarketPrice = price`. Gates the `mintApxUSD` arbitrage pathway. |
-| **setVestPeriod** | `p` | `msg.sender == admin` | `vestPeriod = p`. |
+| **setVestPeriod** | `p` | `msg.sender == admin` | Accrue already-vested first (`fullyVestedAmount += newlyVested`), rebase `vestTotal := unvested`, reset `vestStart := now`, then `vestPeriod = p` — same preservation as creditYield (REQ‑credit‑preserves‑accrued‑vest). |
 | **voteBufferDeployment** | – | `msg.sender` holds governance tokens ≥ threshold | If proposal passes, `OvercollateralizationBuffer` may be allocated per vote outcome. |
 | **executeRFQRedemption** | `user`, `amount` | `msg.sender` ∈ approved RFQ counterparties ∧ `whitelist[user]` | Burn `amount` apxUSD from `user`; transfer USDC = `amount * RedemptionValue / 1e2`. |
 | **updateRedemptionValue** | – | Called by oracle/treasury after collateral re‑valuation | `RedemptionValue = TotalCollateralValue / totalSupply_apxUSD`; recompute `OvercollateralizationBuffer`. |
@@ -77,7 +79,7 @@
 * **Cooldown** = 20 days (claimable after) with early‑claim fee = `3.5 % – (t/20d)*(3.4 %)` (minimum 0.1 %).  
 * **Flexible redemption** minimum claim after 3 days, same fee schedule.  
 * **Over‑collateralization**: `OvercollateralizationBuffer ≥ 0` at all times; may only increase on yield or asset appreciation.  
-* **Yield vesting** linear over `vestPeriod` (default 20 days).  
+* **Yield vesting** linear over `vestPeriod` (default 20 days); `vestedAmount = fullyVestedAmount + newlyVested`, and deposits/period-changes accrue the newly-vested portion into `fullyVestedAmount` before resetting the clock, so accrued yield is never forfeited (REQ‑credit‑preserves‑accrued‑vest). *(Model simplification vs contract: the contract separates `lastDepositTimestamp` from `lastTransferTimestamp` so pulls don't extend the vesting end; the model uses a single `vestStart`, so a pull restarts the remaining pool's clock — a documented remaining approximation.)*  
 * **UnlockToken singleton/operator**: exactly one `unlockTokenAddress` exists and is never reassigned; `unlockTokenOperator` (the vault) never changes and may claim on behalf of any recorded owner once cooldown has elapsed.  
 * **Monthly yield-rate cadence**: `setYieldRate` succeeds at most once per 30-day period, and the accepted rate is bounded by the previous period's recorded collateral-base yield.  
 
