@@ -1627,4 +1627,168 @@ theorem redeem_payout_has_no_cap (N : Nat) :
       rw [hbal, h0, hrv, Nat.one_mul, Nat.mul_div_cancel _ hray]
       omega
 
+/-! ## Active no-extraction: every apxUSD credit is backed (caller-side dual of T5)
+
+T5 (`no_theft_ledger`) bounds what a *passive* victim who never signs can lose:
+nothing. This section is the **active** complement: an attacker who DOES sign — with
+any keys, including every privileged role at once — cannot create apxUSD value from
+nothing. Exhaustive case analysis over the closed `step` shows the model has **no
+`step` case that mints apxUSD to an address without either an equal USDC payment
+into the reserve or the settlement of that address's own pre-existing recorded
+locked position** — no free-mint path exists for any caller. Cite together with T5:
+passive users cannot lose (T5), active callers cannot gain unbacked value (this).
+
+RFQ carve-out note: `executeRFQRedemption` never *credits* apxUSD (it burns the
+user's apxUSD and pays USDC), so it does not appear in the credit disjunction at
+all. Its USDC leg is priced at the admin-controlled `redemptionValue` with no cap
+(`redeem_payout_has_no_cap`, T6) and is exactly the outflow channel tracked by
+`reserve_outflow_only_via_redemption` — the unbounded coalition channel is USDC
+*outflow* at a corrupted price, never apxUSD *creation*. -/
+
+/-- Active no-extraction, single step: **every apxUSD credit is backed**.
+
+Threat model: arbitrary caller (any compromised role, or any ordinary account).
+If any address `a`'s apxUSD balance strictly increased across a successful step,
+total case analysis over `step` shows the operation is one of exactly three backed
+channels:
+
+1. **Paid mint** — `depositUSDC amount` (with `a` the caller) or `mintApxUSD a amount`
+   (the arbitrage mint to `a`): the credit is exactly `amount`, and in the *same
+   atomic step* the **caller paid `amount` USDC** — the caller held at least `amount`
+   USDC, their balance is debited by `amount`, and the reserve grows by `amount`.
+   Strict 1:1 backing; no free value for anyone (for the arbitrage mint the payer is
+   the caller, so a mint directed at a third party is a gift from the caller, not a
+   mint from nothing).
+2. **Standard claim** — `claimUnlock id` settling a recorded unlock position **owned
+   by `a`** (`unlockRequests id = some (a, amount, _)` and
+   `unlockTokenOwner id = some a`, cooldown elapsed): the credit is exactly the
+   recorded `amount`, i.e. value `a` locked earlier via the apxUSD burns in
+   `requestUnlock`/`withdraw`/`redeem`.
+3. **Flexible claim** — `flexibleClaimUnlock id` settling `a`'s recorded flexible
+   position: the credit is the recorded amount *minus* the early-exit fee, hence
+   never exceeds the recorded amount.
+
+No other case credits apxUSD: `lockApxUSD`, `requestUnlock`, `flexibleRequestUnlock`,
+`redeemApxUSD`, and `executeRFQRedemption` only *burn* it, `withdraw`/`redeem` and
+every role-gated operation leave every apxUSD balance unchanged (they land in the
+contradiction branches of this proof).
+
+This lemma is the induction step for the trace-level summed conservation
+("`a`'s total apxUSD received across `execTrace` ≤ initial holdings + USDC paid in
++ own positions settled"); the summed form additionally needs a finite ledger of
+`a`'s live unlock-position amounts (to price channels 2-3 at trace start) and is
+left as the stated next step. -/
+theorem apxUSD_credit_is_backed (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') (a : Address)
+    (h_inc : s.apxUSDBal a < s'.apxUSDBal a) :
+    (∃ amount,
+        ((op = Op.depositUSDC amount ∧ a = caller) ∨ op = Op.mintApxUSD a amount) ∧
+        amount ≤ s.usdcBal caller ∧
+        s'.usdcBal caller = s.usdcBal caller - amount ∧
+        s'.usdcReserve = s.usdcReserve + amount ∧
+        s'.apxUSDBal a = s.apxUSDBal a + amount) ∨
+    (∃ id amount cooldownEnd,
+        op = Op.claimUnlock id ∧
+        s.unlockRequests id = some (a, amount, cooldownEnd) ∧
+        s.unlockTokenOwner id = some a ∧
+        cooldownEnd ≤ s.now ∧
+        s'.apxUSDBal a = s.apxUSDBal a + amount) ∨
+    (∃ id amount requestTime cooldownEnd,
+        op = Op.flexibleClaimUnlock id ∧
+        s.flexibleUnlockRequests id = some (a, amount, requestTime, cooldownEnd) ∧
+        s.unlockTokenOwner id = some a ∧
+        requestTime + minFlexibleClaim ≤ s.now ∧
+        s'.apxUSDBal a
+          = s.apxUSDBal a + (amount - amount * flexibleUnlockFee requestTime s.now / 10000) ∧
+        s'.apxUSDBal a ≤ s.apxUSDBal a + amount) := by
+  cases op
+  case depositUSDC amount =>
+    obtain ⟨_, _, _, hle, hs'⟩ := inv_depositUSDC _ _ _ _ h_step
+    subst hs'
+    by_cases hac : a = caller
+    · subst hac
+      refine Or.inl ⟨amount, Or.inl ⟨rfl, rfl⟩, hle, ?_, ?_, ?_⟩ <;>
+        simp [emitEvent, mintApxUSD]
+    · exfalso
+      simp [emitEvent, mintApxUSD, hac] at h_inc
+  case mintApxUSD to amount =>
+    obtain ⟨_, _, _, _, _, hle, hs'⟩ := inv_mintApxUSD _ _ _ _ _ h_step
+    subst hs'
+    by_cases hat : a = to
+    · subst hat
+      refine Or.inl ⟨amount, Or.inr rfl, hle, ?_, ?_, ?_⟩ <;>
+        simp [emitEvent, mintApxUSD]
+    · exfalso
+      simp [emitEvent, mintApxUSD, hat] at h_inc
+  case lockApxUSD amount =>
+    obtain ⟨_, _, hs'⟩ := inv_lockApxUSD _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD] at h_inc
+    split at h_inc <;> omega
+  case requestUnlock amount =>
+    obtain ⟨_, _, hs'⟩ := inv_requestUnlock _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [createStandardUnlock, burnApxUSD] at h_inc
+    split at h_inc <;> omega
+  case claimUnlock id =>
+    obtain ⟨o, am, ce, hreq, howner, hcaller, hnow, hs'⟩ := inv_claimUnlock _ _ _ _ h_step
+    subst hs'
+    by_cases hao : a = o
+    · subst hao
+      exact Or.inr (Or.inl ⟨id, am, ce, rfl, hreq, howner, hnow,
+        by simp [mintApxUSD, burnUnlockNFT]⟩)
+    · exfalso
+      simp [mintApxUSD, burnUnlockNFT, hao] at h_inc
+  case redeemApxUSD amount =>
+    obtain ⟨_, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [emitEvent, burnApxUSD] at h_inc
+    split at h_inc <;> omega
+  case withdraw assets receiver =>
+    obtain ⟨_, _, _, hs'⟩ := inv_withdraw _ _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD] at h_inc
+  case redeem shares receiver =>
+    obtain ⟨_, _, _, hs'⟩ := inv_redeem _ _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD] at h_inc
+  case flexibleRequestUnlock amount =>
+    obtain ⟨_, _, hs'⟩ := inv_flexibleRequestUnlock _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [createFlexibleUnlock, burnApxUSD] at h_inc
+    split at h_inc <;> omega
+  case flexibleClaimUnlock id =>
+    obtain ⟨o, am, rt, ce, hreq, howner, hcaller, hnow, hs'⟩ :=
+      inv_flexibleClaimUnlock _ _ _ _ h_step
+    subst hs'
+    by_cases hao : a = o
+    · subst hao
+      have heq : (mintApxUSD (burnUnlockNFT s id) a
+            (am - am * flexibleUnlockFee rt s.now / 10000)).apxUSDBal a
+          = s.apxUSDBal a + (am - am * flexibleUnlockFee rt s.now / 10000) := by
+        simp [mintApxUSD, burnUnlockNFT]
+      refine Or.inr (Or.inr ⟨id, am, rt, ce, rfl, hreq, howner, hnow, heq, ?_⟩)
+      rw [heq]
+      exact Nat.add_le_add_left (Nat.sub_le _ _) _
+    · exfalso
+      simp [mintApxUSD, burnUnlockNFT, hao] at h_inc
+  case executeRFQRedemption user amount =>
+    obtain ⟨_, _, _, _, hs'⟩ := inv_executeRFQRedemption _ _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [burnApxUSD] at h_inc
+    split at h_inc <;> omega
+  all_goals
+    simp only [step] at h_step
+    split at h_step <;>
+      first
+        | (cases Option.some.inj h_step; exact absurd h_inc (Nat.lt_irrefl _))
+        | exact absurd h_step (by simp)
+
 end Apyx
