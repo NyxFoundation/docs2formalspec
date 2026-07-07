@@ -107,7 +107,7 @@ report are a **majority vote over 3 independent runs**, not a single sample.
 | [`SPEC.md`](SPEC.md) | Rendered RFC 2119 specification document (human-readable, organized by category) |
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine (actors, state variables, operations, guarantees) |
 | [`Apyx.lean`](Apyx.lean) | **The formal model and all 81 requirement proofs** — `State`, `Op`, `step`, and one `theorem req_*` per formalizable requirement, each with an RFC 2119 docstring |
-| [`BlastRadius.lean`](../../lean/D2fsSpecs/BlastRadius.lean) | **The 56 key-compromise blast-radius proofs** (§6) — trace executor, per-role damage bounds, and the rate-limit / timelock defense wrappers, all imported from and additive to `Apyx.lean` (which it leaves untouched) |
+| [`BlastRadius.lean`](BlastRadius.lean) | **The 56 key-compromise blast-radius proofs** (§6) — trace executor, per-role damage bounds, and the rate-limit / timelock defense wrappers, all imported from and additive to `Apyx.lean` (which it leaves untouched) |
 | [`leancheck.json`](leancheck.json) | Compile status: `81` requirement theorems, `0` sorry, `0` vacuous, `81` mechanically proved |
 | [`review.json`](review.json) | Faithfulness verdicts (majority vote over 3 runs) + per-requirement vote records |
 | [`review_run1.json`](review_run1.json), [`review_run2.json`](review_run2.json), [`review_run3.json`](review_run3.json) | Raw per-run judge output, kept for reproducibility of the majority vote |
@@ -226,7 +226,7 @@ The §4 requirement proofs assume every actor behaves as documented. This sectio
 harder question that documentation never addresses: **if a privileged operator key is stolen — the
 social-engineering / infrastructure-compromise threat that caused the Bybit $1.5B loss and ~44% of 2024
 crypto theft — how much can the attacker take?** All proofs are in
-[`BlastRadius.lean`](../../lean/D2fsSpecs/BlastRadius.lean), machine-checked, additive to and leaving
+[`BlastRadius.lean`](BlastRadius.lean), machine-checked, additive to and leaving
 `Apyx.lean` untouched.
 
 The threat model: the attacker holds the private key of one or more role addresses (`admin`, `oracle`,

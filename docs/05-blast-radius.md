@@ -4,7 +4,7 @@
 
 ## 実装ステータス(2026-07-07) — **T1-T10 + 能動的no-extraction すべて完了**
 
-`lean/D2fsSpecs/BlastRadius.lean`(単一モジュール、namespace `Apyx`、**公開定理56本**、sorry 0・vacuous 0)。`Apyx.lean`(81要件定理)は無傷 — blast-radius層は完全に追加的。公理依存: 55本が `propext`/`Quot.sound` のみ、`admin_rfq_coalition_drains` のみ追加で `Classical.choice`(Lean標準の信頼公理、sorryではない)、`base_model_has_no_timelock` は**公理ゼロ**(完全構成的)。
+`outputs/apyx/BlastRadius.lean`(単一モジュール、`lean/D2fsSpecs/` からsymlink、namespace `Apyx`、**公開定理56本**、sorry 0・vacuous 0)。`Apyx.lean`(81要件定理)は無傷 — blast-radius層は完全に追加的。公理依存: 55本が `propext`/`Quot.sound` のみ、`admin_rfq_coalition_drains` のみ追加で `Classical.choice`(Lean標準の信頼公理、sorryではない)、`base_model_has_no_timelock` は**公理ゼロ**(完全構成的)。
 
 **base Apyxモデルの性質(現行プロトコルについての定理):**
 - **T1-T3**: pauser/yieldDistributor/admin の各ロール侵害が残高・供給量フィールドに触れない(単発 `*_frame` + トレース `*_trace_blast_radius`)。
