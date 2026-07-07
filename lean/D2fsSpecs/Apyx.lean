@@ -1125,22 +1125,61 @@ theorem req_redemption_cooldown_period (s : State) :
 
 /-- REQ cooldown-no-yield: During a redemption cooldown, the exchange rate for the locked
 apyUSD MUST remain fixed and the user MUST not accrue additional yield on those tokens.
-(Model: the pending request is untouched by the passage of time and a claim pays exactly
-the amount frozen at request time, independent of any later exchange-rate movement.) -/
-theorem req_cooldown_no_yield (s : State) (id : Nat) (caller : Address) (dt : Nat) :
-    ({ s with now := s.now + dt }).unlockRequests id = s.unlockRequests id ∧
-    (∀ owner amount cooldownEnd s',
-      s.unlockRequests id = some (owner, amount, cooldownEnd) →
-      step s (Op.claimUnlock id) caller = some s' →
-      s'.apxUSDBal owner = s.apxUSDBal owner + amount) := by
-  refine ⟨rfl, ?_⟩
-  intro owner amount cooldownEnd s' hreq h
-  obtain ⟨o, a, ce, hreq', _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h
-  rw [hreq] at hreq'
-  simp only [Option.some.injEq, Prod.mk.injEq] at hreq'
-  obtain ⟨rfl, rfl, rfl⟩ := hreq'
-  subst hs'
-  simp [mintApxUSD, burnUnlockNFT]
+(Model: when apyUSD enters the redemption cooldown — `Op.redeem`/`Op.withdraw` — the
+payout for the locked tokens is computed ONCE, at the apxUSD/apyUSD exchange rate in
+force at request time (`redeemAssets shares s.exchangeRate` resp. `assets`), and recorded
+in the cooldown position. That is the "fixed exchange rate": the locked tokens' value is
+frozen at the request-time rate for the entire `cooldownPeriod`. And no additional yield
+accrues on them: `Op.creditYield` — the only operation by which apyUSD holders receive
+yield — leaves both the recorded cooldown entry and the locked position amount completely
+unchanged, and the eventual claim pays out exactly the frozen amount, insensitive to any
+exchange-rate movement between request and claim.) -/
+theorem req_cooldown_no_yield (s : State) :
+    -- apyUSD entering cooldown via `redeem`: the payout is locked in at the
+    -- request-time exchange rate, frozen for the whole cooldown period
+    (∀ shares receiver caller s',
+      step s (Op.redeem shares receiver) caller = some s' →
+      s'.unlockRequests s.nextUnlockId
+        = some (receiver, redeemAssets shares s.exchangeRate, s.now + cooldownPeriod) ∧
+      s'.unlockTokenAmount s.nextUnlockId = redeemAssets shares s.exchangeRate) ∧
+    -- apyUSD entering cooldown via `withdraw`: likewise frozen at the request-time rate
+    (∀ assets receiver caller s',
+      step s (Op.withdraw assets receiver) caller = some s' →
+      s'.unlockRequests s.nextUnlockId = some (receiver, assets, s.now + cooldownPeriod) ∧
+      s'.unlockTokenAmount s.nextUnlockId = assets) ∧
+    -- no yield accrues on locked tokens: crediting yield never changes any recorded
+    -- cooldown entry or locked amount
+    (∀ (t : State) (y : Nat) (ycaller : Address) (t' : State),
+      step t (Op.creditYield y) ycaller = some t' →
+      ∀ id, t'.unlockRequests id = t.unlockRequests id ∧
+        t'.unlockTokenAmount id = t.unlockTokenAmount id) ∧
+    -- the claim pays out exactly the frozen amount, regardless of the exchange rate
+    -- prevailing at claim time
+    (∀ (t : State) (id : Nat) (caller owner : Address) (amount cooldownEnd : Nat) (t' : State),
+      t.unlockRequests id = some (owner, amount, cooldownEnd) →
+      step t (Op.claimUnlock id) caller = some t' →
+      t'.apxUSDBal owner = t.apxUSDBal owner + amount) := by
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · intro shares receiver caller s' h
+    obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h
+    subst hs'
+    constructor <;> simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  · intro assets receiver caller s' h
+    obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h
+    subst hs'
+    constructor <;> simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  · intro t y ycaller t' h id
+    simp only [step] at h
+    split at h
+    · cases Option.some.inj h; exact ⟨rfl, rfl⟩
+    · exact absurd h (by simp)
+  · intro t id caller owner amount cooldownEnd t' hreq h
+    obtain ⟨o, a, ce, hreq', _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h
+    rw [hreq] at hreq'
+    simp only [Option.some.injEq, Prod.mk.injEq] at hreq'
+    obtain ⟨rfl, rfl, rfl⟩ := hreq'
+    subst hs'
+    simp [mintApxUSD, burnUnlockNFT]
 
 /-- REQ flexible-redemption-multiple-requests: The system MUST allow a user to have
 multiple concurrent flexible redemption unlock requests. (Model: two back-to-back flexible
