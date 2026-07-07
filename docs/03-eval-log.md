@@ -152,6 +152,39 @@ pay-to-non-cooldown, unlockToken-mints-apxUSD_unlock-immediately)は
 ラウンドトリップ検証手法への置き換え、などLLM judge自体の分散を
 下げる手当てが前提となる。
 
+## 最終計測: 3回独立実行の多数決 — 2026-07-07
+
+judgeノイズを追加ラウンドで潰すのではなく、測定手法自体を頑健にする方針に
+転換。**同一の(変更なし)Leanコードに対しラウンドトリップ審査を3回独立
+実行**し、要件ごとに多数決判定を取った。
+
+| run | full | partial | mismatch | unformalizable | full+partial |
+|---|---|---|---|---|---|
+| 1 | 23 | 48 | 4 | 2 | 92.2% |
+| 2 | 24 | 50 | 1 | 2 | 96.1% |
+| 3 | 22 | 51 | 2 | 2 | 94.8% |
+| **多数決** | **23** | **49** | **3** | **2** | **93.5%** |
+
+77件中17件で3回の判定が割れた(主にfull/partial境界)。注目すべき点:
+- **unlockToken-mints-apxUSD_unlock-immediately**: 3回ともmismatch
+  (満場一致)。第6弾でcorpus.mdのシーケンス図まで確認し形式化は正しいと
+  判断していたが、judgeは一貫して不一致と読む。**ノイズではなく再現性の
+  ある解釈の相違**として正直に記録。
+- **price-may-include-spreads / rebalance-overcollateralization**:
+  3回とも unformalizable で完全一致。モデルの範囲外という判断が
+  頑健であることを確認。
+- **pay-to-non-cooldown**: 2/3でmismatch(多数決もmismatch)。
+- **token-no-rebase**: full/partial/mismatchが1票ずつの三すくみ
+  (真の多数決なし、僅差の判定)。
+
+`outputs/apyx/review.json` を多数決結果に更新し、生の3回分は
+`review_run{1,2,3}.json` として保存(再現性のため)。
+
+**最終確定値**: 定理81件、証明済み81件(sorry 0、100%)、忠実カバレッジ
+(3回多数決)**93.5%**(full 23 / partial 49 / mismatch 3 / unformalizable 2)。
+単一run値(78〜96%)ではなくこの多数決値を正式な最終数値として採用する。
+6ラウンドの手動形式化 + 測定手法の頑健化を経て、本エフォートを終了とする。
+
 副産物として `src/d2fs/review.py` のバグを発見・修正: ラウンドトリップ審査が
 theorem名→要件idの逆引きに `name.removeprefix("req_").replace("_", "-")` という
 素朴な変換を使っており、id内に大文字が残るもの(`apyUSD`, `UnlockToken`,
