@@ -2181,11 +2181,29 @@ theorem req_deposit_mint_apxusd (s : State) (amount : Nat) (caller : Address)
     subst hs'
     exact ⟨_, rfl, by simp [emitEvent, mintApxUSD], by simp [emitEvent, mintApxUSD]⟩
 
-/-- REQ mint-price: The protocol MUST price newly minted apxUSD at $1 per unit. (Model:
-`Op.mintApxUSD` is the arbitrage minting pathway, open only while apxUSD trades above
-$1.00 (`h6`, cf. `req_arbitrage_mint_access`); whenever it executes, each newly minted
-apxUSD unit is priced at exactly $1 — `amount` USDC paid for `amount` apxUSD minted.) -/
-theorem req_mint_price (s : State) (amount : Nat) (to : Address) (caller : Address)
+/-- REQ mint-price: The protocol MUST price newly minted apxUSD at $1 per unit. This holds
+unconditionally via the standard deposit pathway (`Op.depositUSDC`) — `amount` USDC paid for
+`amount` apxUSD minted, with no market-price precondition. The separate arbitrage pathway
+(`Op.mintApxUSD`, see `req_arbitrage_mint_access`/`req_mint_price_arbitrage_pathway`) is
+gated on market-price conditions but mints at the same 1:1 rate once its access conditions
+are satisfied. -/
+theorem req_mint_price (s : State) (amount : Nat) (caller : Address)
+    (h1 : s.globalPause = false) (h2 : s.whitelist caller = true) (h3 : s.usdcBal caller ≥ amount)
+    (h4 : s.denylist caller = false) :
+    ∃ s', step s (Op.depositUSDC amount) caller = some s' ∧
+          s'.apxUSDBal caller = s.apxUSDBal caller + amount ∧
+          s'.usdcBal caller = s.usdcBal caller - amount ∧
+          s'.totalSupply_apxUSD = s.totalSupply_apxUSD + amount := by
+  rcases ho : step s (Op.depositUSDC amount) caller with _ | s'
+  · exact absurd ho (by simp [step, h1, h2, h4, Nat.not_lt.mpr h3])
+  · obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ ho
+    subst hs'
+    exact ⟨_, rfl, by simp [emitEvent, mintApxUSD], by simp [emitEvent, mintApxUSD],
+           by simp [emitEvent, mintApxUSD]⟩
+
+/-- REQ mint-price (arbitrage pathway): the premium-gated `Op.mintApxUSD` pathway also prices
+at $1 once its access conditions (whitelist, denylist-clear, market price above $1) hold. -/
+theorem req_mint_price_arbitrage_pathway (s : State) (amount : Nat) (to : Address) (caller : Address)
     (h1 : s.globalPause = false) (h2 : s.whitelist caller = true) (h3 : s.usdcBal caller ≥ amount)
     (h4 : s.denylist caller = false) (h5 : s.denylist to = false)
     (h6 : ray < s.apxUSDMarketPrice) :
