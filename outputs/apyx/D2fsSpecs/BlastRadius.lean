@@ -1,4 +1,5 @@
 import D2fsSpecs.Apyx
+import LeanAtlas.Metadata.Attribute.Meta
 
 /-!
 # Blast-radius theorems: damage upper bounds under privileged-key compromise
@@ -1367,6 +1368,9 @@ and that no approved RFQ counterparty executes an RFQ redemption *against `u`*
 Claim: none of `u`'s four recorded holdings can decrease — apxUSD, apyUSD vault
 shares, external USDC, and governance tokens (the last is bitwise unchanged). The
 team being fully phished cannot move your balances. -/
+@[formalMeta "Non-custodial guarantee"
+  "Even with every operator key stolen at once, a user who signs nothing and is never RFQ-targeted cannot lose any of their four holdings across any operation trace — the machine-checked form of \"we cannot move your funds even if we wanted to\"."
+  mainTheorem]
 theorem user_assets_immune_to_total_key_compromise
     (s : State) (σ : List (Op × Address)) (u : Address)
     (h_u : ∀ p ∈ σ, p.2 ≠ u)
