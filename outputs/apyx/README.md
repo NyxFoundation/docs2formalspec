@@ -56,6 +56,18 @@ A subsequent **6-round hand-verification pass** (higher-grade model, direct Lean
 checked against `lake build`) took this to the results below — including finding and fixing two real
 model-level gaps described in §3.
 
+A final **independent-review + strengthening pass** then read every theorem's *actual formal content*
+(blind to its docstring) hunting for vacuous, tautological, or under-specified statements, and repaired
+each one found — always keeping the whole project green, `sorry`-free, and dependent only on Lean's
+standard `propext`/`Quot.sound` axioms. This pass (a) replaced two vacuous/tautological requirement
+theorems (`req_yield_rate_dollar_terms`, `req_linear_vest_implementation`) and two docstring/statement
+mismatches (`req_deposit_immediate`, `req_mint_immediate`) with genuine content; (b) pinned the exact
+event-parameter tuples in the deposit/mint event theorems; (c) added the missing conservation twin
+`setVestPeriod_preserves_accrued_vest`; and (d) closed two model-fidelity gaps by **faithful changes to
+the `step` transition function itself** — the single-pending-redemption rule and the below-par arbitrage
+redeem gate (both detailed in §4). Two requirement clauses that the abstract ledger cannot express were
+identified and documented as honest scope limits rather than papered over (§5.5).
+
 ---
 
 ## 2. Reproducing / checking this report yourself
@@ -137,11 +149,19 @@ by category:
   `req_vault_operator_of_unlock_token`).
 - `apxUSD_unlock` positions are never transferable or cancellable once created — proved by exhaustive case
   analysis (`req_unlock_token_nontransferable`, `req_unlock_cannot_be_cancelled`).
+- Each user holds **at most one pending standard redemption**: a repeat `requestUnlock` tops up the
+  caller's existing position and resets its cooldown on the aggregated amount, rather than opening a
+  second one — now enforced by the transition function itself (`requestUnlockStep`), and proved as a
+  reachable step-level invariant (`req_single_pending_redemption_per_user`,
+  `req_multiple_unlocks_reset_cooldown`).
 
 **Pricing & solvency**
 - Standard minting (`depositUSDC`) always prices at exactly $1/unit, unconditionally; the separate
   arbitrage pathway (`mintApxUSD`) also prices at $1 but only executes while apxUSD trades above $1
-  (`req_mint_price`, `req_mint_price_arbitrage_pathway`, `req_arbitrage_mint_access`).
+  (`req_mint_price`, `req_mint_price_arbitrage_pathway`, `req_arbitrage_mint_access`). Symmetrically, the
+  arbitrage *redemption* pathway (`redeemApxUSD`) is gated to execute only while apxUSD trades **below** $1
+  and only for a whitelisted caller (`req_arbitrage_redeem_access`) — a `step`-level guard added in the
+  strengthening pass to match the requirement.
 - The overcollateralization invariant is preserved across (most) operations, under stated well-formedness
   hypotheses (`req_overcollateralization_limit`).
 - The apyUSD/apxUSD exchange rate is non-decreasing; yield vests linearly and completes in exactly the
@@ -222,7 +242,27 @@ actual formal content was judged to assert something narrower or different from 
 The majority of formalized requirements (`partial` verdict) capture the *core* normative behavior but not
 every clause of the source text — e.g. a theorem proving a redemption's dollar-value calculation without
 also asserting the emitted event's exact parameter list. See `review.json` → `results[].note` for the
-specific gap on any individual requirement.
+specific gap on any individual requirement. (The strengthening pass directly closed several such gaps —
+exact event-parameter tuples, the behavioral linear-vest properties, and the dollar-denominated yield-rate
+bound — though the LLM faithfulness judge in §8 was not re-run, so its coverage figures do not yet reflect
+these improvements and should be read as a conservative lower bound.)
+
+### 5.5 Formalizable only in part — clauses the abstract ledger cannot express (documented, not faked)
+
+Two requirement clauses were deliberately left partial because expressing them faithfully would require
+structure the model does not carry, and encoding a fictional version would be worse than an honest gap:
+
+- **`catastrophic-backstop`, second clause** — "…and MUST distribute the entire reserve, including the
+  buffer, **pro-rata to remaining holders**." The first clause (`redemptionValue := totalCollateralValue`,
+  the on-chain trigger that makes every holder's claim track collateral) **is** proved
+  (`req_catastrophic_backstop`). A genuine pro-rata split, however, requires a `Σ_holder reserve ·
+  balance/totalSupply` over the holder set, but `apxUSDBal`/`usdcBal` are bare `Address → Nat` maps with no
+  finite-support/summation structure — the *same* ledger limitation that forces `solvency_preserved` to
+  take well-formedness as a hypothesis. The distribution mechanics are left to an implementation-level audit.
+- **`caller_net_nonpositive`, trace/live-rate closure (§7)** — the value-weighted "no free money" property
+  is proved single-step at a fixed reference rate; lifting it to arbitrary traces under a *moving* exchange
+  rate is a distinct, genuinely hard arithmetic problem (bounding a single `updateExchangeRate` rate move
+  and composing along the trace) that is explicitly flagged as open rather than claimed.
 
 ---
 
@@ -326,7 +366,11 @@ the contract's two-accumulator vesting design into one bucket. The model, spec, 
 `setVestPeriod` made accrue-first; the forfeit theorem became the conservation theorem
 `creditYield_preserves_accrued_vest` (the credit no longer erases accrued yield). This is the pillar working
 as intended: the proof flagged a concrete question, checking the real source settled it, and the artifact was
-brought into faithfulness. Full method, the S1–S7 roadmap, and the finding's full trail:
+brought into faithfulness. The later strengthening pass added the missing **conservation twin**
+`setVestPeriod_preserves_accrued_vest`: `setVestPeriod` runs the *same* accrue-first clock-restart as
+`creditYield` and was asserted safe only in prose, so it now carries the same machine-checked
+non-forfeiture guarantee (`vestedAmount` and `totalAssets` both preserved). Full method, the S1–S7
+roadmap, and the finding's full trail:
 [`docs/06-safety-properties.md`](https://github.com/NyxFoundation/docs2formalspec/blob/main/docs/06-safety-properties.md).
 
 **Honest scope limit (all three pillars):** these are properties of the abstract Lean model, not the
@@ -344,7 +388,7 @@ state-machine model and are out of scope (that is bytecode-level audit territory
 | Lean 4 compilation | Passes (`lake build D2fsSpecs`, zero errors/warnings) |
 | Requirement theorems proved (§4) | **82 / 82 (100%, zero `sorry`, zero vacuous)** |
 | Blast-radius theorems proved (§6) | **56 (zero `sorry`, zero vacuous)** |
-| In-scope design-safety theorems proved (§7) | **23 (zero `sorry`, zero vacuous)** |
+| In-scope design-safety theorems proved (§7) | **24 (zero `sorry`, zero vacuous)** |
 | Faithful coverage (full + partial, majority of 3 judge runs) | **73 / 77 = 94.8%** |
 | — of which fully faithful (`full`) | 24 |
 | — of which partially faithful (`partial`) | 49 |
