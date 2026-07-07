@@ -15,7 +15,7 @@ against which theorems are mechanically proved by the Lean 4 kernel — the stro
 guarantee available (not testing, not a heuristic checker; each proof is checked by a trusted, tiny proof
 kernel). Three complementary bodies of proof were produced:
 
-1. **Requirement conformance** (§4) — 81 theorems showing the model satisfies its documented RFC 2119
+1. **Requirement conformance** (§4) — 82 theorems showing the model satisfies its documented RFC 2119
    requirements (the "does it do what the docs say" question).
 2. **Key-compromise blast-radius** (§6) — 56 theorems bounding user-asset loss when a
    privileged operator key is *stolen* (the "what if our multisig / oracle / admin gets phished" question,
@@ -24,7 +24,7 @@ kernel). Three complementary bodies of proof were produced:
    ordinary (honest-roles) attacker using only legitimate operations (the "can someone drain us via a
    clever sequence of normal calls" question: no-free-value, solvency preservation, rounding-in-our-favor,
    no share dilution, inflation-attack immunity). This pillar's proof effort surfaced a genuine
-   model-vs-contract fidelity gap in the vesting logic (§7), now being corrected.
+   model-vs-contract fidelity gap in the vesting logic, since corrected to match the deployed contract (§7).
 
 **This is not a substitute for a professional smart-contract security audit** (Certora, Quantstamp, Zellic,
 Halborn, etc. — Apyx already has several, see `corpus.md`). It verifies a *hand-built abstract model* of
@@ -77,7 +77,7 @@ lake build D2fsSpecs.Apyx
 ```
 
 `lake build D2fsSpecs.Apyx` exiting `0` with no `sorry` warnings is the actual proof-checking event — the
-Lean kernel re-verifies all 81 theorems from source. `outputs/apyx/Apyx.lean` (this directory) and
+Lean kernel re-verifies all 82 theorems from source. `outputs/apyx/Apyx.lean` (this directory) and
 `lean/D2fsSpecs/Apyx.lean` are the same file (the latter is a symlink to the former), so editing/building
 either location works.
 
@@ -111,17 +111,17 @@ report are a **majority vote over 3 independent runs**, not a single sample.
 | [`requirements.json`](requirements.json) | 82 extracted RFC 2119 requirements, each with `id`, `category`, `statement`, `rationale`, `source_quote`, `formalizable` flag |
 | [`SPEC.md`](SPEC.md) | Rendered RFC 2119 specification document (human-readable, organized by category) |
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine (actors, state variables, operations, guarantees) |
-| [`Apyx.lean`](Apyx.lean) | **The formal model and all 81 requirement proofs** — `State`, `Op`, `step`, and one `theorem req_*` per formalizable requirement, each with an RFC 2119 docstring |
+| [`Apyx.lean`](Apyx.lean) | **The formal model and all 82 requirement proofs** — `State`, `Op`, `step`, and one `theorem req_*` per formalizable requirement, each with an RFC 2119 docstring |
 | [`BlastRadius.lean`](BlastRadius.lean) | **The 56 key-compromise blast-radius proofs** (§6) — trace executor, per-role damage bounds, and the rate-limit / timelock defense wrappers, all imported from and additive to `Apyx.lean` (which it leaves untouched) |
 | [`Safety.lean`](Safety.lean) | **The 23 in-scope design-safety proofs** (§7) — no-free-value, solvency preservation, rounding, no-dilution, inflation-attack immunity, and the vesting properties (whose proof surfaced the model-fidelity finding), additive to `Apyx.lean`/`BlastRadius.lean` |
-| [`leancheck.json`](leancheck.json) | Compile status: `81` requirement theorems, `0` sorry, `0` vacuous, `81` mechanically proved |
+| [`leancheck.json`](leancheck.json) | Compile status: `82` requirement theorems, `0` sorry, `0` vacuous, `82` mechanically proved |
 | [`review.json`](review.json) | Faithfulness verdicts (majority vote over 3 runs) + per-requirement vote records |
 | [`review_run1.json`](review_run1.json), [`review_run2.json`](review_run2.json), [`review_run3.json`](review_run3.json) | Raw per-run judge output, kept for reproducibility of the majority vote |
 | [`archive/`](archive/) | Prior automated-pipeline runs (Run 2, 9, 11, 12, 13), kept for comparison |
 
 ---
 
-## 4. What was formally verified (81 theorems, 0 `sorry`, mechanically checked)
+## 4. What was formally verified (82 theorems, 0 `sorry`, mechanically checked)
 
 Every theorem in `Apyx.lean` is a **completed, checked proof** — no admitted/skipped steps. Highlights,
 by category:
@@ -316,20 +316,18 @@ design soundness, not key theft.
 | No free extraction (caller) | An attacker calling operations can't end richer than they started (fixed-rate single-step; the live-rate trace closure is flagged as genuinely open) | `caller_net_nonpositive` |
 | No early yield drain | Vested yield can't be pulled forward faster than its linear schedule | `vest_no_early_drain` |
 
-**This pillar found a real issue.** While proving the vesting properties, the effort surfaced that the
-model's `creditYield` reset the vesting clock without preserving already-accrued yield — proved as
-`creditYield_forfeits_pending_vest`. Cross-checking the **deployed contract** (`LinearVestV0.sol`,
+**This pillar found a real issue — and it was resolved.** While proving the vesting properties, the effort
+surfaced that the model's `creditYield` reset the vesting clock without preserving already-accrued yield —
+proved as `creditYield_forfeits_pending_vest`. Cross-checking the **deployed contract** (`LinearVestV0.sol`,
 `depositYield` line 168: `fullyVestedAmount += newlyVestedAmount()` *before* the reset) established the
-contract is correct and the discrepancy was a **model-fidelity gap**: the AI-generated model collapsed the
-contract's two-accumulator vesting design into one bucket. The model, spec, and these proofs are being
-corrected to match the contract (adding the `fullyVestedAmount` accumulator; the forfeit theorem becomes a
-conservation theorem). This is the pillar working as intended — the proof flagged a concrete question, and
-checking the real source settled it. Full method and the S1–S7 roadmap:
+contract is correct and the discrepancy was a **model-fidelity gap**: the AI-generated model had collapsed
+the contract's two-accumulator vesting design into one bucket. The model, spec, and these proofs were then
+**corrected to match the contract** — a `fullyVestedAmount` accumulator was added and `creditYield` /
+`setVestPeriod` made accrue-first; the forfeit theorem became the conservation theorem
+`creditYield_preserves_accrued_vest` (the credit no longer erases accrued yield). This is the pillar working
+as intended: the proof flagged a concrete question, checking the real source settled it, and the artifact was
+brought into faithfulness. Full method, the S1–S7 roadmap, and the finding's full trail:
 [`docs/06-safety-properties.md`](https://github.com/NyxFoundation/docs2formalspec/blob/main/docs/06-safety-properties.md).
-
-*(Note: the vesting-fidelity correction described above is in progress; theorem counts and the §8 summary
-will finalize once it lands. What is stated here reflects the committed state and the correction's
-intended end state.)*
 
 **Honest scope limit (all three pillars):** these are properties of the abstract Lean model, not the
 deployed Solidity — and, as the vesting finding shows, the model can diverge from the contract. In
@@ -344,7 +342,7 @@ state-machine model and are out of scope (that is bytecode-level audit territory
 |---|---|
 | Requirements extracted | 82 (77 formalizable, 5 out of scope — §5.1) |
 | Lean 4 compilation | Passes (`lake build D2fsSpecs`, zero errors/warnings) |
-| Requirement theorems proved (§4) | **81 / 81 (100%, zero `sorry`, zero vacuous)** |
+| Requirement theorems proved (§4) | **82 / 82 (100%, zero `sorry`, zero vacuous)** |
 | Blast-radius theorems proved (§6) | **56 (zero `sorry`, zero vacuous)** |
 | In-scope design-safety theorems proved (§7) | **23 (zero `sorry`, zero vacuous)** |
 | Faithful coverage (full + partial, majority of 3 judge runs) | **73 / 77 = 94.8%** |
