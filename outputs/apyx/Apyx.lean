@@ -582,8 +582,10 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
           some s2
       else none
   | Op.redeemApxUSD amount =>
+    -- arbitrage redemption pathway: only open while apxUSD trades below $1.00
     if s.globalPause then none
     else if ¬ s.whitelist caller then none
+    else if ray ≤ s.apxUSDMarketPrice then none
     else if s.apxUSDBal caller < amount then none
     else
       let usdcAmount := (amount * s.redemptionValue) / ray
@@ -1147,7 +1149,7 @@ private theorem step_flexibleClaimUnlock_some (s : State) (id : Nat) (caller : A
 private theorem step_redeemApxUSD_some (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.redeemApxUSD amount) caller = some s') :
     s.globalPause = false ∧ s.whitelist caller = true ∧ amount ≤ s.apxUSDBal caller ∧
-    (amount * s.redemptionValue) / ray ≤ s.usdcReserve ∧
+    (amount * s.redemptionValue) / ray ≤ s.usdcReserve ∧ s.apxUSDMarketPrice < ray ∧
     s' = emitEvent { burnApxUSD s caller amount with
         usdcReserve := (burnApxUSD s caller amount).usdcReserve - (amount * s.redemptionValue) / ray
         usdcBal := fun a => if a = caller then (burnApxUSD s caller amount).usdcBal a + (amount * s.redemptionValue) / ray
@@ -1164,7 +1166,9 @@ private theorem step_redeemApxUSD_some (s : State) (amount : Nat) (caller : Addr
         · exact absurd h (by simp)
         · split at h
           · exact absurd h (by simp)
-          · exact ⟨by simp_all, by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
+          · split at h
+            · exact absurd h (by simp)
+            · exact ⟨by simp_all, by simp_all, by omega, by omega, by omega, (Option.some.inj h).symm⟩
 
 private theorem step_executeRFQRedemption_some (s : State) (user : Address) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.executeRFQRedemption user amount) caller = some s') :
@@ -1218,7 +1222,7 @@ private theorem apyUSDBal_unchanged_of_non_share_op (s : State) (op : Op) (calle
     subst hs'
     simp [mintApxUSD, burnUnlockNFT]
   case redeemApxUSD amount =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
     subst hs'
     simp [emitEvent, burnApxUSD]
   case flexibleRequestUnlock amount =>
@@ -1266,7 +1270,7 @@ private theorem step_unlockTokenOperator_unchanged (s : State) (op : Op) (caller
     subst hs'
     simp [mintApxUSD, burnUnlockNFT]
   case redeemApxUSD a =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
     subst hs'
     simp [emitEvent, burnApxUSD]
   case withdraw a r =>
@@ -1322,7 +1326,7 @@ private theorem step_unlockTokenAddress_unchanged (s : State) (op : Op) (caller 
     subst hs'
     simp [mintApxUSD, burnUnlockNFT]
   case redeemApxUSD a =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
     subst hs'
     simp [emitEvent, burnApxUSD]
   case withdraw a r =>
@@ -1379,7 +1383,7 @@ in particular the redeemer's — completely unchanged.) -/
 theorem req_redeem_no_share_transfer (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.redeemApxUSD amount) caller = some s') :
     ∀ a, s'.governanceTokenBal a = s.governanceTokenBal a := by
-  obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+  obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
   subst hs'
   intro a
   simp [emitEvent, burnApxUSD]
@@ -1832,7 +1836,7 @@ private theorem unlock_position_created_only_by_vault_ops (s : State) (op : Op) 
     subst hs'
     simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD, h_new] at h_now
   case redeemApxUSD a =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
     subst hs'
     simp [emitEvent, burnApxUSD, h_new] at h_now
   case executeRFQRedemption u am =>
@@ -2255,7 +2259,7 @@ theorem req_overcollateralization_limit (s : State) (op : Op) (caller : Address)
     simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
     omega
   case redeemApxUSD a =>
-    obtain ⟨_, _, h3, h4, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    obtain ⟨_, _, h3, h4, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
     subst hs'
     have hu : (a * s.redemptionValue) / ray ≤ a := by
       rw [Nat.mul_comm]; exact div_mul_le_total h_rv
@@ -2309,11 +2313,11 @@ theorem req_arbitrage_mint_access (s : State) (to : Address) (amount : Nat) (cal
         · rfl
 
 /-- REQ arbitrage-redeem-access: Only eligible whitelist participants SHALL be permitted to redeem apxUSD for dollar‑equivalent value when apxUSD trades below $1.00. -/
-theorem req_arbitrage_redeem_access (s : State) (amount : Nat) (caller : Address) :
-    (step s (Op.redeemApxUSD amount) caller = none) ∨ (s.whitelist caller = true) := by
-  by_cases h : s.whitelist caller
-  · exact Or.inr h
-  · exact Or.inl (by simp [step, h])
+theorem req_arbitrage_redeem_access (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.redeemApxUSD amount) caller = some s') :
+    s.whitelist caller = true ∧ s.apxUSDMarketPrice < ray := by
+  obtain ⟨_, hw, _, _, hp, _⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+  exact ⟨hw, hp⟩
 
 /-- REQ linear-vest-implementation: The LinearVestV0 contract MUST implement a linear
 vesting mechanism for yield credited to the apyUSD vault. (Model: the currently-streaming
@@ -2374,8 +2378,8 @@ theorem req_redemption_value_uniform (s : State) (a b : Address) (amount : Nat) 
     (ha : step s (Op.redeemApxUSD amount) a = some sa)
     (hb : step s (Op.redeemApxUSD amount) b = some sb) :
     sa.usdcBal a - s.usdcBal a = sb.usdcBal b - s.usdcBal b := by
-  obtain ⟨_, _, _, _, hsa⟩ := step_redeemApxUSD_some _ _ _ _ ha
-  obtain ⟨_, _, _, _, hsb⟩ := step_redeemApxUSD_some _ _ _ _ hb
+  obtain ⟨_, _, _, _, _, hsa⟩ := step_redeemApxUSD_some _ _ _ _ ha
+  obtain ⟨_, _, _, _, _, hsb⟩ := step_redeemApxUSD_some _ _ _ _ hb
   subst hsa hsb
   simp [emitEvent, burnApxUSD]
 
@@ -2383,7 +2387,7 @@ theorem req_redemption_value_uniform (s : State) (a b : Address) (amount : Nat) 
 theorem req_buffer_not_consumed (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.redeemApxUSD amount) caller = some s') :
     overcollateralizationBuffer s ≤ overcollateralizationBuffer s' := by
-  obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+  obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
   subst hs'
   exact overcollateralizationBuffer_mono _ _ (by simp [emitEvent, burnApxUSD])
     (by simp [emitEvent, burnApxUSD]) (by simp [emitEvent, burnApxUSD])
@@ -2621,11 +2625,13 @@ theorem req_mint_price_arbitrage_pathway (s : State) (amount : Nat) (to : Addres
     exact ⟨_, rfl, by simp [emitEvent, mintApxUSD], by simp [emitEvent, mintApxUSD],
            by simp [emitEvent, mintApxUSD]⟩
 
-/-- REQ redemption-value: The protocol MUST allow redemption of apxUSD at the current Redemption Value. -/
+/-- REQ redemption-value: The protocol MUST allow redemption of apxUSD at the current Redemption Value.
+(The arbitrage redemption pathway is open only while apxUSD trades below par, `apxUSDMarketPrice < ray`.) -/
 theorem req_redemption_value (s : State) (amount : Nat) (caller : Address)
     (h1 : s.globalPause = false) (h2 : s.whitelist caller = true)
     (h3 : s.apxUSDBal caller ≥ amount)
-    (h4 : s.usdcReserve ≥ (amount * s.redemptionValue) / ray) :
+    (h4 : s.usdcReserve ≥ (amount * s.redemptionValue) / ray)
+    (h5 : s.apxUSDMarketPrice < ray) :
     ∃ s', step s (Op.redeemApxUSD amount) caller = some s' := by
   have hbuf : overcollateralizationBuffer s ≤ overcollateralizationBuffer
       { burnApxUSD s caller amount with
@@ -2635,7 +2641,7 @@ theorem req_redemption_value (s : State) (amount : Nat) (caller : Address)
     overcollateralizationBuffer_mono _ _ (by simp [burnApxUSD]) (by simp [burnApxUSD])
       (by simp [burnApxUSD])
   rcases ho : step s (Op.redeemApxUSD amount) caller with _ | s'
-  · exact absurd ho (by simp [step, h1, h2, Nat.not_lt.mpr h3, Nat.not_lt.mpr h4, Nat.not_lt.mpr hbuf])
+  · exact absurd ho (by simp [step, h1, h2, Nat.not_le.mpr h5, Nat.not_lt.mpr h3, Nat.not_lt.mpr h4, Nat.not_lt.mpr hbuf])
   · exact ⟨s', rfl⟩
 
 
@@ -3060,7 +3066,7 @@ theorem req_redemption_settlement_value (s : State) (caller : Address) (amount :
     (h_step : step s (Op.redeemApxUSD amount) caller = some s') :
     let usdcAmount := (amount * s.redemptionValue) / ray
     s'.usdcBal caller = s.usdcBal caller + usdcAmount := by
-  obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+  obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
   subst hs'
   simp [emitEvent, burnApxUSD]
 
@@ -3095,7 +3101,7 @@ theorem req_deposit_permissionless (s : State) (amount : Nat) (caller : Address)
 theorem req_buffer_preservation (s s' : State) (amount : Nat) (caller : Address)
     (h_step : step s (Op.redeemApxUSD amount) caller = some s') :
     overcollateralizationBuffer s ≤ overcollateralizationBuffer s' := by
-  obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+  obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
   subst hs'
   exact overcollateralizationBuffer_mono _ _ (by simp [emitEvent, burnApxUSD])
     (by simp [emitEvent, burnApxUSD]) (by simp [emitEvent, burnApxUSD])
@@ -3116,7 +3122,7 @@ theorem req_mint_redeem_at_redemption_value (s : State) (amount : Nat) (to calle
     subst hs'
     exact ⟨by simp [emitEvent, mintApxUSD], by simp [emitEvent, mintApxUSD]⟩
   · intro s' h_step
-    obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
     subst hs'
     simp [emitEvent, burnApxUSD]
 
@@ -3132,7 +3138,7 @@ theorem req_buffer_non_decreasing (s s' : State) (op : Op) (caller : Address)
                     (∃ u a, op = Op.executeRFQRedemption u a)) :
     overcollateralizationBuffer s ≤ overcollateralizationBuffer s' := by
   rcases h_redemption with ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨u, a, rfl⟩
-  · obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+  · obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
     subst hs'
     exact overcollateralizationBuffer_mono _ _ (by simp [emitEvent, burnApxUSD])
       (by simp [emitEvent, burnApxUSD]) (by simp [emitEvent, burnApxUSD])
@@ -3209,7 +3215,7 @@ theorem req_redeem_liquidate_usdc (s : State) (amount : Nat) (caller : Address) 
     (h_step : step s (Op.redeemApxUSD amount) caller = some s') :
     s'.usdcReserve = s.usdcReserve - (amount * s.redemptionValue) / ray ∧
     s'.usdcBal caller = s.usdcBal caller + (amount * s.redemptionValue) / ray := by
-  obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+  obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
   subst hs'
   constructor <;> simp [emitEvent, burnApxUSD]
 
@@ -3465,7 +3471,7 @@ private theorem vaultApxUSDBal_unchanged_of_non_vault_op (s : State) (op : Op) (
     subst hs'
     simp [mintApxUSD, burnUnlockNFT]
   case redeemApxUSD amount =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
     subst hs'
     simp [emitEvent, burnApxUSD]
   case flexibleRequestUnlock amount =>
@@ -3618,7 +3624,7 @@ theorem req_unlock_cannot_be_cancelled (s : State) (op : Op) (caller : Address) 
     subst hs'
     simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD, h_live] at h_gone
   case redeemApxUSD a =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
     subst hs'
     simp [emitEvent, burnApxUSD, h_live] at h_gone
   case executeRFQRedemption u am =>
@@ -3745,7 +3751,7 @@ theorem req_unlock_token_nontransferable (s : State) (op : Op) (caller : Address
       fun id owner h_own =>
         Or.inl (by simpa [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD] using h_own)⟩
   case redeemApxUSD a =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
     subst hs'
     exact ⟨fun i hi => h_fresh i (by simpa [emitEvent, burnApxUSD] using hi),
       fun id owner h_own => Or.inl (by simpa [emitEvent, burnApxUSD] using h_own)⟩

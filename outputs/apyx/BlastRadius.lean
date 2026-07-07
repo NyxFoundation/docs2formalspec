@@ -330,7 +330,7 @@ private theorem inv_flexibleClaimUnlock (s : State) (id : Nat) (caller : Address
 private theorem inv_redeemApxUSD (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.redeemApxUSD amount) caller = some s') :
     s.globalPause = false ∧ s.whitelist caller = true ∧ amount ≤ s.apxUSDBal caller ∧
-    (amount * s.redemptionValue) / ray ≤ s.usdcReserve ∧
+    (amount * s.redemptionValue) / ray ≤ s.usdcReserve ∧ s.apxUSDMarketPrice < ray ∧
     s' = emitEvent { burnApxUSD s caller amount with
         usdcReserve := (burnApxUSD s caller amount).usdcReserve - (amount * s.redemptionValue) / ray
         usdcBal := fun a => if a = caller then (burnApxUSD s caller amount).usdcBal a + (amount * s.redemptionValue) / ray
@@ -347,7 +347,9 @@ private theorem inv_redeemApxUSD (s : State) (amount : Nat) (caller : Address) (
         · exact absurd h (by simp)
         · split at h
           · exact absurd h (by simp)
-          · exact ⟨by simp_all, by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
+          · split at h
+            · exact absurd h (by simp)
+            · exact ⟨by simp_all, by simp_all, by omega, by omega, by omega, (Option.some.inj h).symm⟩
 
 private theorem inv_withdraw (s : State) (assets : Nat) (receiver caller : Address) (s' : State)
     (h : step s (Op.withdraw assets receiver) caller = some s') :
@@ -991,7 +993,7 @@ theorem no_role_transfers_user_funds (s : State) (op : Op) (caller : Address) (s
     simp [mintApxUSD, burnUnlockNFT] at h_dec
     split at h_dec <;> omega
   case redeemApxUSD amount =>
-    obtain ⟨_, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
     subst hs'
     by_cases hac : a = caller
     · exact Or.inl hac
@@ -1116,7 +1118,7 @@ theorem no_role_debits_usdc (s : State) (op : Op) (caller : Address) (s' : State
     exfalso
     simp [mintApxUSD, burnUnlockNFT] at h_dec
   case redeemApxUSD amount =>
-    obtain ⟨_, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
     subst hs'
     exfalso
     simp [emitEvent, burnApxUSD] at h_dec
@@ -1189,7 +1191,7 @@ theorem governance_token_balances_immutable (s : State) (op : Op) (caller : Addr
     subst hs'
     simp [mintApxUSD, burnUnlockNFT]
   case redeemApxUSD amount =>
-    obtain ⟨_, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
     subst hs'
     simp [emitEvent, burnApxUSD]
   case withdraw assets receiver =>
@@ -1302,7 +1304,7 @@ theorem no_role_seizes_unlock_position (s : State) (op : Op) (caller : Address) 
       exact Or.inl ⟨by simpa [mintApxUSD, burnUnlockNFT, h_ne] using h_live,
         by simp [mintApxUSD, burnUnlockNFT, h_ne]⟩
   case redeemApxUSD amount =>
-    obtain ⟨_, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
     subst hs'
     exact Or.inl ⟨by simpa [emitEvent, burnApxUSD] using h_live, by simp [emitEvent, burnApxUSD]⟩
   case withdraw assets receiver =>
@@ -1454,7 +1456,7 @@ theorem redemption_price_admin_only (s : State) (op : Op) (caller : Address) (s'
     subst hs'
     exact absurd (by simp [mintApxUSD, burnUnlockNFT]) h_changed
   case redeemApxUSD amount =>
-    obtain ⟨_, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
     subst hs'
     exact absurd (by simp [emitEvent, burnApxUSD]) h_changed
   case withdraw assets receiver =>
@@ -1505,7 +1507,7 @@ theorem reserve_outflow_only_via_redemption (s : State) (op : Op) (caller : Addr
       s'.totalSupply_apxUSD = s.totalSupply_apxUSD - amount := by
   cases op
   case redeemApxUSD amount =>
-    obtain ⟨_, _, hbal, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
+    obtain ⟨_, _, hbal, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
     subst hs'
     exact ⟨caller, amount, Or.inl ⟨rfl, rfl⟩, hbal,
       by simp [emitEvent, burnApxUSD],
@@ -1693,7 +1695,7 @@ theorem redeem_payout_formula (s : State) (amount : Nat) (caller : Address) (s' 
     s'.usdcBal caller = s.usdcBal caller + amount * s.redemptionValue / ray ∧
     s'.usdcReserve = s.usdcReserve - amount * s.redemptionValue / ray ∧
     s'.apxUSDBal caller = s.apxUSDBal caller - amount := by
-  obtain ⟨_, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
+  obtain ⟨_, _, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
   subst hs'
   refine ⟨?_, ?_, ?_⟩ <;> simp [emitEvent, burnApxUSD]
 
@@ -1735,10 +1737,10 @@ theorem redeem_payout_has_no_cap (N : Nat) :
   have htc : (default : State).totalCollateralValue = 0 := rfl
   cases hs : step (noCapWitness N) (Op.redeemApxUSD 1) 0 with
   | none =>
-      -- all guards pass on the witness (buffer stays at 0), so the redeem cannot revert
+      -- all guards pass on the witness (price 0 < ray, buffer stays at 0), so it cannot revert
       simp [noCapWitness, step, overcollateralizationBuffer, hts, htc] at hs
       rw [Nat.mul_div_cancel N hray] at hs
-      exact absurd (hs rfl) (Nat.lt_irrefl _)
+      exact absurd (hs rfl hray) (Nat.lt_irrefl _)
   | some s' =>
       refine ⟨noCapWitness N, s', 1, 0, hs, h0, ?_⟩
       obtain ⟨hbal, _, _⟩ := redeem_payout_formula (noCapWitness N) 1 0 s' hs
@@ -1860,7 +1862,7 @@ theorem apxUSD_credit_is_backed (s : State) (op : Op) (caller : Address) (s' : S
     · exfalso
       simp [mintApxUSD, burnUnlockNFT, hao] at h_inc
   case redeemApxUSD amount =>
-    obtain ⟨_, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
     subst hs'
     exfalso
     simp [emitEvent, burnApxUSD] at h_inc

@@ -185,7 +185,7 @@ private theorem inv_flexibleClaimUnlock (s : State) (id : Nat) (caller : Address
 private theorem inv_redeemApxUSD (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.redeemApxUSD amount) caller = some s') :
     s.globalPause = false ∧ s.whitelist caller = true ∧ amount ≤ s.apxUSDBal caller ∧
-    (amount * s.redemptionValue) / ray ≤ s.usdcReserve ∧
+    (amount * s.redemptionValue) / ray ≤ s.usdcReserve ∧ s.apxUSDMarketPrice < ray ∧
     s' = emitEvent { burnApxUSD s caller amount with
         usdcReserve := (burnApxUSD s caller amount).usdcReserve - (amount * s.redemptionValue) / ray
         usdcBal := fun a => if a = caller then (burnApxUSD s caller amount).usdcBal a + (amount * s.redemptionValue) / ray
@@ -202,7 +202,9 @@ private theorem inv_redeemApxUSD (s : State) (amount : Nat) (caller : Address) (
         · exact absurd h (by simp)
         · split at h
           · exact absurd h (by simp)
-          · exact ⟨by simp_all, by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
+          · split at h
+            · exact absurd h (by simp)
+            · exact ⟨by simp_all, by simp_all, by omega, by omega, by omega, (Option.some.inj h).symm⟩
 
 private theorem inv_withdraw (s : State) (assets : Nat) (receiver caller : Address) (s' : State)
     (h : step s (Op.withdraw assets receiver) caller = some s') :
@@ -365,7 +367,7 @@ private theorem penniless_step (s : State) (op : Op) (caller : Address) (s' : St
       simp [mintApxUSD, burnUnlockNFT, h0, hx]
     · simp [mintApxUSD, burnUnlockNFT, hao, hx]
   case redeemApxUSD amount =>
-    obtain ⟨-, -, hle, -, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
+    obtain ⟨-, -, hle, -, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
     subst hs'
     refine ⟨?_, ?_,
       by simpa [emitEvent, burnApxUSD] using hstd,
@@ -951,7 +953,7 @@ never exceeds `amount`. -/
 theorem caller_value_redeemApxUSD (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.redeemApxUSD amount) caller = some s') (h_rv : s.redemptionValue ≤ ray) :
     valueAt s.exchangeRate s' caller ≤ callerValue s caller := by
-  obtain ⟨-, -, hle, -, hs'⟩ := inv_redeemApxUSD s amount caller s' h_step
+  obtain ⟨-, -, hle, -, _, hs'⟩ := inv_redeemApxUSD s amount caller s' h_step
   have hx : s'.apxUSDBal caller = s.apxUSDBal caller - amount := by
     rw [hs']; simp [emitEvent, burnApxUSD]
   have hy : s'.apyUSDBal caller = s.apyUSDBal caller := by
@@ -968,7 +970,7 @@ full, unqualified live-rate result. -/
 theorem caller_value_redeemApxUSD_live (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.redeemApxUSD amount) caller = some s') (h_rv : s.redemptionValue ≤ ray) :
     callerValue s' caller ≤ callerValue s caller := by
-  obtain ⟨-, -, -, -, hs'⟩ := inv_redeemApxUSD s amount caller s' h_step
+  obtain ⟨-, -, -, -, _, hs'⟩ := inv_redeemApxUSD s amount caller s' h_step
   have hr : s'.exchangeRate = s.exchangeRate := by rw [hs']; simp [emitEvent, burnApxUSD]
   show valueAt s'.exchangeRate s' caller ≤ callerValue s caller
   rw [hr]
