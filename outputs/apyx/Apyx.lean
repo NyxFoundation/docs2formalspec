@@ -2140,21 +2140,36 @@ theorem req_rfq_redemption_allowed (s : State) (user caller : Address) (amount :
     · exact absurd ho (by simp [step, h1, h2', Nat.not_lt.mpr h3, Nat.not_lt.mpr h4])
     · exact ⟨s', rfl⟩
 
-/-- REQ deposit_immediate: The apyUSD vault MUST complete deposit operations synchronously and deliver apyUSD shares to the receiver without any delay. -/
-theorem req_deposit_immediate (s : State) (amount : Nat) (to : Address) (caller : Address) (s' : State)
-    (h_step : step s (Op.depositUSDC amount) caller = some s') :
-    s'.apyUSDBal to ≥ s.apyUSDBal to := by
-  obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
+/-- REQ deposit_immediate: The apyUSD vault MUST complete deposit operations synchronously and
+deliver apyUSD shares to the receiver without any delay. (Model: the apyUSD vault's synchronous
+ERC-4626 deposit is `Op.lockApxUSD` — it locks apxUSD and mints apyUSD *shares* in return, unlike
+`Op.depositUSDC`/`Op.mintApxUSD` which mint the apxUSD stablecoin itself. "Without delay" is a
+*temporal* claim: the shares are credited to the receiver — here the locking `caller` — in the very
+same atomic `step`, not deferred into a pending/settlement record the way a redemption is. This
+theorem states exactly that: on a successful lock the receiver's apyUSD balance has *already*
+increased, by exactly the freshly minted `lockShares amount s.exchangeRate`, with no intermediate
+state — the strong, exact form of "synchronous, immediate share delivery".) -/
+theorem req_deposit_immediate (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.lockApxUSD amount) caller = some s') :
+    s'.apyUSDBal caller = s.apyUSDBal caller + lockShares amount s.exchangeRate := by
+  obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
   subst hs'
-  simp [emitEvent, mintApxUSD]
+  simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
 
-/-- REQ mint_immediate: The apyUSD vault MUST complete mint operations synchronously and deliver apyUSD shares to the receiver without any delay. -/
-theorem req_mint_immediate (s : State) (to : Address) (amount : Nat) (caller : Address) (s' : State)
-    (h_step : step s (Op.mintApxUSD to amount) caller = some s') :
-    s'.apyUSDBal to ≥ s.apyUSDBal to := by
-  obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
+/-- REQ mint_immediate: The apyUSD vault MUST complete mint operations synchronously and deliver
+apyUSD shares to the receiver without any delay. (Model: like `deposit-immediate`, the vault's
+synchronous share-minting path is `Op.lockApxUSD`. The stronger temporal witness proved here is
+that in the single atomic `step` *both* the receiver's apyUSD balance *and* the apyUSD total supply
+increase by exactly the same freshly minted `lockShares amount s.exchangeRate` — the shares are
+genuinely newly issued and delivered now, in lockstep, with no deferred settlement.) -/
+theorem req_mint_immediate (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.lockApxUSD amount) caller = some s') :
+    s'.apyUSDBal caller = s.apyUSDBal caller + lockShares amount s.exchangeRate ∧
+    s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount s.exchangeRate := by
+  obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
   subst hs'
-  simp [emitEvent, mintApxUSD]
+  refine ⟨?_, ?_⟩ <;>
+    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
 
 -- BROKEN: /-- REQ unlock-cooldown: The apxUSD_unlock token MAY be redeemed for apxUSD only after a cooldown period has elapsed. -/
 -- BROKEN: theorem req_unlock_cooldown (s : State) (requestId : Nat) (caller : Address)

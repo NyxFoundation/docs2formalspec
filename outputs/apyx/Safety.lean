@@ -1212,4 +1212,38 @@ theorem creditYield_preserves_accrued_vest (s : State) (amount : Nat) (caller : 
   unfold totalAssets
   rw [hvbal, hva]
 
+/-- **`setVestPeriod_preserves_accrued_vest`** — the twin of
+`creditYield_preserves_accrued_vest` for the *other* accrue-first code path.
+`Op.setVestPeriod` (admin-gated; see `step_setVestPeriod_exact`, `BlastRadius.lean`)
+reconfigures the vesting period and re-anchors the clock at `s.now`, but — exactly like
+`creditYield` and like the real `LinearVestV0.setVestingPeriod` — it realizes the
+currently-streaming portion into `fullyVestedAmount` FIRST, so reconfiguring the period
+never forfeits nor even moves value that has already vested. Immediately after the call
+(evaluated at the unchanged `now`) the total reportable `vestedAmount` is exactly
+preserved, and since `setVestPeriod` leaves `vaultApxUSDBal` untouched, so is
+`totalAssets`. Requires `0 < p`: a degenerate zero-length new period would define the
+whole remaining pool as 100% vested instantaneously — a distinct, still non-forfeiting
+degenerate case this equality does not isolate (the same side-condition
+`creditYield_preserves_accrued_vest` places on the *old* period). This closes the design
+gap noted in review: the accrue-first `setVestPeriod` path was asserted safe in prose
+(`Apyx.lean`'s `Op.setVestPeriod` docstring) but, unlike its `creditYield` twin, had no
+theorem proving the conservation the contract actually guarantees. Mirrors the structure
+of `creditYield_preserves_accrued_vest`, re-derived via the public
+`step_setVestPeriod_exact` (`BlastRadius.lean`) rather than unfolding `step` directly. -/
+theorem setVestPeriod_preserves_accrued_vest (s : State) (p : Nat) (caller : Address)
+    (s' : State) (h_step : step s (Op.setVestPeriod p) caller = some s')
+    (hp : 0 < p) :
+    vestedAmount s' s'.now = vestedAmount s s.now ∧
+    totalAssets s' = totalAssets s := by
+  obtain ⟨-, hs'⟩ := step_setVestPeriod_exact s p caller s' h_step
+  have hvbal : s'.vaultApxUSDBal = s.vaultApxUSDBal := by rw [hs']
+  have hva : vestedAmount s' s'.now = vestedAmount s s.now := by
+    rw [hs']
+    simp only [vestedAmount, newlyVestedAmount, Nat.sub_self, Nat.zero_mul, Nat.zero_div]
+    repeat' split
+    all_goals omega
+  refine ⟨hva, ?_⟩
+  unfold totalAssets
+  rw [hvbal, hva]
+
 end Apyx
