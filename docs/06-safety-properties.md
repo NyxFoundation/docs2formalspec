@@ -75,6 +75,17 @@
 
 これは Certora/Halmos 等の**バイトコードレベル検証**が担う領域であり、第3の柱の抽象モデル証明はそれらを代替しない。「設計レベルの経済的欠陥(保存則・solvency・丸め・希釈・インフレ攻撃)」を検証する道具であって、「実装レベルの実行順序バグ」は対象外、と監査レポートに明記する必要がある。
 
+## 4b. 進捗と証明中に判明した設計上の発見(2026-07-07)
+
+`outputs/apyx/Safety.lean`(namespace `Apyx`、S1-S5 証明済み、sorry 0、全て `propext`/`Quot.sound` のみ、`Apyx.lean`/`BlastRadius.lean` 無傷)。
+
+**S5証明中の設計仮説の訂正**(memoの当初仮説 vs 実際のモデル):
+- `creditYield` は `vaultApxUSDBal` を**動かさない**(`usdcReserve`/`vestTotal`/`vestStart` のみ)。当初「lockとcreditYieldが金庫を増やす」としたが誤り。
+- 代わりに `withdraw`/`redeem` が内部の `pullVestedYield` 経由で金庫を増やしうる。ただし増加は `vestedAmount s s.now` で上限され、この量を増やせるのは特権 `creditYield` のみ。donation ではない(`totalAssets` は `pullVestedYield` で保存)。
+- 結論は不変: **一般攻撃者による生donationインフレ攻撃は構造的に不可能**(`donation_free`/`no_inflation_attack` で `lockApxUSD` の金庫増加が caller 自身の入金と1:1であることを証明済み)。
+
+**⚠ 潜在的な設計上の懸念(要調査、S7の前段)**: `Op.creditYield` は `vestStart := now` をリセットする際、既存vestストリームの `vestedAmount s s.now`(部分的に成熟済みだが未だ `pullVestedYield` で実現されていない分)を**先に確定しない**。もし旧ストリームが部分成熟済みで未実現なら、その分が黙って失われうる。これは「利回りの取りこぼし」型の実際の設計欠陥候補であり、S7(vest先取り不可)の証明前に専用調査が必要 — **証明作業が実コードの懸念点を炙り出した好例**。
+
 ## 5. ロードマップ(推奨順)
 
 1. **S1 → S2**(no-free-value と solvency の帰納): 既存単発版のトレース化。設計健全性の最初の言明が最速で出る。
