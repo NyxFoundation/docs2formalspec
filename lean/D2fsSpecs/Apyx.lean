@@ -1382,10 +1382,12 @@ theorem req_redeem_for_min_assets_revert_if_below_min_assets (s : State)
 /-- REQ unlockToken-mints-apxUSD_unlock-immediately: The UnlockToken contract MUST mint
 apxUSD_unlock tokens to the user immediately after the deposit. (Source: "User immediately
 receives apxUSD_unlock tokens (UnlockToken shares)"; "Minting occurs instantly after the
-vault deposits assets." "The deposit" is therefore the vault depositing apxUSD assets INTO
-the UnlockToken contract — the step of the withdraw/redeem flow in which withdrawn apxUSD
-enters the UnlockToken registry as a pending unlock — not the user's initial deposit into
-the vault. Model: the vault deposits apxUSD into the UnlockToken registry during
+vault deposits assets." "The deposit" here is the vault depositing apxUSD assets INTO the
+UnlockToken contract — NOT the user's initial deposit into the vault: the source's own
+withdraw/redeem sequence diagrams show exactly `vault ->> unlockToken: deposit(1000
+apxUSD, bob)` answered by `unlockToken -->> bob: mint 1000 apxUSD_unlock` within the one
+withdraw/redeem transaction; the user's initial vault deposit mints apyUSD shares, never
+apxUSD_unlock. Model: the vault deposits apxUSD into the UnlockToken registry during
 `Op.withdraw`/`Op.redeem` (and a user deposits apxUSD directly via
 `requestUnlock`/`flexibleRequestUnlock`). The theorem states that in the very same atomic
 step as each such deposit, the UnlockToken contract mints the apxUSD_unlock position to
