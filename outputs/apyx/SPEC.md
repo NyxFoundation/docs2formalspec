@@ -98,6 +98,7 @@ The following terms have the meanings defined below. The definitions use the key
 | **REQ‑deposit‑mint‑apxusd** | **The protocol MUST mint apxUSD to a user when the user deposits USDC.** Users obtain apxUSD by depositing USDC. |
 | **REQ‑mint‑price** | **The protocol MUST price newly minted apxUSD at $1 per unit.** New issuance is explicitly priced at $1. |
 | **REQ‑redemption‑value** | **The protocol MUST allow redemption of apxUSD at the current Redemption Value.** All redemption activity occurs at Redemption Value. |
+| **REQ‑token‑no‑rebase** | **The apyUSD token MUST NOT rebase its balances; balances may change only via transfers, minting, or burning.** Token balances do not rebase. |
 | **REQ‑offchain‑allocation** | **The Offchain Treasury MUST allocate incoming capital to acquire a basket of preferred assets and short‑term treasury bonds.** |
 | **REQ‑custody‑attestation** | **The Offchain Treasury MUST provide regular third‑party accounting attestations and transparent reporting on custody and collateral composition.** |
 | **REQ‑no‑rehypothecation** | **The protocol MUST NOT rehypothecate, lend, or otherwise utilize deposited apxUSD for any purpose.** |
@@ -122,7 +123,7 @@ The following terms have the meanings defined below. The definitions use the key
 | **REQ‑unlock‑token‑redeemable‑1to1‑after‑20d** | **apxUSD_unlock tokens MUST be redeemable 1:1 for apxUSD after a 20‑day cooldown period.** |
 | **REQ‑unlock‑token‑nontransferable** | **apxUSD_unlock tokens MUST NOT be transferable.** |
 | **REQ‑unlock‑token‑no‑yield** | **apxUSD_unlock tokens MUST NOT earn yield.** |
-| **REQ‑unlock‑token‑mint‑immediately** | **The UnlockToken contract MUST mint apxUSD_unlock tokens to the user immediately after the deposit.** |
+| **REQ‑unlock‑token‑mint‑immediately** | **The UnlockToken contract MUST mint apxUSD_unlock tokens to the user immediately after the deposit — where "the deposit" is the vault depositing the corresponding apxUSD into the UnlockToken contract (as part of a `withdraw`/`redeem`/unlock-request operation), not the user's initial USDC/apxUSD deposit into the vault.** |
 | **REQ‑unlock‑token‑redeem‑after‑cooldown** | **The UnlockToken contract MUST allow a user to call redeem() after the cooldown period to receive the underlying apxUSD.** |
 | **REQ‑singleton‑unlockToken‑instance** | **There MUST be exactly one instance of UnlockToken and it MUST be used exclusively by the apyUSD vault.** |
 | **REQ‑vault‑operator‑of‑UnlockToken** | **The apyUSD vault MUST be configured as the operator of the UnlockToken contract, allowing it to initiate redeem requests on behalf of users immediately.** |
@@ -182,7 +183,7 @@ The following terms have the meanings defined below. The definitions use the key
 | **REQ‑unlock‑token‑no‑yield** *(already listed in State)* | **apxUSD_unlock tokens MUST NOT earn yield.** |
 | **REQ‑unlock‑token‑redeemable‑1to1‑after‑20d** *(already listed in State)* | **apxUSD_unlock tokens MUST be redeemable 1:1 for apxUSD after a 20‑day cooldown period.** |
 | **REQ‑unlock‑token‑nontransferable** *(already listed in State)* | **apxUSD_unlock tokens MUST NOT be transferable.** |
-| **REQ‑unlock‑token‑mint‑immediately** *(already listed in State)* | **The UnlockToken contract MUST mint apxUSD_unlock tokens to the user immediately after the deposit.** |
+| **REQ‑unlock‑token‑mint‑immediately** *(already listed in State)* | **The UnlockToken contract MUST mint apxUSD_unlock tokens to the user immediately after the deposit — where "the deposit" is the vault depositing the corresponding apxUSD into the UnlockToken contract (as part of a `withdraw`/`redeem`/unlock-request operation), not the user's initial USDC/apxUSD deposit into the vault.** |
 | **REQ‑unlock‑token‑redeem‑after‑cooldown** *(already listed in State)* | **The UnlockToken contract MUST allow a user to call redeem() after the cooldown period to receive the underlying apxUSD.** |
 | **REQ‑unlock‑receipt‑nft‑mint** *(already listed in State)* | **When a user initiates a new unlock, the system MUST mint an on‑chain Unlock Receipt NFT representing the pending claim.** |
 | **REQ‑unlock‑claimable‑after‑3d** *(already listed in State)* | **Unlocks MUST become claimable after three days.** |
@@ -238,7 +239,7 @@ The following terms have the meanings defined below. The definitions use the key
 | **REQ‑unlock‑conversion‑after‑cooldown** *(already listed in State)* | **Conversion of apxUSD_unlock to apxUSD MUST only be possible after the cooldown period has elapsed.** |
 | **REQ‑unlock‑receipt‑nft‑mint** *(already listed in State)* | **When a user initiates a new unlock, the system MUST mint an on‑chain Unlock Receipt NFT representing the pending claim.** |
 | **REQ‑unlock‑token‑redeem‑after‑cooldown** *(already listed in State)* | **The UnlockToken contract MUST allow a user to call redeem() after the cooldown period to receive the underlying apxUSD.** |
-| **REQ‑unlock‑token‑mint‑immediately** *(already listed in State)* | **The UnlockToken contract MUST mint apxUSD_unlock tokens to the user immediately after the deposit.** |
+| **REQ‑unlock‑token‑mint‑immediately** *(already listed in State)* | **The UnlockToken contract MUST mint apxUSD_unlock tokens to the user immediately after the deposit — where "the deposit" is the vault depositing the corresponding apxUSD into the UnlockToken contract (as part of a `withdraw`/`redeem`/unlock-request operation), not the user's initial USDC/apxUSD deposit into the vault.** |
 | **REQ‑unlock‑token‑redeemable‑1to1‑after‑20d** *(already listed in State)* | **apxUSD_unlock tokens MUST be redeemable 1:1 for apxUSD after a 20‑day cooldown period.** |
 | **REQ‑unlock‑receipt‑nft‑mint** *(duplicate – already listed)* | **When a user initiates a new unlock, the system MUST mint an on‑chain Unlock Receipt NFT representing the pending claim.** |
 | **REQ‑unlock‑claimable‑after‑3d** *(duplicate – already listed)* | **Unlocks MUST become claimable after three days.** |
@@ -255,6 +256,7 @@ The following terms have the meanings defined below. The definitions use the key
 | **REQ‑apyusd‑value‑increase** *(already listed in State)* | **The redeemable value of apyUSD MUST increase over time as yield is distributed to the vault.** |
 | **REQ‑exchange‑rate‑non‑decreasing** *(already listed in Economic)* | **The exchange rate between apyUSD and apxUSD MUST be non‑decreasing over time.** |
 | **REQ‑redemption‑exchange‑rate‑multiplier** *(already listed in Economic)* | **When a user redeems apyUSD, the system MUST transfer an amount of apxUSD equal to the number of apyUSD redeemed multiplied by the current exchange rate, which MUST be greater than or equal to 1.** |
+| **REQ‑cooldown‑no‑yield** | **During a redemption cooldown, the exchange rate for the locked apyUSD MUST remain fixed and the user MUST NOT accrue additional yield on those tokens.** During the cooldown period, users will not receive yield on their apyUSD, with the apxUSD/apyUSD exchange rate being fixed. |
 | **REQ‑overcollateralization‑limit** *(already listed in State)* | **The system MUST ensure that the total amount of apxUSD minted never exceeds the market value of the collateral minus the required overcollateralization margin.** |
 | **REQ‑totalAssets‑includes‑vault‑balance‑and‑vested** | **The vault's totalAssets() function MUST include both the vault's apxUSD balance and the vestedAmount() reported by the LinearVestV0 contract.** |
 | **REQ‑buffer‑non‑decreasing** *(already listed in State)* | **The overcollateralization buffer, defined as the difference between Redemption Value and Total Collateral Value, MUST NOT decrease; it MAY increase over time due to yield spreads and collateral appreciation.** |
@@ -290,12 +292,12 @@ The following terms have the meanings defined below. The definitions use the key
 | **REQ‑erc4626‑compliance** | **The apyUSD vault contract MUST implement the ERC‑4626 tokenized vault interface.** |
 | **REQ‑vault‑burns‑apyUSD‑shares‑immediately** | **The vault MUST burn the appropriate amount of apyUSD shares immediately upon a withdraw or redeem call.** |
 | **REQ‑vault‑deposits‑apxUSD‑into‑UnlockToken** | **The vault MUST deposit the corresponding apxUSD amount into the UnlockToken contract during a withdraw or redeem operation.** |
-| **REQ‑unlockToken‑mints‑apxUSD_unlock‑immediately** | **The UnlockToken contract MUST mint apxUSD_unlock tokens to the user immediately after the deposit.** |
+| **REQ‑unlockToken‑mints‑apxUSD_unlock‑immediately** | **The UnlockToken contract MUST mint apxUSD_unlock tokens to the user immediately after the deposit — where "the deposit" is the vault depositing the corresponding apxUSD into the UnlockToken contract (as part of a `withdraw`/`redeem`/unlock-request operation), not the user's initial USDC/apxUSD deposit into the vault.** |
 | **REQ‑unlockToken‑redeem‑after‑cooldown** *(already listed in State)* | **The UnlockToken contract MUST allow a user to call redeem() after the cooldown period to receive the underlying apxUSD.** |
 | **REQ‑vault‑pulls‑vested‑yield‑before‑withdraw** *(duplicate – already listed)* | **When a withdrawal is requested, the vault MUST automatically pull all vested yield from the LinearVestV0 contract before processing the withdrawal.** |
 | **REQ‑vault‑burns‑apyUSD‑shares‑immediately** *(duplicate – already listed)* | **The vault MUST burn the appropriate amount of apyUSD shares immediately upon a withdraw or redeem call.** |
 | **REQ‑vault‑deposits‑apxUSD‑into‑UnlockToken** *(duplicate – already listed)* | **The vault MUST deposit the corresponding apxUSD amount into the UnlockToken contract during a withdraw or redeem operation.** |
-| **REQ‑unlockToken‑mints‑apxUSD_unlock‑immediately** *(duplicate – already listed)* | **The UnlockToken contract MUST mint apxUSD_unlock tokens to the user immediately after the deposit.** |
+| **REQ‑unlockToken‑mints‑apxUSD_unlock‑immediately** *(duplicate – already listed)* | **The UnlockToken contract MUST mint apxUSD_unlock tokens to the user immediately after the deposit — where "the deposit" is the vault depositing the corresponding apxUSD into the UnlockToken contract (as part of a `withdraw`/`redeem`/unlock-request operation), not the user's initial USDC/apxUSD deposit into the vault.** |
 | **REQ‑unlockToken‑redeem‑after‑cooldown** *(duplicate – already listed)* | **The UnlockToken contract MUST allow a user to call redeem() after the cooldown period to receive the underlying apxUSD.** |
 | **REQ‑singleton‑unlockToken‑instance** *(already listed in State)* | **There MUST be exactly one instance of UnlockToken and it MUST be used exclusively by the apyUSD vault.** |
 | **REQ‑vault‑operator‑of‑UnlockToken** *(already listed in Access‑Control)* | **The apyUSD vault MUST be configured as the operator of the UnlockToken contract, allowing it to initiate redeem requests on behalf of users immediately.** |

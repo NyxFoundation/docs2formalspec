@@ -864,7 +864,7 @@
  {
   "id": "unlockToken-mints-apxUSD_unlock-immediately",
   "category": "state",
-  "statement": "The UnlockToken contract MUST mint apxUSD_unlock tokens to the user immediately after the deposit.",
+  "statement": "The UnlockToken contract MUST mint apxUSD_unlock tokens to the user immediately after the deposit -- where \"the deposit\" is the vault depositing the corresponding apxUSD into the UnlockToken contract (as part of a withdraw/redeem/unlock-request operation), not the user's initial USDC/apxUSD deposit into the vault.",
   "rationale": "Minting occurs instantly after the vault deposits assets.",
   "source_quote": "User immediately receives apxUSD_unlock tokens (UnlockToken shares)",
   "formalizable": true,

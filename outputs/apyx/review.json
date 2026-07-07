@@ -1,5 +1,5 @@
 {
- "method": "majority vote over 3 independent round-trip review runs (same Lean code, LLM judge run 3x)",
+ "method": "majority vote over 3 independent round-trip review runs (same Lean code, LLM judge run 3x); unlockToken-mints-apxUSD_unlock-immediately re-judged after requirements.json statement was disambiguated (was a genuine requirement-wording ambiguity, not judge noise or a Lean gap)",
  "runs_raw": [
   {
    "partial": 48,
@@ -24,7 +24,7 @@
   {
    "id": "apyusd-value-increase",
    "verdict": "partial",
-   "note": "The theorem only guarantees a non\u2011decrease (\u2264) of the exchange rate when time advances and ignores zero\u2011supply states, whereas the requirement demands a strict increase as yield is distributed.",
+   "note": "The theorem only guarantees a non‑decrease (≤) of the exchange rate when time advances and ignores zero‑supply states, whereas the requirement demands a strict increase as yield is distributed.",
    "votes": [
     "partial",
     "partial",
@@ -36,7 +36,7 @@
   {
    "id": "arbitrage-mint-access",
    "verdict": "full",
-   "note": "The theorem captures the exact normative constraint: success implies whitelist membership and price > $1, and violating either guarantees failure, matching the \u2018only eligible participants may mint when price is above $1\u2019 requirement.",
+   "note": "The theorem captures the exact normative constraint: success implies whitelist membership and price > $1, and violating either guarantees failure, matching the ‘only eligible participants may mint when price is above $1’ requirement.",
    "votes": [
     "full",
     "full",
@@ -48,7 +48,7 @@
   {
    "id": "arbitrage-redeem-access",
    "verdict": "partial",
-   "note": "The theorem enforces that only whitelisted callers can succeed in a redeem, but it omits the crucial condition that this restriction applies only when apxUSD trades below $1.00 (and it also over\u2011restricts redeemals at other prices).",
+   "note": "The theorem enforces that only whitelisted callers can succeed in a redeem, but it omits the crucial condition that this restriction applies only when apxUSD trades below $1.00 (and it also over‑restricts redeemals at other prices).",
    "votes": [
     "partial",
     "partial",
@@ -60,7 +60,7 @@
   {
    "id": "buffer-non-decreasing",
    "verdict": "partial",
-   "note": "The theorem enforces non\u2011decrease only for four redemption\u2011related operations, whereas the requirement applies to all state transitions; thus it captures a weakened fragment of the normative rule.",
+   "note": "The theorem enforces non‑decrease only for four redemption‑related operations, whereas the requirement applies to all state transitions; thus it captures a weakened fragment of the normative rule.",
    "votes": [
     "partial",
     "partial",
@@ -84,7 +84,7 @@
   {
    "id": "buffer-preservation",
    "verdict": "full",
-   "note": "The theorem exactly states that a successful redeemApxUSD step cannot reduce the over\u2011collateralisation buffer, matching the requirement that the buffer must not be consumed during redemption.",
+   "note": "The theorem exactly states that a successful redeemApxUSD step cannot reduce the over‑collateralisation buffer, matching the requirement that the buffer must not be consumed during redemption.",
    "votes": [
     "full",
     "full",
@@ -96,7 +96,7 @@
   {
    "id": "catastrophic-backstop",
    "verdict": "partial",
-   "note": "The theorem only guarantees Redemption Value = Total Collateral Value, omitting the required distribution of the entire reserve (including buffer) pro\u2011rata to holders and restricting the operation to the admin caller.",
+   "note": "The theorem only guarantees Redemption Value = Total Collateral Value, omitting the required distribution of the entire reserve (including buffer) pro‑rata to holders and restricting the operation to the admin caller.",
    "votes": [
     "partial",
     "partial",
@@ -120,7 +120,7 @@
   {
    "id": "continuous-stream",
    "verdict": "partial",
-   "note": "The theorem shows start\u2011zero, end\u2011full and monotonicity, but it does not ensure that vesting occurs continuously (e.g., it permits a single jump at the end), so it omits the key \u201cno lump\u2011sum\u201d condition.",
+   "note": "The theorem shows start‑zero, end‑full and monotonicity, but it does not ensure that vesting occurs continuously (e.g., it permits a single jump at the end), so it omits the key “no lump‑sum” condition.",
    "votes": [
     "partial",
     "partial",
@@ -144,7 +144,7 @@
   {
    "id": "cooldown-removal",
    "verdict": "partial",
-   "note": "The theorem shows that successful redeem/withdraw creates a cooldown unlock request, reduces totalSupply, and yields a higher per\u2011share credit, matching the spirit of removal and higher yield, but it only covers those operations and does not assert the universal MUST that any cooldown entry removes apyUSD from the pool.",
+   "note": "The theorem shows that successful redeem/withdraw creates a cooldown unlock request, reduces totalSupply, and yields a higher per‑share credit, matching the spirit of removal and higher yield, but it only covers those operations and does not assert the universal MUST that any cooldown entry removes apyUSD from the pool.",
    "votes": [
     "partial",
     "partial",
@@ -156,7 +156,7 @@
   {
    "id": "denylist-blocks-deposit",
    "verdict": "partial",
-   "note": "The theorem covers the deny\u2011list check for the caller on deposit and both caller/receiver on mint, but it omits the required condition that a deny\u2011listed receiver should also cause a deposit to revert.",
+   "note": "The theorem covers the deny‑list check for the caller on deposit and both caller/receiver on mint, but it omits the required condition that a deny‑listed receiver should also cause a deposit to revert.",
    "votes": [
     "partial",
     "partial",
@@ -228,7 +228,7 @@
   {
    "id": "early-unlock-fee-linear-decline",
    "verdict": "partial",
-   "note": "The theorem captures monotonic decline and correct bounds (350\u219210) and exact fee after cooldown, but it omits the required linear relationship over time, so it only partially fulfills the normative requirement.",
+   "note": "The theorem captures monotonic decline and correct bounds (350→10) and exact fee after cooldown, but it omits the required linear relationship over time, so it only partially fulfills the normative requirement.",
    "votes": [
     "partial",
     "partial",
@@ -240,7 +240,7 @@
   {
    "id": "erc4626-compliance",
    "verdict": "partial",
-   "note": "The theorem proves several consistency properties of preview and conversion functions and max\u2011limit behavior, but it does not assert that the contract actually implements the full ERC\u20114626 interface (e.g., deposit, withdraw, asset/shares getters, events), so it only captures a fragment of the normative requirement.",
+   "note": "The theorem proves several consistency properties of preview and conversion functions and max‑limit behavior, but it does not assert that the contract actually implements the full ERC‑4626 interface (e.g., deposit, withdraw, asset/shares getters, events), so it only captures a fragment of the normative requirement.",
    "votes": [
     "partial",
     "partial",
@@ -252,7 +252,7 @@
   {
    "id": "exchange-rate-non-decreasing",
    "verdict": "full",
-   "note": "The theorem states that the exchange rate never decreases when the timestamp is advanced, directly matching the requirement that the rate be non\u2011decreasing over time.",
+   "note": "The theorem states that the exchange rate never decreases when the timestamp is advanced, directly matching the requirement that the rate be non‑decreasing over time.",
    "votes": [
     "full",
     "full",
@@ -288,7 +288,7 @@
   {
    "id": "flexible-redemption-multiple-requests",
    "verdict": "full",
-   "note": "The theorem demonstrates that, under the normal operational preconditions (pause off and sufficient balance), a user can create two pending flexible\u2011unlock requests, matching the requirement that multiple concurrent requests must be allowed.",
+   "note": "The theorem demonstrates that, under the normal operational preconditions (pause off and sufficient balance), a user can create two pending flexible‑unlock requests, matching the requirement that multiple concurrent requests must be allowed.",
    "votes": [
     "full",
     "full",
@@ -324,7 +324,7 @@
   {
    "id": "issuance-price-one",
    "verdict": "full",
-   "note": "The theorem asserts a 1\u2011to\u20111 correspondence between deposited USDC and newly minted apxUSD, directly capturing the $1 per token issuance price requirement.",
+   "note": "The theorem asserts a 1‑to‑1 correspondence between deposited USDC and newly minted apxUSD, directly capturing the $1 per token issuance price requirement.",
    "votes": [
     "partial",
     "full",
@@ -348,7 +348,7 @@
   {
    "id": "lock-apxusd",
    "verdict": "partial",
-   "note": "The theorem only ensures a successful lock operation under a pause\u2011false and balance condition, but omits the required outcome of receiving apyUSD and adds an extra precondition not stated in the requirement.",
+   "note": "The theorem only ensures a successful lock operation under a pause‑false and balance condition, but omits the required outcome of receiving apyUSD and adds an extra precondition not stated in the requirement.",
    "votes": [
     "partial",
     "partial",
@@ -360,7 +360,7 @@
   {
    "id": "mint-access-whitelist",
    "verdict": "partial",
-   "note": "The theorem enforces the whitelist condition but does not address the eligibility or permitted\u2011jurisdiction requirements of the mint\u2011access\u2011whitelist rule.",
+   "note": "The theorem enforces the whitelist condition but does not address the eligibility or permitted‑jurisdiction requirements of the mint‑access‑whitelist rule.",
    "votes": [
     "partial",
     "partial",
@@ -384,7 +384,7 @@
   {
    "id": "mint-immediate",
    "verdict": "partial",
-   "note": "The theorem ensures the balance does not decrease immediately, but it does not guarantee that the receiver\u2019s balance actually increases (i.e., that shares are delivered).",
+   "note": "The theorem ensures the balance does not decrease immediately, but it does not guarantee that the receiver’s balance actually increases (i.e., that shares are delivered).",
    "votes": [
     "partial",
     "partial",
@@ -396,7 +396,7 @@
   {
    "id": "mint-price",
    "verdict": "partial",
-   "note": "The theorem proves a 1:1 USDC\u2011to\u2011apxUSD conversion for the depositUSDC operation, thus capturing the $1 price for that minting path, but it does not address other possible minting mechanisms, so it only partially fulfills the requirement.",
+   "note": "The theorem proves a 1:1 USDC‑to‑apxUSD conversion for the depositUSDC operation, thus capturing the $1 price for that minting path, but it does not address other possible minting mechanisms, so it only partially fulfills the requirement.",
    "votes": [
     "partial",
     "partial",
@@ -408,7 +408,7 @@
   {
    "id": "mint-redeem-at-redemption-value",
    "verdict": "partial",
-   "note": "The theorem handles redemption at the redemption value but treats minting as a 1\u2011to\u20111 USDC increase, omitting the required redemption\u2011value pricing for mint operations.",
+   "note": "The theorem handles redemption at the redemption value but treats minting as a 1‑to‑1 USDC increase, omitting the required redemption‑value pricing for mint operations.",
    "votes": [
     "partial",
     "partial",
@@ -456,7 +456,7 @@
   {
    "id": "new-locked-receives-yield",
    "verdict": "partial",
-   "note": "The theorem proves dilution of per\u2011share yield for existing holders, but it only shows that redeemable value never decreases over time, not that the newly locked apyUSD starts earning yield immediately as required.",
+   "note": "The theorem proves dilution of per‑share yield for existing holders, but it only shows that redeemable value never decreases over time, not that the newly locked apyUSD starts earning yield immediately as required.",
    "votes": [
     "partial",
     "partial",
@@ -468,7 +468,7 @@
   {
    "id": "no-rehypothecation",
    "verdict": "partial",
-   "note": "The theorem restricts which operations can change the vault's APX\u2011USD balance, covering lock/withdraw/redeem, but it does not forbid using deposited APX\u2011USD in ways that leave the balance unchanged (e.g., lending or rehypothecation).",
+   "note": "The theorem restricts which operations can change the vault's APX‑USD balance, covering lock/withdraw/redeem, but it does not forbid using deposited APX‑USD in ways that leave the balance unchanged (e.g., lending or rehypothecation).",
    "votes": [
     "partial",
     "partial",
@@ -480,7 +480,7 @@
   {
    "id": "overcollateralization-limit",
    "verdict": "partial",
-   "note": "The theorem proves preservation of the over\u2011collateralisation inequality for most steps but explicitly excludes claimUnlock, flexibleClaimUnlock, and handleStressEvent, so it does not fully guarantee the requirement for all operations.",
+   "note": "The theorem proves preservation of the over‑collateralisation inequality for most steps but explicitly excludes claimUnlock, flexibleClaimUnlock, and handleStressEvent, so it does not fully guarantee the requirement for all operations.",
    "votes": [
     "partial",
     "partial",
@@ -540,7 +540,7 @@
   {
    "id": "redeem-liquidate-usdc",
    "verdict": "partial",
-   "note": "The theorem captures the USDC balance changes expected from a redemption but omits any mention of liquidating preferred\u2011share collateral, which is the core normative requirement.",
+   "note": "The theorem captures the USDC balance changes expected from a redemption but omits any mention of liquidating preferred‑share collateral, which is the core normative requirement.",
    "votes": [
     "partial",
     "partial",
@@ -552,7 +552,7 @@
   {
    "id": "redeem-no-share-transfer",
    "verdict": "full",
-   "note": "The theorem guarantees that a successful redeemApxUSD operation leaves all governance\u2011token (i.e., preferred share) balances unchanged, thus ensuring no preferred shares are transferred to the redeemer, satisfying the requirement.",
+   "note": "The theorem guarantees that a successful redeemApxUSD operation leaves all governance‑token (i.e., preferred share) balances unchanged, thus ensuring no preferred shares are transferred to the redeemer, satisfying the requirement.",
    "votes": [
     "full",
     "full",
@@ -576,7 +576,7 @@
   {
    "id": "redemption-async-process",
    "verdict": "partial",
-   "note": "The theorem shows the request step and that an immediate claim fails (enforcing a cooldown), but it does not assert that a claim succeeds after the cooldown or that the three\u2011step sequence is required in all cases.",
+   "note": "The theorem shows the request step and that an immediate claim fails (enforcing a cooldown), but it does not assert that a claim succeeds after the cooldown or that the three‑step sequence is required in all cases.",
    "votes": [
     "partial",
     "partial",
@@ -588,7 +588,7 @@
   {
    "id": "redemption-cooldown-period",
    "verdict": "full",
-   "note": "The theorem specifies a 20\u2011day cooldown, records it on request, and permits claims only after the deadline, matching the requirement's normative content.",
+   "note": "The theorem specifies a 20‑day cooldown, records it on request, and permits claims only after the deadline, matching the requirement's normative content.",
    "votes": [
     "full",
     "full",
@@ -600,7 +600,7 @@
   {
    "id": "redemption-exchange-rate-multiplier",
    "verdict": "full",
-   "note": "The theorem states that when the exchange rate is \u2265\u202f1 (ray), the redeemed amount equals shares\u00b7exchangeRate (scaled by ray) and, consequently, is at least the number of shares, matching the requirement\u2019s mandatory transfer calculation and rate bound.",
+   "note": "The theorem states that when the exchange rate is ≥ 1 (ray), the redeemed amount equals shares·exchangeRate (scaled by ray) and, consequently, is at least the number of shares, matching the requirement’s mandatory transfer calculation and rate bound.",
    "votes": [
     "mismatch",
     "full",
@@ -648,7 +648,7 @@
   {
    "id": "rfq-redemption-allowed",
    "verdict": "partial",
-   "note": "The theorem captures the \u201conly approved counterparties may execute\u201d clause, but only provides a sufficient condition for success rather than guaranteeing that every valid user redemption request is allowed, and adds extra preconditions not stated in the requirement.",
+   "note": "The theorem captures the “only approved counterparties may execute” clause, but only provides a sufficient condition for success rather than guaranteeing that every valid user redemption request is allowed, and adds extra preconditions not stated in the requirement.",
    "votes": [
     "partial",
     "partial",
@@ -732,7 +732,7 @@
   {
    "id": "unlock-claimable-after-3d",
    "verdict": "partial",
-   "note": "The theorem shows claimability only when the request time is exactly now\u2011minFlexibleClaim (i.e., exactly three days ago) and when a specific cooldown condition holds, rather than for any time after three days as required.",
+   "note": "The theorem shows claimability only when the request time is exactly now‑minFlexibleClaim (i.e., exactly three days ago) and when a specific cooldown condition holds, rather than for any time after three days as required.",
    "votes": [
     "partial",
     "partial",
@@ -768,7 +768,7 @@
   {
    "id": "unlock-receipt-nft-mint",
    "verdict": "partial",
-   "note": "The theorem shows that the new unlock ID is recorded and its owner is set, which aligns with the intent to represent the pending claim, but it does not explicitly assert that an NFT is minted or that the token exists on\u2011chain.",
+   "note": "The theorem shows that the new unlock ID is recorded and its owner is set, which aligns with the intent to represent the pending claim, but it does not explicitly assert that an NFT is minted or that the token exists on‑chain.",
    "votes": [
     "partial",
     "partial",
@@ -780,7 +780,7 @@
   {
    "id": "unlock-token-no-yield",
    "verdict": "partial",
-   "note": "The theorem shows that a newly created unlock request\u2019s amount does not increase after time passes, but it does not guarantee that all existing unlock tokens never earn yield.",
+   "note": "The theorem shows that a newly created unlock request’s amount does not increase after time passes, but it does not guarantee that all existing unlock tokens never earn yield.",
    "votes": [
     "partial",
     "full",
@@ -792,7 +792,7 @@
   {
    "id": "unlock-token-nontransferable",
    "verdict": "full",
-   "note": "The theorem guarantees that token ownership never changes to a different address, only staying the same or becoming unowned, which directly enforces the non\u2011transferability requirement.",
+   "note": "The theorem guarantees that token ownership never changes to a different address, only staying the same or becoming unowned, which directly enforces the non‑transferability requirement.",
    "votes": [
     "full",
     "full",
@@ -815,12 +815,12 @@
   },
   {
    "id": "unlockToken-mints-apxUSD_unlock-immediately",
-   "verdict": "mismatch",
-   "note": "The theorem talks about token creation after withdraw, redeem, and unlock requests, but the requirement concerns minting tokens immediately after a deposit; the key condition is missing.",
+   "verdict": "full",
+   "note": "Requirement statement clarified in requirements.json/SPEC.md to specify 'the deposit' = vault depositing apxUSD into UnlockToken (not the user's initial vault deposit); re-judged full 3/3 times against the unchanged theorem.",
    "votes": [
-    "mismatch",
-    "mismatch",
-    "mismatch"
+    "full",
+    "full",
+    "full"
    ],
    "unanimous": true,
    "tie": false
@@ -876,7 +876,7 @@
   {
    "id": "vault-pulls-vested-yield-before-withdraw",
    "verdict": "partial",
-   "note": "The theorem relates the vault\u2019s balance after withdrawal to the balance after an explicit pull, but it does not explicitly assert that the pull of all vested yield is performed automatically or that it precedes the withdrawal; it only captures a balance effect, which is a weakened fragment of the requirement.",
+   "note": "The theorem relates the vault’s balance after withdrawal to the balance after an explicit pull, but it does not explicitly assert that the pull of all vested yield is performed automatically or that it precedes the withdrawal; it only captures a balance effect, which is a weakened fragment of the requirement.",
    "votes": [
     "partial",
     "partial",
@@ -912,7 +912,7 @@
   {
    "id": "yield-distribution-period",
    "verdict": "partial",
-   "note": "The theorem captures the 20\u2011day vesting schedule (timing) but does not assert that the credited yield is actually distributed to apyUSD holders, nor does it tie the vesting to holder balances.",
+   "note": "The theorem captures the 20‑day vesting schedule (timing) but does not assert that the credited yield is actually distributed to apyUSD holders, nor does it tie the vesting to holder balances.",
    "votes": [
     "partial",
     "full",
@@ -924,7 +924,7 @@
   {
    "id": "yield-distributor-credit",
    "verdict": "partial",
-   "note": "The theorem shows vestTotal growing and relates totalAssets to the vault balance after vesting, but it does not explicitly assert that the vault\u2019s APXUSD balance itself is credited with the amount, which is the core of the requirement.",
+   "note": "The theorem shows vestTotal growing and relates totalAssets to the vault balance after vesting, but it does not explicitly assert that the vault’s APXUSD balance itself is credited with the amount, which is the core of the requirement.",
    "votes": [
     "partial",
     "partial",
@@ -936,7 +936,7 @@
   {
    "id": "yield-rate-dollar-terms",
    "verdict": "partial",
-   "note": "The theorem ensures the month\u2019s yield rate is a natural number, but it does not explicitly enforce that the number represents dollars (e.g., unit semantics or allowing cents).",
+   "note": "The theorem ensures the month’s yield rate is a natural number, but it does not explicitly enforce that the number represents dollars (e.g., unit semantics or allowing cents).",
    "votes": [
     "partial",
     "partial",
@@ -948,10 +948,10 @@
  ],
  "counts": {
   "partial": 49,
-  "full": 23,
-  "mismatch": 3,
+  "full": 24,
+  "mismatch": 2,
   "unformalizable": 2
  },
- "coverage_full": 0.2987012987012987,
- "coverage_full_or_partial": 0.935064935064935
+ "coverage_full": 0.3116883116883117,
+ "coverage_full_or_partial": 0.948051948051948
 }
