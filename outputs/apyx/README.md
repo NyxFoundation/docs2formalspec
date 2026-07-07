@@ -13,13 +13,18 @@ This report documents a **model-based formal verification exercise**: Apyx's pub
 turned into a normative RFC 2119 specification, then into a Lean 4 state-machine model of the protocol,
 against which theorems are mechanically proved by the Lean 4 kernel — the strongest correctness
 guarantee available (not testing, not a heuristic checker; each proof is checked by a trusted, tiny proof
-kernel). Two complementary bodies of proof were produced:
+kernel). Three complementary bodies of proof were produced:
 
 1. **Requirement conformance** (§4) — 81 theorems showing the model satisfies its documented RFC 2119
    requirements (the "does it do what the docs say" question).
-2. **Key-compromise blast-radius** (§6) — 56 additional theorems bounding user-asset loss when a
+2. **Key-compromise blast-radius** (§6) — 56 theorems bounding user-asset loss when a
    privileged operator key is *stolen* (the "what if our multisig / oracle / admin gets phished" question,
    which — per Chainalysis — is the cause of ~44% of real crypto theft, not contract bugs).
+3. **In-scope design safety** (§7) — 23 theorems checking the *design itself* for flaws exploitable by an
+   ordinary (honest-roles) attacker using only legitimate operations (the "can someone drain us via a
+   clever sequence of normal calls" question: no-free-value, solvency preservation, rounding-in-our-favor,
+   no share dilution, inflation-attack immunity). This pillar's proof effort surfaced a genuine
+   model-vs-contract fidelity gap in the vesting logic (§7), now being corrected.
 
 **This is not a substitute for a professional smart-contract security audit** (Certora, Quantstamp, Zellic,
 Halborn, etc. — Apyx already has several, see `corpus.md`). It verifies a *hand-built abstract model* of
@@ -108,6 +113,7 @@ report are a **majority vote over 3 independent runs**, not a single sample.
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine (actors, state variables, operations, guarantees) |
 | [`Apyx.lean`](Apyx.lean) | **The formal model and all 81 requirement proofs** — `State`, `Op`, `step`, and one `theorem req_*` per formalizable requirement, each with an RFC 2119 docstring |
 | [`BlastRadius.lean`](BlastRadius.lean) | **The 56 key-compromise blast-radius proofs** (§6) — trace executor, per-role damage bounds, and the rate-limit / timelock defense wrappers, all imported from and additive to `Apyx.lean` (which it leaves untouched) |
+| [`Safety.lean`](Safety.lean) | **The 23 in-scope design-safety proofs** (§7) — no-free-value, solvency preservation, rounding, no-dilution, inflation-attack immunity, and the vesting properties (whose proof surfaced the model-fidelity finding), additive to `Apyx.lean`/`BlastRadius.lean` |
 | [`leancheck.json`](leancheck.json) | Compile status: `81` requirement theorems, `0` sorry, `0` vacuous, `81` mechanically proved |
 | [`review.json`](review.json) | Faithfulness verdicts (majority vote over 3 runs) + per-requirement vote records |
 | [`review_run1.json`](review_run1.json), [`review_run2.json`](review_run2.json), [`review_run3.json`](review_run3.json) | Raw per-run judge output, kept for reproducibility of the majority vote |
@@ -292,7 +298,47 @@ roadmap: [`docs/05-blast-radius.md`](https://github.com/NyxFoundation/docs2forma
 
 ---
 
-## 7. Coverage summary
+## 7. In-scope design-safety analysis (23 theorems, 0 `sorry`)
+
+Where §4 asks "does the model match the docs" and §6 asks "what if a key is stolen", this pillar asks the
+hardest question: **does the protocol's *design* have a flaw an ordinary attacker can exploit using only
+legitimate operations?** All proofs in [`Safety.lean`](Safety.lean), machine-checked, additive to and
+leaving `Apyx.lean`/`BlastRadius.lean` untouched. Every actor is assumed honest here — this is about
+design soundness, not key theft.
+
+| Property | What is proved | Theorem |
+|---|---|---|
+| No free value | No operation sequence lets any address mint apxUSD from nothing | `no_free_value_trace` |
+| Solvency preserved | Minted apxUSD never exceeds collateral across any trace (under stated well-formedness; solvency-breaking ops explicitly excluded and documented) | `solvency_preserved` |
+| Rounding in protocol's favor | Share/asset conversions never credit the user free value (round-trip ≤ input; withdraws round *up* in shares) | `rounding_favors_protocol`, `withdrawShares_rounds_up` |
+| No dilution | A new deposit by someone else never lowers an existing holder's redeemable value | `no_dilution` |
+| Inflation-attack immunity | The classic ERC-4626 first-depositor / donation share-price attack is **structurally impossible** — the model has no raw donation primitive; every vault-asset increase is matched by a share mint | `donation_free`, `no_inflation_attack` |
+| No free extraction (caller) | An attacker calling operations can't end richer than they started (fixed-rate single-step; the live-rate trace closure is flagged as genuinely open) | `caller_net_nonpositive` |
+| No early yield drain | Vested yield can't be pulled forward faster than its linear schedule | `vest_no_early_drain` |
+
+**This pillar found a real issue.** While proving the vesting properties, the effort surfaced that the
+model's `creditYield` reset the vesting clock without preserving already-accrued yield — proved as
+`creditYield_forfeits_pending_vest`. Cross-checking the **deployed contract** (`LinearVestV0.sol`,
+`depositYield` line 168: `fullyVestedAmount += newlyVestedAmount()` *before* the reset) established the
+contract is correct and the discrepancy was a **model-fidelity gap**: the AI-generated model collapsed the
+contract's two-accumulator vesting design into one bucket. The model, spec, and these proofs are being
+corrected to match the contract (adding the `fullyVestedAmount` accumulator; the forfeit theorem becomes a
+conservation theorem). This is the pillar working as intended — the proof flagged a concrete question, and
+checking the real source settled it. Full method and the S1–S7 roadmap:
+[`docs/06-safety-properties.md`](https://github.com/NyxFoundation/docs2formalspec/blob/main/docs/06-safety-properties.md).
+
+*(Note: the vesting-fidelity correction described above is in progress; theorem counts and the §8 summary
+will finalize once it lands. What is stated here reflects the committed state and the correction's
+intended end state.)*
+
+**Honest scope limit (all three pillars):** these are properties of the abstract Lean model, not the
+deployed Solidity — and, as the vesting finding shows, the model can diverge from the contract. In
+particular, reentrancy and cross-protocol flash-loan composition are **not expressible** in this atomic
+state-machine model and are out of scope (that is bytecode-level audit territory).
+
+---
+
+## 8. Coverage summary
 
 | Metric | Value |
 |---|---|
@@ -300,6 +346,7 @@ roadmap: [`docs/05-blast-radius.md`](https://github.com/NyxFoundation/docs2forma
 | Lean 4 compilation | Passes (`lake build D2fsSpecs`, zero errors/warnings) |
 | Requirement theorems proved (§4) | **81 / 81 (100%, zero `sorry`, zero vacuous)** |
 | Blast-radius theorems proved (§6) | **56 (zero `sorry`, zero vacuous)** |
+| In-scope design-safety theorems proved (§7) | **23 (zero `sorry`, zero vacuous)** |
 | Faithful coverage (full + partial, majority of 3 judge runs) | **73 / 77 = 94.8%** |
 | — of which fully faithful (`full`) | 24 |
 | — of which partially faithful (`partial`) | 49 |

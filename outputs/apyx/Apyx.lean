@@ -60,6 +60,15 @@ structure State where
   vestStart : Nat
   vestTotal : Nat
   vestPeriod : Nat
+  /-- The portion of previously-credited yield that has already streamed out of the
+  linear vest (`vestTotal`/`vestStart`/`vestPeriod`) but has not yet been pulled into
+  `vaultApxUSDBal` by `pullVestedYield`. Mirrors the real `LinearVestV0` contract's
+  second accumulator (`fullyVestedAmount`), which exists precisely so that crediting new
+  yield (`Op.creditYield`) or reconfiguring the vesting period (`Op.setVestPeriod`) can
+  realize the currently-streaming portion into this bucket FIRST, instead of forfeiting it
+  by folding it back into a freshly-restarted `vestTotal`/`vestStart` clock (cf.
+  `req_credit_preserves_accrued_vest`). -/
+  fullyVestedAmount : Nat
   nextUnlockId : Nat
   unlockRequestId : Address → Option Nat
   unlockRequests : Nat → Option (Address × Nat × Nat)
@@ -77,12 +86,24 @@ structure State where
   eventLog : List (String × List Nat)
 deriving Inhabited
 
-def vestedAmount (s : State) (now : Nat) : Nat :=
+/-- The portion of the currently-streaming vest pool (`vestTotal`, anchored at
+`vestStart`, over `vestPeriod`) that has linearly released as of `now` (floor rounding).
+This is only the "newly" streaming portion since the clock was last (re)anchored — it
+does NOT include yield realized into `fullyVestedAmount` by an earlier
+`creditYield`/`setVestPeriod`/`pullVestedYield`. Use `vestedAmount` for the total
+reportable vested amount. -/
+def newlyVestedAmount (s : State) (now : Nat) : Nat :=
   if now < s.vestStart then 0
   else
     let elapsed := now - s.vestStart
     if elapsed ≥ s.vestPeriod then s.vestTotal
     else (elapsed * s.vestTotal) / s.vestPeriod
+
+/-- The total vested-but-not-yet-pulled amount reported by the LinearVestV0 model: the
+previously-realized `fullyVestedAmount` accumulator plus whatever has newly streamed out
+of the current `vestTotal`/`vestStart`/`vestPeriod` clock. -/
+def vestedAmount (s : State) (now : Nat) : Nat :=
+  s.fullyVestedAmount + newlyVestedAmount s now
 
 def totalAssets (s : State) : Nat :=
   s.vaultApxUSDBal + vestedAmount s s.now
@@ -112,13 +133,20 @@ def redeemAssets (shares : Nat) (exchangeRate : Nat) : Nat :=
 def withdrawShares (assets : Nat) (exchangeRate : Nat) : Nat :=
   (assets * ray + exchangeRate - 1) / exchangeRate
 
+/-- Pull all vested yield (both the previously-realized `fullyVestedAmount` and whatever
+has newly streamed out of the current vest clock) into vault custody, mirroring
+`LinearVestV0.pullVestedYield`: the realized total moves into `vaultApxUSDBal`, the
+newly-streamed portion leaves the streaming pool `vestTotal`, `fullyVestedAmount` resets
+to zero (it has all been pulled), and the clock re-anchors at `now`. -/
 def pullVestedYield (s : State) : State :=
-  let v := vestedAmount s s.now
+  let nv := newlyVestedAmount s s.now
+  let v := s.fullyVestedAmount + nv
   if v = 0 then s
   else
     { s with
         vaultApxUSDBal := s.vaultApxUSDBal + v
-        vestTotal := s.vestTotal - v
+        vestTotal := s.vestTotal - nv
+        fullyVestedAmount := 0
         vestStart := s.now
     }
 
@@ -423,10 +451,16 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
         collateralYieldBase := overcollateralizationBuffer s }
     else none
   | Op.creditYield amount =>
+    -- accrue first: realize whatever has already streamed out of the current vest
+    -- clock into `fullyVestedAmount` BEFORE folding the new amount into a
+    -- freshly-restarted `vestTotal`/`vestStart` clock, so already-accrued yield is
+    -- never forfeited (cf. `req_credit_preserves_accrued_vest`).
     if caller == s.yieldDistributor then
+      let nv := newlyVestedAmount s s.now
       let s1 := { s with
         usdcReserve := s.usdcReserve + amount
-        vestTotal := s.vestTotal + amount
+        fullyVestedAmount := s.fullyVestedAmount + nv
+        vestTotal := (s.vestTotal - nv) + amount
         vestStart := s.now
       }
       some s1
@@ -467,7 +501,16 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
       some { s with redemptionValue := s.totalCollateralValue, emergencyFlag := true }
     else none
   | Op.setVestPeriod p =>
-    if caller == s.admin then some { s with vestPeriod := p }
+    -- accrue first, same pattern as `creditYield`: reconfiguring the vesting period
+    -- must not forfeit whatever has already streamed out of the current clock.
+    if caller == s.admin then
+      let nv := newlyVestedAmount s s.now
+      some { s with
+        fullyVestedAmount := s.fullyVestedAmount + nv
+        vestTotal := s.vestTotal - nv
+        vestStart := s.now
+        vestPeriod := p
+      }
     else none
   | Op.setApxUSDMarketPrice price =>
     -- only the price oracle may report apxUSD's secondary-market trading price
@@ -578,7 +621,7 @@ def redeemForMinAssets (s : State) (shares minAssets : Nat) (receiver caller : A
 
 @[simp] private theorem pullVestedYield_vaultApxUSDBal (s : State) :
     (pullVestedYield s).vaultApxUSDBal = s.vaultApxUSDBal + vestedAmount s s.now := by
-  unfold pullVestedYield; dsimp only; split <;> simp_all
+  unfold pullVestedYield vestedAmount; dsimp only; split <;> simp_all
 
 /-- If `e ≤ P` then `e * T / P ≤ T`. -/
 private theorem div_mul_le_total {e P T : Nat} (h : e ≤ P) : e * T / P ≤ T := by
@@ -588,20 +631,20 @@ private theorem div_mul_le_total {e P T : Nat} (h : e ≤ P) : e * T / P ≤ T :
   · calc e * T / P ≤ P * T / P := Nat.div_le_div_right (Nat.mul_le_mul_right _ h)
       _ = T := Nat.mul_div_cancel_left _ hp
 
-/-- `vestedAmount` never exceeds the total vest amount. -/
-private theorem vestedAmount_le_total (s : State) (n : Nat) :
-    vestedAmount s n ≤ s.vestTotal := by
-  unfold vestedAmount
+/-- `newlyVestedAmount` never exceeds the total of the currently-streaming vest pool. -/
+private theorem newlyVestedAmount_le_total (s : State) (n : Nat) :
+    newlyVestedAmount s n ≤ s.vestTotal := by
+  unfold newlyVestedAmount
   dsimp only
   repeat' split
   · exact Nat.zero_le _
   · exact Nat.le_refl _
   · exact div_mul_le_total (by omega)
 
-/-- `vestedAmount` is monotone in time. -/
-private theorem vestedAmount_mono (s : State) {n m : Nat} (h : n ≤ m) :
-    vestedAmount s n ≤ vestedAmount s m := by
-  unfold vestedAmount
+/-- `newlyVestedAmount` is monotone in time. -/
+private theorem newlyVestedAmount_mono (s : State) {n m : Nat} (h : n ≤ m) :
+    newlyVestedAmount s n ≤ newlyVestedAmount s m := by
+  unfold newlyVestedAmount
   dsimp only
   repeat' split
   all_goals first
@@ -610,6 +653,33 @@ private theorem vestedAmount_mono (s : State) {n m : Nat} (h : n ≤ m) :
     | (exfalso; omega)
     | exact div_mul_le_total (by omega)
     | exact Nat.div_le_div_right (Nat.mul_le_mul_right _ (by omega))
+
+/-- `vestedAmount` never exceeds `fullyVestedAmount` plus the total of the currently-streaming
+vest pool. -/
+private theorem vestedAmount_le_total (s : State) (n : Nat) :
+    vestedAmount s n ≤ s.fullyVestedAmount + s.vestTotal :=
+  Nat.add_le_add_left (newlyVestedAmount_le_total s n) _
+
+/-- `vestedAmount` is monotone in time (only the streaming portion depends on `now`;
+`fullyVestedAmount` is a fixed state field). -/
+private theorem vestedAmount_mono (s : State) {n m : Nat} (h : n ≤ m) :
+    vestedAmount s n ≤ vestedAmount s m :=
+  Nat.add_le_add_left (newlyVestedAmount_mono s h) _
+
+/-- At exactly `vestStart + vestPeriod`, a vest clock has always fully released its
+`vestTotal` (regardless of `vestPeriod`, including the degenerate `vestPeriod = 0` case),
+so `totalAssets` at that instant is exactly `vaultApxUSDBal + fullyVestedAmount + vestTotal`
+— the "eventual, fully-vested" asset base of a state, used throughout the crediting
+theorems below (`req_pay_to_non_cooldown`, `req_yield_distributor_credit`,
+`req_yield_distribution_period`) to state conservation identities that hold regardless of
+how much of the CURRENT stream has already elapsed. -/
+private theorem totalAssets_at_horizon (u : State) (n : Nat) (h : n = u.vestStart + u.vestPeriod) :
+    totalAssets { u with now := n } = u.vaultApxUSDBal + u.fullyVestedAmount + u.vestTotal := by
+  subst h
+  unfold totalAssets vestedAmount newlyVestedAmount
+  dsimp only
+  repeat' split
+  all_goals omega
 
 /-- The overcollateralization buffer only grows when supply shrinks (collateral and
 redemption value held fixed). -/
@@ -1208,18 +1278,24 @@ theorem req_flexible_redemption_multiple_requests (s : State) (a1 a2 : Nat) (cal
   · exact ⟨s.now, s.now + cooldownPeriod, by simp [createFlexibleUnlock, burnApxUSD]⟩
 
 /-- REQ continuous-stream: Yield MUST be streamed continuously over a configurable period
-rather than as a lump-sum distribution. (Model: the vested amount starts at zero, grows
-monotonically, and reaches the full total exactly at the end of the vesting period.) -/
+rather than as a lump-sum distribution. (Model: the currently-streaming portion of the
+vest, `newlyVestedAmount` — i.e. the release of `vestTotal` since the clock `vestStart` —
+starts at zero, grows monotonically, and reaches the full streaming total exactly at the
+end of the vesting period. The total reportable `vestedAmount` additionally carries any
+previously-realized `fullyVestedAmount` — cf. `req_credit_preserves_accrued_vest` — so it
+need not itself start at zero, but it is still monotone in time, since `fullyVestedAmount`
+does not depend on `now`.) -/
 theorem req_continuous_stream (s : State) (h : 0 < s.vestPeriod) :
-    vestedAmount s s.vestStart = 0 ∧
-    vestedAmount s (s.vestStart + s.vestPeriod) = s.vestTotal ∧
+    newlyVestedAmount s s.vestStart = 0 ∧
+    newlyVestedAmount s (s.vestStart + s.vestPeriod) = s.vestTotal ∧
+    (∀ n m, n ≤ m → newlyVestedAmount s n ≤ newlyVestedAmount s m) ∧
     (∀ n m, n ≤ m → vestedAmount s n ≤ vestedAmount s m) := by
-  refine ⟨?_, ?_, fun n m hnm => vestedAmount_mono s hnm⟩
-  · unfold vestedAmount
+  refine ⟨?_, ?_, fun n m hnm => newlyVestedAmount_mono s hnm, fun n m hnm => vestedAmount_mono s hnm⟩
+  · unfold newlyVestedAmount
     dsimp only
     repeat' split
     all_goals first | rfl | simp | (exfalso; omega)
-  · unfold vestedAmount
+  · unfold newlyVestedAmount
     dsimp only
     repeat' split
     all_goals first | rfl | (exfalso; omega)
@@ -1284,16 +1360,20 @@ theorem req_pay_to_non_cooldown (s : State) (amount : Nat) (caller : Address) (s
     (h_step : step s (Op.creditYield amount) caller = some s')
     (h_pos : 0 < amount) :
     -- (a) the credit lands in the vault's vesting stream: fully vested, the asset pool
-    -- backing apyUSD has grown by exactly `amount`, over an unchanged share supply
+    -- backing apyUSD has grown by exactly `amount`, over an unchanged share supply. The
+    -- "fully vested" baseline is each state's own eventual value — its own vested amount
+    -- need not itself be zero beforehand (a prior credit may already have realized some
+    -- into `fullyVestedAmount`, cf. `req_credit_preserves_accrued_vest`) — but crediting
+    -- always adds exactly `amount` on top of whatever was already going to fully vest.
     totalAssets { s' with now := s'.vestStart + s'.vestPeriod }
-      = (s.vaultApxUSDBal + s.vestTotal) + amount ∧
+      = totalAssets { s with now := s.vestStart + s.vestPeriod } + amount ∧
     s'.totalSupply_apyUSD = s.totalSupply_apyUSD ∧
     -- (b) every current apyUSD holder is paid: its share balance is untouched and its
     -- pro-rata claim on the backing pool strictly increases
     (∀ a, s'.apyUSDBal a = s.apyUSDBal a) ∧
     (∀ a, 0 < s.apyUSDBal a →
       s.apyUSDBal a * totalAssets { s' with now := s'.vestStart + s'.vestPeriod }
-        > s.apyUSDBal a * (s.vaultApxUSDBal + s.vestTotal)) ∧
+        > s.apyUSDBal a * totalAssets { s with now := s.vestStart + s.vestPeriod }) ∧
     -- (c) cooldown positions receive none of it: every unlock payout is unchanged
     (∀ id, s'.unlockTokenAmount id = s.unlockTokenAmount id) ∧
     (∀ id, s'.unlockRequests id = s.unlockRequests id) ∧
@@ -1301,22 +1381,26 @@ theorem req_pay_to_non_cooldown (s : State) (amount : Nat) (caller : Address) (s
   simp only [step] at h_step
   split at h_step
   · cases Option.some.inj h_step
+    have hnv : newlyVestedAmount s s.now ≤ s.vestTotal := newlyVestedAmount_le_total s s.now
     have h_assets : totalAssets { ({ s with
           usdcReserve := s.usdcReserve + amount
-          vestTotal := s.vestTotal + amount
+          fullyVestedAmount := s.fullyVestedAmount + newlyVestedAmount s s.now
+          vestTotal := (s.vestTotal - newlyVestedAmount s s.now) + amount
           vestStart := s.now }) with
         now := s.now + s.vestPeriod }
-        = (s.vaultApxUSDBal + s.vestTotal) + amount := by
-      simp only [totalAssets, vestedAmount]
+        = totalAssets { s with now := s.vestStart + s.vestPeriod } + amount := by
+      generalize hnvdef : newlyVestedAmount s s.now = nv at hnv ⊢
+      simp only [totalAssets, vestedAmount, newlyVestedAmount]
       repeat' split
       all_goals omega
     refine ⟨h_assets, rfl, fun a => rfl, ?_, fun id => rfl, fun id => rfl, fun id => rfl⟩
     intro a h_bal
     rw [h_assets]
-    calc s.apyUSDBal a * (s.vaultApxUSDBal + s.vestTotal)
-        < s.apyUSDBal a * (s.vaultApxUSDBal + s.vestTotal) + s.apyUSDBal a * amount :=
+    calc s.apyUSDBal a * totalAssets { s with now := s.vestStart + s.vestPeriod }
+        < s.apyUSDBal a * totalAssets { s with now := s.vestStart + s.vestPeriod }
+            + s.apyUSDBal a * amount :=
           Nat.lt_add_of_pos_right (Nat.mul_pos h_bal h_pos)
-      _ = s.apyUSDBal a * ((s.vaultApxUSDBal + s.vestTotal) + amount) :=
+      _ = s.apyUSDBal a * (totalAssets { s with now := s.vestStart + s.vestPeriod } + amount) :=
           (Nat.mul_add _ _ _).symm
   · exact absurd h_step (by simp)
 
@@ -1984,12 +2068,20 @@ theorem req_arbitrage_redeem_access (s : State) (amount : Nat) (caller : Address
   · exact Or.inr h
   · exact Or.inl (by simp [step, h])
 
-/-- REQ linear-vest-implementation: The LinearVestV0 contract MUST implement a linear vesting mechanism for yield credited to the apyUSD vault. -/
+/-- REQ linear-vest-implementation: The LinearVestV0 contract MUST implement a linear
+vesting mechanism for yield credited to the apyUSD vault. (Model: the currently-streaming
+portion of the vest, `newlyVestedAmount` — the release of `vestTotal` since the clock
+`vestStart` over `vestPeriod` — follows the linear formula exactly. The reported total
+`vestedAmount` is that streaming portion plus whatever was already realized into
+`fullyVestedAmount` by an earlier credit/reconfiguration/pull, mirroring `LinearVestV0`'s
+two-accumulator design — cf. `req_credit_preserves_accrued_vest`.) -/
 theorem req_linear_vest_implementation (s : State) (now : Nat) :
-    vestedAmount s now = if now < s.vestStart then 0 else
+    (newlyVestedAmount s now = if now < s.vestStart then 0 else
       let elapsed := now - s.vestStart
       if elapsed ≥ s.vestPeriod then s.vestTotal
-      else (elapsed * s.vestTotal) / s.vestPeriod := by rfl
+      else (elapsed * s.vestTotal) / s.vestPeriod) ∧
+    vestedAmount s now = s.fullyVestedAmount + newlyVestedAmount s now :=
+  ⟨rfl, rfl⟩
 
 /-- REQ yield-rate-dollar-terms: The yield rate MUST be expressed in dollar terms for the month. -/
 theorem req_yield_rate_dollar_terms (s : State) :
@@ -2746,10 +2838,18 @@ theorem req_buffer_non_decreasing (s s' : State) (op : Op) (caller : Address)
     exact overcollateralizationBuffer_mono _ _ (by simp [burnApxUSD])
       (by simp [burnApxUSD]) (by simp [burnApxUSD])
 
-/-- REQ configurable-vesting-period: The vesting period for linear yield distribution MUST be configurable. -/
+/-- REQ configurable-vesting-period: The vesting period for linear yield distribution MUST
+be configurable. (Model: `Op.setVestPeriod` accrues the currently-streaming portion into
+`fullyVestedAmount` first — same pattern as `creditYield` — before applying the new
+period, so reconfiguring never forfeits already-accrued yield.) -/
 theorem req_configurable_vesting_period (s : State) (p : Nat) :
     ∃ s', step s (Op.setVestPeriod p) s.admin = some s' ∧ s'.vestPeriod = p :=
-  ⟨{ s with vestPeriod := p }, by simp [step], rfl⟩
+  ⟨{ s with
+      fullyVestedAmount := s.fullyVestedAmount + newlyVestedAmount s s.now
+      vestTotal := s.vestTotal - newlyVestedAmount s s.now
+      vestStart := s.now
+      vestPeriod := p },
+   by simp [step], rfl⟩
 
 /-- REQ deposit-emits-event: The deposit(assets, receiver) function MUST emit a Deposit event with parameters (sender, receiver, owner, assets, shares) upon successful execution. -/
 theorem req_deposit_emits_event (s s' : State) (amount : Nat) (caller : Address)
@@ -2805,23 +2905,57 @@ theorem req_redeem_liquidate_usdc (s : State) (amount : Nat) (caller : Address) 
   constructor <;> simp [emitEvent, burnApxUSD]
 
 /-- REQ yield-distributor-credit: The YieldDistributor MUST credit converted apxUSD
-proceeds to the apyUSD vault. (Model: only the yield distributor may credit; a credit adds
-the full converted amount to the vault's linear vest stream (`vestTotal`), which flows into
-the vault's apxUSD asset base `totalAssets` (= `vaultApxUSDBal` plus the vested portion):
-once the stream has fully vested, the vault's assets include the entire credited amount on
-top of its previous holdings.) -/
+proceeds to the apyUSD vault. (Model: only the yield distributor may credit; a credit
+first realizes whatever has already streamed out of the current vest clock into
+`fullyVestedAmount` (the remainder joins the freshly-restarted `vestTotal`/`vestStart`
+clock alongside the newly credited `amount` — cf. `req_credit_preserves_accrued_vest`),
+so `vestTotal` is NOT simply incremented by `amount`. What IS true unconditionally: once
+the (new) stream has fully vested, the vault's apxUSD asset base `totalAssets` has grown
+by exactly the credited amount over its own prior fully-vested baseline.) -/
 theorem req_yield_distributor_credit (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.creditYield amount) caller = some s') :
     caller = s.yieldDistributor ∧
-    s'.vestTotal = s.vestTotal + amount ∧
+    s'.vestTotal = (s.vestTotal - newlyVestedAmount s s.now) + amount ∧
     totalAssets { s' with now := s'.vestStart + s'.vestPeriod }
-      = s.vaultApxUSDBal + (s.vestTotal + amount) := by
+      = totalAssets { s with now := s.vestStart + s.vestPeriod } + amount := by
   simp only [step] at h_step
   split at h_step
   · rename_i hcaller
     cases Option.some.inj h_step
     refine ⟨by simpa using hcaller, rfl, ?_⟩
-    simp only [totalAssets, vestedAmount]
+    have hnv : newlyVestedAmount s s.now ≤ s.vestTotal := newlyVestedAmount_le_total s s.now
+    generalize hnvdef : newlyVestedAmount s s.now = nv at hnv ⊢
+    simp only [totalAssets, vestedAmount, newlyVestedAmount]
+    repeat' split
+    all_goals omega
+  · exact absurd h_step (by simp)
+
+/-- REQ credit-preserves-accrued-vest: Crediting new yield (`Op.creditYield`) MUST NOT
+forfeit yield that has already streamed out of the vest but has not yet been pulled into
+vault custody. This is the two-accumulator fix itself: the real `LinearVestV0` contract
+realizes the currently-streaming portion into a `fullyVestedAmount` accumulator BEFORE
+folding new yield into a freshly-restarted `vestTotal`/`vestStart` clock, precisely so that
+restarting the clock (which would otherwise reset the linear streaming computation back to
+"0% elapsed") never erases value that had already linearly vested. (Model: immediately
+after a credit — i.e. evaluated at the unchanged `now`, before any further time passes —
+the total reportable `vestedAmount` is exactly unchanged: the newly credited `amount`
+itself has correctly not yet started streaming (0% elapsed since the clock was just
+re-anchored at `now`), but nothing that had already vested under the old clock is lost.
+Requires `0 < vestPeriod`: with a degenerate zero-length vesting period every stream
+(old and new) is defined to be 100% vested instantaneously, so a freshly-credited
+`amount` would — correctly, not as a forfeiture — be counted immediately too; excluding
+that degenerate case isolates the forfeiture-avoidance property this requirement is about.
+Contrast with the old (buggy) model this replaces, where `creditYield` unconditionally
+reset `vestStart` without first realizing the elapsed portion, so any yield that had
+linearly vested but not yet been pulled was silently erased by the reset.) -/
+theorem req_credit_preserves_accrued_vest (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.creditYield amount) caller = some s')
+    (h_period : 0 < s.vestPeriod) :
+    vestedAmount s' s'.now = vestedAmount s s.now := by
+  simp only [step] at h_step
+  split at h_step
+  · cases Option.some.inj h_step
+    simp only [vestedAmount, newlyVestedAmount, Nat.sub_self, Nat.zero_mul, Nat.zero_div]
     repeat' split
     all_goals omega
   · exact absurd h_step (by simp)
@@ -3463,35 +3597,40 @@ theorem req_erc4626_compliance (s : State) :
 
 /-- REQ yield-distribution-period: The Onchain Vault MUST distribute received yield to
 apyUSD holders over a 20-day period. (Model: received yield is `Op.creditYield`, which
-adds the amount to the vault's linear vest stream and re-anchors the stream at the credit
-time; the distribution window is the configurable `vestPeriod` (cf.
+first realizes whatever has already streamed out of the current clock into
+`fullyVestedAmount` and then folds the new amount, alongside the previously-unvested
+remainder, into a freshly re-anchored stream (cf. `req_credit_preserves_accrued_vest`);
+the distribution window is the configurable `vestPeriod` (cf.
 `req_configurable_vesting_period`), which per this requirement the spec fixes at 20 days.
-Under that configuration — `vestPeriod = 20 * day` — a credit is distributed to holders
-over exactly a 20-day period: the stream (re)starts at the moment of the credit with
-nothing yet distributed, distributes monotonically as time passes, and completes —
-the full credited total having reached the asset pool backing apyUSD — exactly 20 days
-after the credit, neither as an upfront lump sum nor over any longer horizon.) -/
+Under that configuration — `vestPeriod = 20 * day` — the freshly re-anchored STREAM
+(`newlyVestedAmount`, i.e. the new `vestTotal`) is distributed to holders over exactly a
+20-day period: it (re)starts at the moment of the credit with nothing of the new stream
+yet distributed, distributes monotonically as time passes, and completes — the new
+stream's full total having reached the asset pool backing apyUSD — exactly 20 days after
+the credit, neither as an upfront lump sum nor over any longer horizon.) -/
 theorem req_yield_distribution_period (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.creditYield amount) caller = some s')
     (h_cfg : s.vestPeriod = 20 * day) :
     s'.vestPeriod = 20 * day ∧
     s'.vestStart = s.now ∧
-    s'.vestTotal = s.vestTotal + amount ∧
-    vestedAmount s' s'.vestStart = 0 ∧
-    vestedAmount s' (s'.vestStart + 20 * day) = s'.vestTotal ∧
-    (∀ n m, n ≤ m → vestedAmount s' n ≤ vestedAmount s' m) := by
+    s'.vestTotal = (s.vestTotal - newlyVestedAmount s s.now) + amount ∧
+    newlyVestedAmount s' s'.vestStart = 0 ∧
+    newlyVestedAmount s' (s'.vestStart + 20 * day) = s'.vestTotal ∧
+    (∀ n m, n ≤ m → newlyVestedAmount s' n ≤ newlyVestedAmount s' m) := by
   simp only [step] at h_step
   split at h_step
   · cases Option.some.inj h_step
     have hper : ({ s with
         usdcReserve := s.usdcReserve + amount
-        vestTotal := s.vestTotal + amount
+        fullyVestedAmount := s.fullyVestedAmount + newlyVestedAmount s s.now
+        vestTotal := (s.vestTotal - newlyVestedAmount s s.now) + amount
         vestStart := s.now } : State).vestPeriod = 20 * day := h_cfg
     have hpos : 0 < ({ s with
         usdcReserve := s.usdcReserve + amount
-        vestTotal := s.vestTotal + amount
+        fullyVestedAmount := s.fullyVestedAmount + newlyVestedAmount s s.now
+        vestTotal := (s.vestTotal - newlyVestedAmount s s.now) + amount
         vestStart := s.now } : State).vestPeriod := by rw [hper]; decide
-    obtain ⟨hz, hfull, hmono⟩ := req_continuous_stream _ hpos
+    obtain ⟨hz, hfull, hmono, _⟩ := req_continuous_stream _ hpos
     exact ⟨hper, rfl, rfl, hz, by rw [← h_cfg]; exact hfull, hmono⟩
   · exact absurd h_step (by simp)
 
