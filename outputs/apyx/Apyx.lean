@@ -2075,18 +2075,52 @@ portion of the vest, `newlyVestedAmount` — the release of `vestTotal` since th
 `vestedAmount` is that streaming portion plus whatever was already realized into
 `fullyVestedAmount` by an earlier credit/reconfiguration/pull, mirroring `LinearVestV0`'s
 two-accumulator design — cf. `req_credit_preserves_accrued_vest`.) -/
-theorem req_linear_vest_implementation (s : State) (now : Nat) :
-    (newlyVestedAmount s now = if now < s.vestStart then 0 else
-      let elapsed := now - s.vestStart
-      if elapsed ≥ s.vestPeriod then s.vestTotal
-      else (elapsed * s.vestTotal) / s.vestPeriod) ∧
-    vestedAmount s now = s.fullyVestedAmount + newlyVestedAmount s now :=
-  ⟨rfl, rfl⟩
+theorem req_linear_vest_implementation (s : State) :
+    -- (1) nothing has streamed before the vest clock's anchor
+    (∀ now, now < s.vestStart → newlyVestedAmount s now = 0) ∧
+    -- (2) the streamed amount only ever grows with time — a stream never claws back
+    (∀ n m, n ≤ m → newlyVestedAmount s n ≤ newlyVestedAmount s m) ∧
+    -- (3) it never streams out more than the pool being vested
+    (∀ now, newlyVestedAmount s now ≤ s.vestTotal) ∧
+    -- (4) once a full period has elapsed the entire pool has streamed (100% vested)
+    (∀ now, s.vestStart + s.vestPeriod ≤ now → newlyVestedAmount s now = s.vestTotal) ∧
+    -- (5) the total reportable vested amount is the realized accumulator plus the
+    --     currently-streaming portion (two-accumulator LinearVestV0 model)
+    (∀ now, vestedAmount s now = s.fullyVestedAmount + newlyVestedAmount s now) := by
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · intro now h
+    unfold newlyVestedAmount
+    rw [if_pos h]
+  · intro n m h
+    exact newlyVestedAmount_mono s h
+  · intro now
+    exact newlyVestedAmount_le_total s now
+  · intro now h
+    have h1 : ¬ now < s.vestStart := by omega
+    have h2 : s.vestPeriod ≤ now - s.vestStart := by omega
+    simp [newlyVestedAmount, h1, h2]
+  · intro now
+    rfl
 
-/-- REQ yield-rate-dollar-terms: The yield rate MUST be expressed in dollar terms for the month. -/
-theorem req_yield_rate_dollar_terms (s : State) :
-    ∃ (dollarAmount : Nat), s.yieldRateMonth = dollarAmount :=
-  ⟨s.yieldRateMonth, rfl⟩
+/-- REQ yield-rate-dollar-terms: The yield rate MUST be expressed in dollar terms for the month.
+(Model: the monthly yield rate is not a free-floating percentage — a successful `Op.setYieldRate`
+pins `yieldRateMonth` to a figure that is (b) bounded above by `collateralYieldBase`, the dollar
+surplus the collateral basket actually generated (`overcollateralizationBuffer`, a dollar amount),
+and (c) simultaneously refreshes that dollar basis to the *current* collateral surplus, which
+becomes the ceiling for the following month. So the rate is denominated in, and capped by, real
+dollar collateral yield rather than an abstract rate.) -/
+theorem req_yield_rate_dollar_terms (s : State) (bps : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.setYieldRate bps) caller = some s') :
+    s'.yieldRateMonth = bps ∧
+    s'.yieldRateMonth ≤ s.collateralYieldBase ∧
+    s'.collateralYieldBase = overcollateralizationBuffer s := by
+  simp only [step] at h_step
+  split at h_step
+  · rename_i hcond
+    obtain ⟨_, _, hbound⟩ := hcond
+    cases Option.some.inj h_step
+    exact ⟨rfl, hbound, rfl⟩
+  · exact absurd h_step (by simp)
 
 /-- REQ redemption_value_uniform: The system MUST apply the same Redemption Value to all participants regardless of market conditions. -/
 theorem req_redemption_value_uniform (s : State) (a b : Address) (amount : Nat) (sa sb : State)
@@ -2869,20 +2903,18 @@ theorem req_configurable_vesting_period (s : State) (p : Nat) :
 /-- REQ deposit-emits-event: The deposit(assets, receiver) function MUST emit a Deposit event with parameters (sender, receiver, owner, assets, shares) upon successful execution. -/
 theorem req_deposit_emits_event (s s' : State) (amount : Nat) (caller : Address)
     (h_step : step s (Op.depositUSDC amount) caller = some s') :
-    ∃ sender receiver owner assets shares : Nat,
-      ("Deposit", [sender, receiver, owner, assets, shares]) ∈ s'.eventLog := by
+    ("Deposit", [caller, caller, caller, amount, amount]) ∈ s'.eventLog := by
   obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
   subst hs'
-  exact ⟨caller, caller, caller, amount, amount, by simp [emitEvent]⟩
+  simp [emitEvent]
 
-/-- REQ mint-emits-event: The mint(shares, receiver) function MUST emit a Deposit event with parameters (sender, receiver, owner, assets, shares) upon successful execution. -/
+/-- REQ mint-emits-event: The mint(shares, receiver) function MUST emit a Deposit event with parameters (sender, receiver, owner, assets, shares) upon successful execution. (The exact tuple is pinned: sender = the minting `caller`, receiver = owner = `to`, and assets = shares = `amount`.) -/
 theorem req_mint_emits_event (s s' : State) (to : Address) (amount : Nat) (caller : Address)
     (h_step : step s (Op.mintApxUSD to amount) caller = some s') :
-    ∃ sender receiver owner assets shares : Nat,
-      ("Deposit", [sender, receiver, owner, assets, shares]) ∈ s'.eventLog := by
+    ("Deposit", [caller, to, to, amount, amount]) ∈ s'.eventLog := by
   obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
   subst hs'
-  exact ⟨caller, to, to, amount, amount, by simp [emitEvent]⟩
+  simp [emitEvent]
 
 -- BROKEN: /-- REQ unlock-conversion-after-cooldown: Conversion of apxUSD_unlock to apxUSD MUST only be possible after the cooldown period has elapsed. -/
 -- BROKEN: theorem req_unlock_conversion_after_cooldown (s : State) (requestId : Nat) (caller : Address)
