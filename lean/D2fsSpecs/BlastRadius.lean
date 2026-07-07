@@ -1791,4 +1791,223 @@ theorem apxUSD_credit_is_backed (s : State) (op : Op) (caller : Address) (s' : S
         | (cases Option.some.inj h_step; exact absurd h_inc (Nat.lt_irrefl _))
         | exact absurd h_step (by simp)
 
+/-! ## T7 `rate_limit_linear_bound` — a per-epoch outflow cap makes damage linear in time
+
+**DESIGN theorem** (docs/05-blast-radius.md, Tier 3): this section models the
+defence mechanism itself — an ERC-7265-style circuit breaker that caps the USDC
+reserve outflow charged per epoch — and proves what it would guarantee. The base
+Apyx model has **no** such limiter (per the memo, and per T6's
+`redeem_payout_has_no_cap` a single corrupted-price redemption can drain the whole
+reserve), so this is a statement about the *value of adopting the mechanism*, not a
+property of the current protocol.
+
+The wrapper adds no field to `State`: a new structure `RLState` layers an epoch
+counter, a per-epoch spent meter, and a fixed cap over the untouched base state, and
+`step2` runs the unmodified base `step` behind an outflow gate. By
+`reserve_outflow_only_via_redemption`, the only base transitions the gate ever
+charges are the two redemption paths (`step2_charge_only_for_redemption` below) —
+everything else passes through unmetered because it cannot decrease the reserve.
+
+Headline: across an arbitrary `execTrace2` run containing `k` `advanceEpoch` clock
+actions, the net reserve outflow is `≤ cap * (k + 1)` — **damage is at most linear
+in elapsed epochs**, no matter how an attacker holding every key sequences
+operations inside each epoch. -/
+
+/-- Rate-limited wrapper state: the untouched base `State` plus an epoch counter, the
+reserve outflow already charged in the current epoch, and the fixed per-epoch outflow
+cap (a policy parameter; `step2` never changes it). -/
+structure RLState where
+  base : State
+  epoch : Nat
+  spentThisEpoch : Nat
+  cap : Nat
+
+/-- Operations of the rate-limited wrapper: any base operation (with its caller), or
+the distinguished `advanceEpoch` clock action that opens a fresh epoch budget. -/
+inductive RLOp
+  | base (op : Op) (caller : Address)
+  | advanceEpoch
+
+/-- Rate-limited step. A base operation first runs the unmodified base `step`; its
+reserve outflow `d := usdcReserve - usdcReserve'` (0 when the reserve did not
+decrease — `Nat` truncation) is charged against the epoch budget, and the whole
+operation **reverts** (`none`) if the charge would exceed the cap. `advanceEpoch`
+resets the meter and increments the epoch counter. -/
+def step2 (rs : RLState) : RLOp → Option RLState
+  | RLOp.base op caller =>
+    match step rs.base op caller with
+    | none => none
+    | some s' =>
+      if rs.cap < rs.spentThisEpoch + (rs.base.usdcReserve - s'.usdcReserve) then none
+      else some { rs with
+        base := s'
+        spentThisEpoch := rs.spentThisEpoch + (rs.base.usdcReserve - s'.usdcReserve) }
+  | RLOp.advanceEpoch =>
+    some { rs with epoch := rs.epoch + 1, spentThisEpoch := 0 }
+
+/-- Trace executor for the rate-limited wrapper (revert-skip semantics, like
+`execTrace`). -/
+def execTrace2 (rs : RLState) : List RLOp → RLState
+  | [] => rs
+  | o :: τ =>
+    match step2 rs o with
+    | some rs' => execTrace2 rs' τ
+    | none => execTrace2 rs τ
+
+/-- Number of `advanceEpoch` clock actions in a wrapper trace — the number of epoch
+boundaries the trace crosses. -/
+def countEpochs : List RLOp → Nat
+  | [] => 0
+  | RLOp.advanceEpoch :: τ => countEpochs τ + 1
+  | RLOp.base _ _ :: τ => countEpochs τ
+
+private theorem execTrace2_cons_some (rs rs' : RLState) (o : RLOp) (τ : List RLOp)
+    (h : step2 rs o = some rs') : execTrace2 rs (o :: τ) = execTrace2 rs' τ := by
+  simp [execTrace2, h]
+
+private theorem execTrace2_cons_none (rs : RLState) (o : RLOp) (τ : List RLOp)
+    (h : step2 rs o = none) : execTrace2 rs (o :: τ) = execTrace2 rs τ := by
+  simp [execTrace2, h]
+
+/-- Inversion for a successful rate-limited base step: the base `step` succeeded, the
+charged budget respects the cap, and the successor is exactly the base successor with
+the meter advanced by the outflow. -/
+private theorem inv_step2_base (rs : RLState) (op : Op) (caller : Address) (rs' : RLState)
+    (h : step2 rs (RLOp.base op caller) = some rs') :
+    ∃ s', step rs.base op caller = some s' ∧
+      rs.spentThisEpoch + (rs.base.usdcReserve - s'.usdcReserve) ≤ rs.cap ∧
+      rs' = { rs with
+        base := s'
+        spentThisEpoch := rs.spentThisEpoch + (rs.base.usdcReserve - s'.usdcReserve) } := by
+  simp only [step2] at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i s' hs
+    split at h
+    · exact absurd h (by simp)
+    · rename_i hgate
+      exact ⟨s', hs, by omega, (Option.some.inj h).symm⟩
+
+/-- The gate hook, made explicit via `reserve_outflow_only_via_redemption`: the only
+accepted base operations that consume epoch budget (strictly increase the meter) are
+the two redemption paths — `redeemApxUSD` by the payee itself or
+`executeRFQRedemption` by an approved counterparty — and in either case the payee is
+compensated at the recorded `redemptionValue` in the same step. Every other base
+operation passes through the rate limiter unmetered. -/
+theorem step2_charge_only_for_redemption (rs : RLState) (op : Op) (caller : Address)
+    (rs' : RLState) (h : step2 rs (RLOp.base op caller) = some rs')
+    (h_pos : rs.spentThisEpoch < rs'.spentThisEpoch) :
+    ∃ user amount,
+      ((op = Op.redeemApxUSD amount ∧ user = caller) ∨
+        op = Op.executeRFQRedemption user amount) ∧
+      amount ≤ rs.base.apxUSDBal user ∧
+      rs'.base.apxUSDBal user = rs.base.apxUSDBal user - amount ∧
+      rs'.base.usdcBal user
+        = rs.base.usdcBal user + amount * rs.base.redemptionValue / ray := by
+  obtain ⟨s', hs, hgate, rfl⟩ := inv_step2_base rs op caller rs' h
+  dsimp only at h_pos ⊢
+  have hdec : s'.usdcReserve < rs.base.usdcReserve := by omega
+  obtain ⟨user, amount, hop, hbal, hapx, husdc, -, -⟩ :=
+    reserve_outflow_only_via_redemption rs.base op caller s' hs hdec
+  exact ⟨user, amount, hop, hbal, hapx, husdc⟩
+
+/-- The rate limiter's local invariant is self-establishing: after any accepted
+`step2` — with no assumption on the pre-state — `spentThisEpoch ≤ cap` holds (base
+ops by the gate, `advanceEpoch` by the reset). -/
+theorem step2_spent_le_cap (rs : RLState) (o : RLOp) (rs' : RLState)
+    (h : step2 rs o = some rs') :
+    rs'.spentThisEpoch ≤ rs'.cap := by
+  cases o with
+  | base op caller =>
+    obtain ⟨s', -, hgate, rfl⟩ := inv_step2_base rs op caller rs' h
+    exact hgate
+  | advanceEpoch =>
+    cases Option.some.inj h
+    exact Nat.zero_le _
+
+/-- Strengthened induction invariant for T7: with `spentThisEpoch ≤ cap` at the start,
+the final reserve is below the initial one by at most the remaining budget of the
+current epoch plus one full cap per epoch boundary crossed. -/
+theorem execTrace2_reserve_lower_bound (rs : RLState) (τ : List RLOp)
+    (h : rs.spentThisEpoch ≤ rs.cap) :
+    rs.base.usdcReserve
+      ≤ (execTrace2 rs τ).base.usdcReserve
+        + (rs.cap - rs.spentThisEpoch) + rs.cap * countEpochs τ := by
+  induction τ generalizing rs with
+  | nil =>
+    simp only [execTrace2, countEpochs, Nat.mul_zero, Nat.add_zero]
+    omega
+  | cons o τ ih =>
+    cases o with
+    | base op caller =>
+      have hcount : countEpochs (RLOp.base op caller :: τ) = countEpochs τ := rfl
+      rw [hcount]
+      cases h2 : step2 rs (RLOp.base op caller) with
+      | none =>
+        rw [execTrace2_cons_none rs _ τ h2]
+        exact ih rs h
+      | some rs' =>
+        rw [execTrace2_cons_some rs rs' _ τ h2]
+        obtain ⟨s', -, hgate, rfl⟩ := inv_step2_base rs op caller rs' h2
+        have hrec := ih { rs with
+          base := s'
+          spentThisEpoch := rs.spentThisEpoch + (rs.base.usdcReserve - s'.usdcReserve) } hgate
+        dsimp only at hrec ⊢
+        revert hrec
+        generalize rs.cap * countEpochs τ = K
+        intro hrec
+        omega
+    | advanceEpoch =>
+      have hcount : countEpochs (RLOp.advanceEpoch :: τ) = countEpochs τ + 1 := rfl
+      rw [hcount]
+      rw [execTrace2_cons_some rs { rs with epoch := rs.epoch + 1, spentThisEpoch := 0 }
+        RLOp.advanceEpoch τ rfl]
+      have hrec := ih { rs with epoch := rs.epoch + 1, spentThisEpoch := 0 } (Nat.zero_le _)
+      dsimp only at hrec
+      rw [Nat.mul_add, Nat.mul_one]
+      revert hrec
+      generalize rs.cap * countEpochs τ = K
+      intro hrec
+      omega
+
+/-- T7 `rate_limit_linear_bound` (docs/05-blast-radius.md, Tier 3) — **the rate
+limiter provably caps cumulative loss linearly in elapsed time**.
+
+Threat model: the attacker holds **every** key and submits an arbitrary wrapper
+trace `τ` — any base operations with any callers, interleaved with `advanceEpoch`
+clock actions in any pattern (the clock is not attacker-favourable: more epochs only
+means more elapsed time). The only assumption is the limiter's own invariant at the
+start, `spentThisEpoch ≤ cap` (true of any freshly initialized wrapper, e.g.
+`spentThisEpoch = 0`; it is self-maintaining, `step2_spent_le_cap`).
+
+Claim: the net USDC reserve outflow over the whole run is at most
+`cap * (countEpochs τ + 1)` — one budget for the current epoch plus one per epoch
+boundary crossed, i.e. the memo's `userLoss(t) ≤ cap × ⌈t/epoch⌉`. Within any single
+epoch the attacker can sequence redemptions however they like (including at an
+admin-corrupted `redemptionValue`, cf. T6); the gate reverts anything past the cap,
+so damage accumulates at most linearly with time — buying detection/response time,
+which is exactly the design value of an ERC-7265-style circuit breaker.
+
+DESIGN theorem: the base Apyx model contains no such limiter, and T6
+(`redeem_payout_has_no_cap`) shows its unlimited counterpart; this theorem proves
+what adding the limiter would buy. -/
+theorem rate_limit_linear_bound (rs : RLState) (τ : List RLOp)
+    (h : rs.spentThisEpoch ≤ rs.cap) :
+    rs.base.usdcReserve - (execTrace2 rs τ).base.usdcReserve
+      ≤ rs.cap * (countEpochs τ + 1) := by
+  have hrec := execTrace2_reserve_lower_bound rs τ h
+  rw [Nat.mul_add, Nat.mul_one]
+  revert hrec
+  generalize rs.cap * countEpochs τ = K
+  intro hrec
+  omega
+
+/-- T7, fresh-wrapper corollary: starting the rate limiter with an empty meter over
+any base state, the reserve outflow of any attack trace is at most
+`cap * (epochs crossed + 1)`. -/
+theorem rate_limit_linear_bound_fresh (base0 : State) (cap : Nat) (τ : List RLOp) :
+    base0.usdcReserve - (execTrace2 ⟨base0, 0, 0, cap⟩ τ).base.usdcReserve
+      ≤ cap * (countEpochs τ + 1) :=
+  rate_limit_linear_bound ⟨base0, 0, 0, cap⟩ τ (Nat.zero_le _)
+
 end Apyx
