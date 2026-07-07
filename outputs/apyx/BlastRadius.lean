@@ -131,6 +131,36 @@ def AdminOp (op : Op) : Prop :=
     (pullVestedYield s).flexibleUnlockRequests = s.flexibleUnlockRequests := by
   unfold pullVestedYield; dsimp only; split <;> rfl
 
+/-! ## Local lemma for `newlyVestedAmount`
+
+(Re-derived: the equivalent in `Apyx.lean`, `newlyVestedAmount_le_total`, is
+`private`.) Needed to show that `creditYield`/`setVestPeriod`'s accrue-first step
+(`vestTotal := (s.vestTotal - newlyVestedAmount s s.now) + amount`, resp.
+`s.vestTotal - newlyVestedAmount s s.now`) never truncates: the streamed-out
+portion being folded into `fullyVestedAmount` never exceeds the pool it is drawn
+from, so the `Nat`-subtraction is exact and the accrued value is conserved, not
+lost. -/
+
+/-- `e * T / P ≤ T` whenever `e ≤ P` (with the `P = 0` case handled separately,
+since then the division is `0 / 0 = 0`). -/
+private theorem div_mul_le_total {e P T : Nat} (h : e ≤ P) : e * T / P ≤ T := by
+  rcases Nat.eq_zero_or_pos P with hp | hp
+  · subst hp
+    simp [Nat.le_zero.mp h]
+  · calc e * T / P ≤ P * T / P := Nat.div_le_div_right (Nat.mul_le_mul_right _ h)
+      _ = T := Nat.mul_div_cancel_left _ hp
+
+/-- `newlyVestedAmount` never exceeds the total of the currently-streaming vest
+pool it is drawn from. -/
+private theorem newlyVestedAmount_le_vestTotal (s : State) (n : Nat) :
+    newlyVestedAmount s n ≤ s.vestTotal := by
+  unfold newlyVestedAmount
+  dsimp only
+  repeat' split
+  · exact Nat.zero_le _
+  · exact Nat.le_refl _
+  · exact div_mul_le_total (by omega)
+
 /-! ## Local step-inversion lemmas
 
 (Re-derived: the equivalents in `Apyx.lean` are `private`.) Each characterizes the
@@ -425,23 +455,35 @@ theorem pauser_trace_blast_radius (s : State) (σ : List (Op × Address))
 /-! ## T2: `yield_distributor_cannot_extract`
 
 Full compromise of the `yieldDistributor` key cannot extract assets: the only
-operation the role authorizes is `creditYield`, which strictly *adds* funds
-(`usdcReserve` and `vestTotal` both increase by the credited amount) and resets the
-vesting clock. No user balance, supply, or unlock position is reachable.
+operation the role authorizes is `creditYield`. `creditYield` is accrue-first (cf.
+`Apyx.lean`'s `req_credit_preserves_accrued_vest`): it first realizes whatever has
+already linearly streamed out of the current vest clock into `fullyVestedAmount`,
+*then* folds the remainder alongside the newly credited `amount` into a
+freshly-restarted `vestTotal`/`vestStart` clock. Because of this, `vestTotal` alone
+is **not** monotone — a credit can shrink `vestTotal` (when the already-streamed
+portion `newlyVestedAmount` exceeds `amount`) — but no value is ever lost: exactly
+that streamed portion moves into `fullyVestedAmount` instead, so the combined pool
+`fullyVestedAmount + vestTotal` always grows by exactly the credited `amount`.
+`usdcReserve` increases unconditionally. No user balance, supply, or unlock
+position is reachable.
 
 Liveness caveat (documented, not a safety violation): because `creditYield` resets
 `vestStart := now`, a compromised distributor can repeatedly credit `0` to postpone
-the vesting of already-credited yield indefinitely. The vest pool itself
-(`vestTotal`) and the reserve never decrease, so no asset is lost. -/
+the vesting of already-accrued yield indefinitely. The combined pool
+(`fullyVestedAmount + vestTotal`) and the reserve never decrease, so no asset is
+lost. -/
 
 /-- Exact effect of `creditYield`: it demands the yieldDistributor role, adds the
-amount to both the USDC reserve and the vest pool, resets the vesting clock, and
-touches nothing else. -/
+amount to the USDC reserve, realizes the currently-streamed portion of the vest
+into `fullyVestedAmount`, folds the remainder plus the new amount into a
+freshly-restarted `vestTotal`, resets the vesting clock, and touches nothing
+else. -/
 theorem step_creditYield_exact (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.creditYield amount) caller = some s') :
     caller = s.yieldDistributor ∧
     s' = { s with usdcReserve := s.usdcReserve + amount
-                  vestTotal := s.vestTotal + amount
+                  fullyVestedAmount := s.fullyVestedAmount + newlyVestedAmount s s.now
+                  vestTotal := (s.vestTotal - newlyVestedAmount s s.now) + amount
                   vestStart := s.now } := by
   simp only [step] at h
   split at h
@@ -451,34 +493,48 @@ theorem step_creditYield_exact (s : State) (amount : Nat) (caller : Address) (s'
 
 /-- T2 (single step, frame form): a distributor-gated operation demands the
 yieldDistributor role, agrees with the pre-state on every field other than
-`usdcReserve`/`vestTotal`/`vestStart`, and the two asset-bearing fields among those
-can only **increase** — the role can pay in, never extract. (The exact per-field
-effect, including the precise `+ amount` increments, is `step_creditYield_exact`
+`usdcReserve`/`vestTotal`/`vestStart`/`fullyVestedAmount`, the reserve can only
+**increase**, and the combined vest pool `fullyVestedAmount + vestTotal` can only
+**increase** — the role can pay in, never extract. (`vestTotal` alone is NOT
+monotone in general — the accrue-first step can shrink it while growing
+`fullyVestedAmount` by the same amount; see the section note above. The exact
+per-field effect, including the precise increments, is `step_creditYield_exact`
 above.) -/
 theorem yield_distributor_frame (s : State) (op : Op) (caller : Address) (s' : State)
     (h_gated : DistributorOp op) (h_step : step s op caller = some s') :
     caller = s.yieldDistributor ∧
-    (∀ r v w, { s' with usdcReserve := r, vestTotal := v, vestStart := w }
-            = { s with usdcReserve := r, vestTotal := v, vestStart := w }) ∧
+    (∀ r v w f, { s' with usdcReserve := r, vestTotal := v, vestStart := w,
+                          fullyVestedAmount := f }
+            = { s with usdcReserve := r, vestTotal := v, vestStart := w,
+                       fullyVestedAmount := f }) ∧
     s.usdcReserve ≤ s'.usdcReserve ∧
-    s.vestTotal ≤ s'.vestTotal := by
+    s.fullyVestedAmount + s.vestTotal ≤ s'.fullyVestedAmount + s'.vestTotal := by
   obtain ⟨amount, rfl⟩ := h_gated
   obtain ⟨hc, rfl⟩ := step_creditYield_exact s amount caller s' h_step
-  exact ⟨hc, fun _ _ _ => rfl, Nat.le_add_right _ _, Nat.le_add_right _ _⟩
+  refine ⟨hc, fun _ _ _ _ => rfl, Nat.le_add_right _ _, ?_⟩
+  have hnv := newlyVestedAmount_le_vestTotal s s.now
+  dsimp only
+  omega
 
 /-- T2 (trace form): an arbitrarily long attack trace consisting solely of
 distributor-gated operations leaves every field except
-`usdcReserve`/`vestTotal`/`vestStart` unchanged, and the reserve and vest pool
-never decrease. A yieldDistributor compromise cannot remove a single unit of
-value from the system. -/
+`usdcReserve`/`vestTotal`/`vestStart`/`fullyVestedAmount` unchanged, the reserve
+never decreases, and the combined vest pool `fullyVestedAmount + vestTotal` never
+decreases. A yieldDistributor compromise cannot remove a single unit of value from
+the system (it can only reshuffle it between the "already streamed" and "still
+streaming" accumulators, and postpone when the still-streaming portion is
+released). -/
 theorem yield_distributor_trace_blast_radius (s : State) (σ : List (Op × Address))
     (h_gated : ∀ p ∈ σ, DistributorOp p.1) :
-    (∀ r v w, { execTrace s σ with usdcReserve := r, vestTotal := v, vestStart := w }
-            = { s with usdcReserve := r, vestTotal := v, vestStart := w }) ∧
+    (∀ r v w f, { execTrace s σ with usdcReserve := r, vestTotal := v, vestStart := w,
+                                     fullyVestedAmount := f }
+            = { s with usdcReserve := r, vestTotal := v, vestStart := w,
+                       fullyVestedAmount := f }) ∧
     s.usdcReserve ≤ (execTrace s σ).usdcReserve ∧
-    s.vestTotal ≤ (execTrace s σ).vestTotal := by
+    s.fullyVestedAmount + s.vestTotal
+      ≤ (execTrace s σ).fullyVestedAmount + (execTrace s σ).vestTotal := by
   induction σ generalizing s with
-  | nil => exact ⟨fun _ _ _ => rfl, Nat.le_refl _, Nat.le_refl _⟩
+  | nil => exact ⟨fun _ _ _ _ => rfl, Nat.le_refl _, Nat.le_refl _⟩
   | cons p σ ih =>
     obtain ⟨op, c⟩ := p
     have h_tail : ∀ q ∈ σ, DistributorOp q.1 :=
@@ -490,10 +546,13 @@ theorem yield_distributor_trace_blast_radius (s : State) (σ : List (Op × Addre
       obtain ⟨-, hframe, hres, hvest⟩ :=
         yield_distributor_frame s op c s1 (h_gated (op, c) List.mem_cons_self) hstep
       obtain ⟨ihframe, ihres, ihvest⟩ := ih s1 h_tail
-      refine ⟨fun r v w => ?_, Nat.le_trans hres ihres, Nat.le_trans hvest ihvest⟩
-      calc { execTrace s1 σ with usdcReserve := r, vestTotal := v, vestStart := w }
-          = { s1 with usdcReserve := r, vestTotal := v, vestStart := w } := ihframe r v w
-        _ = { s with usdcReserve := r, vestTotal := v, vestStart := w } := hframe r v w
+      refine ⟨fun r v w f => ?_, Nat.le_trans hres ihres, Nat.le_trans hvest ihvest⟩
+      calc { execTrace s1 σ with usdcReserve := r, vestTotal := v, vestStart := w,
+                                 fullyVestedAmount := f }
+          = { s1 with usdcReserve := r, vestTotal := v, vestStart := w,
+                      fullyVestedAmount := f } := ihframe r v w f
+        _ = { s with usdcReserve := r, vestTotal := v, vestStart := w,
+                     fullyVestedAmount := f } := hframe r v w f
 
 /-! ## T3: `admin_cannot_touch_balances`, frame and trace forms
 
@@ -597,10 +656,19 @@ theorem step_catastrophicBackstop_exact (s : State) (caller : Address) (s' : Sta
     exact ⟨by simpa using hc, (Option.some.inj h).symm⟩
   · exact absurd h (by simp)
 
-/-- Exact effect of `setVestPeriod`. -/
+/-- Exact effect of `setVestPeriod`: it demands the admin role and, like
+`creditYield`, is accrue-first — it realizes the currently-streamed portion of
+the vest into `fullyVestedAmount` before reconfiguring the period, so
+reconfiguring never forfeits already-streamed yield (cf. `Apyx.lean`'s
+`req_configurable_vesting_period`). -/
 theorem step_setVestPeriod_exact (s : State) (p : Nat) (caller : Address) (s' : State)
     (h : step s (Op.setVestPeriod p) caller = some s') :
-    caller = s.admin ∧ s' = { s with vestPeriod := p } := by
+    caller = s.admin ∧
+    s' = { s with
+             fullyVestedAmount := s.fullyVestedAmount + newlyVestedAmount s s.now
+             vestTotal := s.vestTotal - newlyVestedAmount s s.now
+             vestStart := s.now
+             vestPeriod := p } := by
   simp only [step] at h
   split at h
   · rename_i hc
@@ -611,39 +679,43 @@ theorem step_setVestPeriod_exact (s : State) (p : Nat) (caller : Address) (s' : 
 and agrees with the pre-state on **every** field other than the nine
 admin-parameter fields (`whitelist`, `denylist`, `yieldRateMonth`,
 `lastRateSetTime`, `collateralYieldBase`, `totalCollateralValue`,
-`redemptionValue`, `emergencyFlag`, `vestPeriod`). In particular no balance,
-supply, reserve, vest-pool, or unlock-registry field is reachable from the admin
-role. -/
+`redemptionValue`, `emergencyFlag`, `vestPeriod`) plus the three vest-clock
+accumulator fields `setVestPeriod` also touches (`vestStart`, `vestTotal`,
+`fullyVestedAmount` — accrue-first, same pattern as `creditYield`; see
+`step_setVestPeriod_exact`). In particular no balance, supply, reserve, or
+unlock-registry field is reachable from the admin role. -/
 theorem admin_frame (s : State) (op : Op) (caller : Address) (s' : State)
     (h_gated : AdminOp op) (h_step : step s op caller = some s') :
     caller = s.admin ∧
-    ∀ wl dl yr lt cy tcv rv ef vp,
+    ∀ wl dl yr lt cy tcv rv ef vp vs vt fv,
       { s' with whitelist := wl, denylist := dl, yieldRateMonth := yr,
                 lastRateSetTime := lt, collateralYieldBase := cy,
                 totalCollateralValue := tcv, redemptionValue := rv,
-                emergencyFlag := ef, vestPeriod := vp }
+                emergencyFlag := ef, vestPeriod := vp,
+                vestStart := vs, vestTotal := vt, fullyVestedAmount := fv }
     = { s with whitelist := wl, denylist := dl, yieldRateMonth := yr,
                lastRateSetTime := lt, collateralYieldBase := cy,
                totalCollateralValue := tcv, redemptionValue := rv,
-               emergencyFlag := ef, vestPeriod := vp } := by
+               emergencyFlag := ef, vestPeriod := vp,
+               vestStart := vs, vestTotal := vt, fullyVestedAmount := fv } := by
   obtain ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨bps, rfl⟩ | ⟨amt, rfl⟩ | rfl | ⟨p, rfl⟩ :=
     h_gated
   · obtain ⟨hc, rfl⟩ := step_addToWhitelist_exact s a caller s' h_step
-    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ _ _ _ => rfl⟩
   · obtain ⟨hc, rfl⟩ := step_removeFromWhitelist_exact s a caller s' h_step
-    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ _ _ _ => rfl⟩
   · obtain ⟨hc, rfl⟩ := step_addToDenylist_exact s a caller s' h_step
-    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ _ _ _ => rfl⟩
   · obtain ⟨hc, rfl⟩ := step_removeFromDenylist_exact s a caller s' h_step
-    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ _ _ _ => rfl⟩
   · obtain ⟨hc, -, -, rfl⟩ := step_setYieldRate_exact s bps caller s' h_step
-    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ _ _ _ => rfl⟩
   · obtain ⟨hc, rfl⟩ := step_handleStressEvent_exact s amt caller s' h_step
-    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ _ _ _ => rfl⟩
   · obtain ⟨hc, rfl⟩ := step_catastrophicBackstop_exact s caller s' h_step
-    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ _ _ _ => rfl⟩
   · obtain ⟨hc, rfl⟩ := step_setVestPeriod_exact s p caller s' h_step
-    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
+    exact ⟨hc, fun _ _ _ _ _ _ _ _ _ _ _ _ => rfl⟩
 
 /-- T3 `admin_cannot_touch_balances` (docs/05-blast-radius.md, Tier 1) — the
 single-step balance-field form.
@@ -686,47 +758,53 @@ theorem admin_cannot_touch_balances (s : State) (op : Op) (caller : Address) (s'
 
 /-- T3 (trace form): an arbitrarily long attack trace consisting solely of
 admin-gated operations leaves every field outside the nine admin-parameter fields
-unchanged. A compromised admin key can rewrite access lists and pricing/schedule
-parameters at will — with the deferred consequences listed in the section header —
-but cannot move a single unit of any recorded balance, supply, reserve, or unlock
-position. -/
+and the three vest-clock accumulator fields unchanged. A compromised admin key can
+rewrite access lists and pricing/schedule parameters (and the vest clock's
+internal bookkeeping via `setVestPeriod`) at will — with the deferred
+consequences listed in the section header — but cannot move a single unit of any
+recorded balance, supply, reserve, or unlock position. -/
 theorem admin_trace_blast_radius (s : State) (σ : List (Op × Address))
     (h_gated : ∀ p ∈ σ, AdminOp p.1) :
-    ∀ wl dl yr lt cy tcv rv ef vp,
+    ∀ wl dl yr lt cy tcv rv ef vp vs vt fv,
       { execTrace s σ with whitelist := wl, denylist := dl, yieldRateMonth := yr,
                            lastRateSetTime := lt, collateralYieldBase := cy,
                            totalCollateralValue := tcv, redemptionValue := rv,
-                           emergencyFlag := ef, vestPeriod := vp }
+                           emergencyFlag := ef, vestPeriod := vp,
+                           vestStart := vs, vestTotal := vt, fullyVestedAmount := fv }
     = { s with whitelist := wl, denylist := dl, yieldRateMonth := yr,
                lastRateSetTime := lt, collateralYieldBase := cy,
                totalCollateralValue := tcv, redemptionValue := rv,
-               emergencyFlag := ef, vestPeriod := vp } := by
+               emergencyFlag := ef, vestPeriod := vp,
+               vestStart := vs, vestTotal := vt, fullyVestedAmount := fv } := by
   induction σ generalizing s with
-  | nil => intro _ _ _ _ _ _ _ _ _; rfl
+  | nil => intro _ _ _ _ _ _ _ _ _ _ _ _; rfl
   | cons p σ ih =>
     obtain ⟨op, c⟩ := p
-    intro wl dl yr lt cy tcv rv ef vp
+    intro wl dl yr lt cy tcv rv ef vp vs vt fv
     have h_tail : ∀ q ∈ σ, AdminOp q.1 := fun q hq => h_gated q (List.mem_cons_of_mem _ hq)
     simp only [execTrace]
     cases hstep : step s op c with
-    | none => exact ih s h_tail wl dl yr lt cy tcv rv ef vp
+    | none => exact ih s h_tail wl dl yr lt cy tcv rv ef vp vs vt fv
     | some s1 =>
       obtain ⟨-, hframe⟩ :=
         admin_frame s op c s1 (h_gated (op, c) List.mem_cons_self) hstep
       calc { execTrace s1 σ with whitelist := wl, denylist := dl, yieldRateMonth := yr,
                                  lastRateSetTime := lt, collateralYieldBase := cy,
                                  totalCollateralValue := tcv, redemptionValue := rv,
-                                 emergencyFlag := ef, vestPeriod := vp }
+                                 emergencyFlag := ef, vestPeriod := vp,
+                                 vestStart := vs, vestTotal := vt, fullyVestedAmount := fv }
           = { s1 with whitelist := wl, denylist := dl, yieldRateMonth := yr,
                       lastRateSetTime := lt, collateralYieldBase := cy,
                       totalCollateralValue := tcv, redemptionValue := rv,
-                      emergencyFlag := ef, vestPeriod := vp } :=
-            ih s1 h_tail wl dl yr lt cy tcv rv ef vp
+                      emergencyFlag := ef, vestPeriod := vp,
+                      vestStart := vs, vestTotal := vt, fullyVestedAmount := fv } :=
+            ih s1 h_tail wl dl yr lt cy tcv rv ef vp vs vt fv
         _ = { s with whitelist := wl, denylist := dl, yieldRateMonth := yr,
                      lastRateSetTime := lt, collateralYieldBase := cy,
                      totalCollateralValue := tcv, redemptionValue := rv,
-                     emergencyFlag := ef, vestPeriod := vp } :=
-            hframe wl dl yr lt cy tcv rv ef vp
+                     emergencyFlag := ef, vestPeriod := vp,
+                     vestStart := vs, vestTotal := vt, fullyVestedAmount := fv } :=
+            hframe wl dl yr lt cy tcv rv ef vp vs vt fv
 
 /-! ## Oracle role: direct frame (the indirect channel is Tier 2's T6)
 
@@ -2326,12 +2404,16 @@ Base-model theorems (not wrapper/DESIGN): faithful field-level projections of th
 Tier-1 trace frames, stating each compromise's blast radius as a *compartment*.
 
 * The yield-distributor compartment is the **vesting pool and its USDC inflow**
-  (`vestTotal`/`usdcReserve`/`vestStart`): an all-distributor trace leaves every
-  principal field — user apxUSD/apyUSD/USDC/governance balances, both supplies, the
-  vault's apxUSD, i.e. everything users own or that backs what they own — bitwise
-  unchanged, and the two asset-bearing compartment fields can only move **upward**
-  (the role pays in, never out). A distributor compromise can distort *future yield
-  accrual*, never principal.
+  (`vestTotal`/`fullyVestedAmount`/`usdcReserve`/`vestStart`): an all-distributor
+  trace leaves every principal field — user apxUSD/apyUSD/USDC/governance
+  balances, both supplies, the vault's apxUSD, i.e. everything users own or that
+  backs what they own — bitwise unchanged, the reserve can only move **upward**
+  (the role pays in, never out), and the combined vest pool
+  `fullyVestedAmount + vestTotal` can only move **upward** too (`vestTotal` alone
+  is NOT monotone — an accrue-first credit can shrink it while growing
+  `fullyVestedAmount` by the same amount, cf. T2's `yield_distributor_frame`). A
+  distributor compromise can distort *future yield accrual timing*, never
+  principal.
 * The pauser compartment is the **`globalPause` liveness bit alone**: an all-pauser
   trace leaves every principal field *and* every pricing parameter unchanged. A
   pauser compromise is a freeze, never a loss. -/
@@ -2339,9 +2421,11 @@ Tier-1 trace frames, stating each compromise's blast radius as a *compartment*.
 /-- T9 `distributor_compartmentalized` (docs/05-blast-radius.md, Tier 3):
 a yieldDistributor compromise is confined to the vesting-pool compartment.
 Over any all-`DistributorOp` trace the principal fields are all bitwise unchanged,
-and the only movable asset fields — the vest pool `vestTotal` and the reserve
-`usdcReserve` it feeds — move only upward (`vestStart`, the vesting clock anchor,
-may also be rewritten; that is the liveness caveat documented at T2). Projection of
+the reserve `usdcReserve` it feeds moves only upward, and the combined vest pool
+`fullyVestedAmount + vestTotal` moves only upward (`vestTotal` alone can shrink
+when an accrue-first credit realizes more into `fullyVestedAmount` than it adds —
+see the section note above; `vestStart`, the vesting clock anchor, may also be
+rewritten; that is the liveness caveat documented at T2). Projection of
 `yield_distributor_trace_blast_radius`. -/
 theorem distributor_compartmentalized (s : State) (σ : List (Op × Address))
     (h_gated : ∀ p ∈ σ, DistributorOp p.1) :
@@ -2353,9 +2437,10 @@ theorem distributor_compartmentalized (s : State) (σ : List (Op × Address))
     (execTrace s σ).totalSupply_apxUSD = s.totalSupply_apxUSD ∧
     (execTrace s σ).totalSupply_apyUSD = s.totalSupply_apyUSD ∧
     s.usdcReserve ≤ (execTrace s σ).usdcReserve ∧
-    s.vestTotal ≤ (execTrace s σ).vestTotal := by
+    s.fullyVestedAmount + s.vestTotal
+      ≤ (execTrace s σ).fullyVestedAmount + (execTrace s σ).vestTotal := by
   obtain ⟨hframe, hres, hvest⟩ := yield_distributor_trace_blast_radius s σ h_gated
-  have h := hframe 0 0 0
+  have h := hframe 0 0 0 0
   exact ⟨by simpa using congrArg State.apxUSDBal h,
     by simpa using congrArg State.apyUSDBal h,
     by simpa using congrArg State.usdcBal h,
@@ -2499,7 +2584,7 @@ theorem single_key_bounds (s : State) (σO σP σD σA : List (Op × Address))
   · obtain ⟨hd1, _, _, _, _, _, _, hd8, _⟩ := distributor_compartmentalized s σD hD
     exact ⟨hd1, hd8⟩
   · have h := admin_trace_blast_radius s σA hA
-      s.whitelist s.denylist 0 0 0 0 0 false 0
+      s.whitelist s.denylist 0 0 0 0 0 false 0 0 0 0
     exact ⟨by simpa using congrArg State.apxUSDBal h,
       by simpa using congrArg State.usdcReserve h⟩
 
