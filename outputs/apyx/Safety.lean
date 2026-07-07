@@ -495,4 +495,97 @@ theorem no_free_value_trace (s : State) (σ : List (Op × Address)) (a : Address
     (execTrace s σ).apxUSDBal a = 0 :=
   (penniless_invariant s σ a h0 h_no_gift).1
 
+/-! ## S2 `solvency_preserved` — aggregate overcollateralization is maintained
+
+Trace-level lift of the single-step `req_overcollateralization_limit` (`Apyx.lean`):
+the total apxUSD claim outstanding (supply plus the required overcollateralization
+margin) never exceeds the market value of what backs it (the collateral basket plus
+the USDC reserve).
+
+`req_overcollateralization_limit` needs two side-conditions at the pre-state, beyond
+the invariant itself: `h_bal` (no single address's apxUSD balance exceeds total
+supply) and `h_rv` (the redemption price is at most par, `≤ ray`). In a real
+ERC-20-style ledger both are automatic corollaries of the ledger identity
+`Σ_a balance a = totalSupply` — a conservation fact maintained by construction
+because `mintApxUSD`/`burnApxUSD` always move one address's balance and the total by
+the *same* amount in lockstep. But this abstract model represents `apxUSDBal` as a
+bare `Address → Nat` with no finite-support/summation structure recording that
+identity, so the per-address bound cannot honestly be *re-derived* from scratch at
+every step of an arbitrary trace: e.g. knowing `bal x ≤ total` and `bal y ≤ total`
+individually does not, by itself, bound `bal x` against the *smaller* total left
+after burning from `y`, without also knowing how `x` and `y`'s claims sum against
+the total — exactly the fact this model does not carry. Rather than paper over that
+gap, `solvency_preserved` takes `WellFormed` as an honest hypothesis re-supplied at
+*every* point along the trace (`∀ n, WellFormed (execTrace s (σ.take n))`), not
+something it manufactures from a bare initial condition.
+
+Scope, exactly mirroring `req_overcollateralization_limit`: `claimUnlock` and
+`flexibleClaimUnlock` are excluded because they re-mint apxUSD against an unlock
+obligation the aggregate state does not track as a liability, and
+`handleStressEvent` is excluded because it models an exogenous collateral loss that
+deliberately eats into the margin. `catastrophicBackstop` needs no separate
+exclusion here: it does not move any of the four quantities `Solvent` compares, so it
+trivially preserves solvency itself — it only pushes `redemptionValue` (potentially
+above `ray`) for *future* steps, which surfaces honestly as a heavier `WellFormed`
+proof burden on the caller for the remainder of the trace, not as unsoundness. -/
+
+/-- `Solvent s`: aggregate collateralization is maintained — outstanding apxUSD claims
+plus the required margin never exceed the collateral basket plus the USDC reserve.
+Exactly `req_overcollateralization_limit`'s invariant, named for trace-level use. -/
+def Solvent (s : State) : Prop :=
+  s.totalSupply_apxUSD + s.overcollateralizationBuffer ≤ s.totalCollateralValue + s.usdcReserve
+
+/-- The two ledger-consistency side-conditions `req_overcollateralization_limit` needs
+at every step: no address's apxUSD balance exceeds total supply, and the redemption
+price is at most par. See the module docstring above for why this is taken as a
+hypothesis re-verified along the trace rather than derived from a bare initial
+condition. -/
+def WellFormed (s : State) : Prop :=
+  (∀ a, s.apxUSDBal a ≤ s.totalSupply_apxUSD) ∧ s.redemptionValue ≤ ray
+
+/-- Induction step for S2: a single successful operation preserves `Solvent`, given
+`WellFormed` at the pre-state and that the operation is none of the three
+`req_overcollateralization_limit` must exclude. This *is*
+`req_overcollateralization_limit`, restated with the `Solvent`/`WellFormed` names. -/
+theorem solvency_step (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') (h_solvent : Solvent s) (h_wf : WellFormed s)
+    (h_not_claim : ∀ id, op ≠ Op.claimUnlock id)
+    (h_not_flex_claim : ∀ id, op ≠ Op.flexibleClaimUnlock id)
+    (h_not_stress : ∀ a, op ≠ Op.handleStressEvent a) :
+    Solvent s' :=
+  req_overcollateralization_limit s op caller s' h_step h_solvent h_wf.1 h_wf.2
+    h_not_claim h_not_flex_claim h_not_stress
+
+/-- **S2 `solvency_preserved`** (docs/06-safety-properties.md, Tier A): aggregate
+overcollateralization is preserved across arbitrary traces (revert-skip semantics),
+given that ledger well-formedness holds at every point visited along the way and the
+trace never calls `claimUnlock`/`flexibleClaimUnlock`/`handleStressEvent`. -/
+theorem solvency_preserved (s : State) (σ : List (Op × Address))
+    (h_solvent : Solvent s)
+    (h_wf : ∀ n, WellFormed (execTrace s (σ.take n)))
+    (h_excl : ∀ p ∈ σ, (∀ id, p.1 ≠ Op.claimUnlock id) ∧
+      (∀ id, p.1 ≠ Op.flexibleClaimUnlock id) ∧ (∀ a, p.1 ≠ Op.handleStressEvent a)) :
+    Solvent (execTrace s σ) := by
+  induction σ generalizing s with
+  | nil => exact h_solvent
+  | cons p σ ih =>
+    obtain ⟨op, c⟩ := p
+    have hhead := h_excl (op, c) List.mem_cons_self
+    have htail : ∀ q ∈ σ, (∀ id, q.1 ≠ Op.claimUnlock id) ∧
+        (∀ id, q.1 ≠ Op.flexibleClaimUnlock id) ∧ (∀ a, q.1 ≠ Op.handleStressEvent a) :=
+      fun q hq => h_excl q (List.mem_cons_of_mem _ hq)
+    have hwf0 : WellFormed s := by simpa [execTrace] using h_wf 0
+    simp only [execTrace]
+    cases hstep : step s op c with
+    | none =>
+      refine ih s h_solvent ?_ htail
+      intro n
+      simpa [execTrace, hstep] using h_wf (n + 1)
+    | some s1 =>
+      have hsolvent1 : Solvent s1 :=
+        solvency_step s op c s1 hstep h_solvent hwf0 hhead.1 hhead.2.1 hhead.2.2
+      refine ih s1 hsolvent1 ?_ htail
+      intro n
+      simpa [execTrace, hstep] using h_wf (n + 1)
+
 end Apyx
