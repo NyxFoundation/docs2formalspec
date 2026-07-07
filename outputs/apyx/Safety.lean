@@ -837,4 +837,229 @@ theorem no_inflation_attack (s : State) (op : Op) (caller : Address) (s' : State
   · exact Or.inr (Or.inl ⟨x, r, hx⟩)
   · exact Or.inr (Or.inr ⟨x, r, hx⟩)
 
+/-! ## S6 `caller_net_nonpositive` — value-weighted no-free-money for the acting caller
+
+S1 covers apxUSD-count only. The full in-scope no-free-money law is value-weighted: an
+address's holdings, summed in one common accounting unit, cannot rise for the address
+*acting as caller* except by what it itself pays into the step. `valueAt R s a` is that
+common unit: apxUSD and USDC both at par (1 raw unit = 1 raw unit), apyUSD converted to
+its redeemable apxUSD via `redeemAssets` at an explicit rate `R`. `callerValue` is the
+headline reading of that ledger at a state's own *live* rate (`s.exchangeRate`) — the
+same rate `convertToAssets`/ERC4626 `previewRedeem` would quote right now.
+
+**Why `valueAt` takes `R` explicitly instead of always reading the live rate.** Three of
+the four value-moving ops (`lockApxUSD`, `withdraw`, `redeem`) call `updateExchangeRate`
+before returning, so `s'.exchangeRate` can differ from `s.exchangeRate` *within the same
+step*. That drift is the S4 phenomenon (rate is non-decreasing, rounding-favors-protocol
+surplus spread pro-rata over the whole pool) — a diffuse, pool-wide appreciation shared by
+every current apyUSD holder, not value the acting caller personally extracts from this one
+step. Bounding the *caller's own delta* cleanly requires pricing both the pre- and
+post-state holdings at the **same** rate; mixing rates (pre-state holdings at the old rate,
+post-state holdings at the new, already-bumped rate) reduces to a genuinely harder question
+— by how much can a single `updateExchangeRate` recomputation move the rate, expressed as a
+bound on the whole pool rather than one address — that is exactly the kind of fiddly
+cross-denominator Nat arithmetic the design memo flags as a risk for the trace-level sum.
+Rather than force it, the fixed-rate law below is proved exactly, for all five op instances
+across the four named families (deposit/lock/redeem/withdraw), and it is noted for the two
+ops that never touch the rate (`depositUSDC`, `redeemApxUSD`) that the fixed-rate and
+live-rate readings coincide, so those two carry the *full, unqualified* live result. -/
+
+/-- `a`'s holdings priced in one common unit at an explicit rate `R`: apxUSD and USDC both
+at par, apyUSD converted to its redeemable apxUSD equivalent via `redeemAssets R`. -/
+def valueAt (R : Nat) (s : State) (a : Address) : Nat :=
+  s.apxUSDBal a + redeemAssets (s.apyUSDBal a) R + s.usdcBal a
+
+/-- **`callerValue`**: the headline S6 ledger, `a`'s holdings priced at the state's own
+live (mark-to-market) exchange rate. -/
+def callerValue (s : State) (a : Address) : Nat := valueAt s.exchangeRate s a
+
+/-- Core arithmetic fact behind the `lockApxUSD` case: converting a fresh deposit of
+`amount` into shares (`lockShares`, floor rounding) and immediately pricing the enlarged
+share balance back at the *same* rate `R` never returns more than the pre-existing balance's
+value plus the deposited `amount` — the floor rounding in `lockShares` cannot manufacture
+extra redeemable value for the depositor at a fixed rate. Pure `Nat` fact, no protocol
+definitions beyond `lockShares`/`redeemAssets` unfolded. -/
+private theorem redeemAssets_add_lockShares_le (x amount R : Nat) :
+    redeemAssets (x + lockShares amount R) R ≤ redeemAssets x R + amount := by
+  have hray : 0 < ray := Nat.pow_pos (by decide)
+  have hy : amount * ray / R * R ≤ amount * ray := Nat.div_mul_le_self _ _
+  unfold redeemAssets lockShares
+  calc (x + amount * ray / R) * R / ray
+      = (x * R + amount * ray / R * R) / ray := by rw [Nat.add_mul]
+    _ ≤ (x * R + amount * ray) / ray := Nat.div_le_div_right (Nat.add_le_add_left hy _)
+    _ = x * R / ray + amount := Nat.add_mul_div_right _ _ hray
+
+/-- Ceiling-rounded redemption price never exceeds `ray`-scaled par by more than what the
+`redemptionValue ≤ ray` no-premium-redemption invariant already bounds: paying out
+`amount * R / ray` USDC for `amount` burned apxUSD, at `R ≤ ray`, never exceeds `amount`.
+Same side-condition `S2`'s `WellFormed` already carries (`redemptionValue ≤ ray`). -/
+private theorem redemptionValue_div_ray_le (amount R : Nat) (h_rv : R ≤ ray) :
+    amount * R / ray ≤ amount := by
+  have hray : 0 < ray := Nat.pow_pos (by decide)
+  calc amount * R / ray ≤ amount * ray / ray := Nat.div_le_div_right (Nat.mul_le_mul_left amount h_rv)
+    _ = amount := Nat.mul_div_cancel amount hray
+
+/-- `depositUSDC`: the caller's `callerValue` (at the fixed pre-step rate) is exactly
+unchanged — USDC converts to apxUSD 1:1, no rounding, no rate movement. -/
+theorem caller_value_depositUSDC (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.depositUSDC amount) caller = some s') :
+    valueAt s.exchangeRate s' caller = callerValue s caller := by
+  obtain ⟨-, -, -, hle, hs'⟩ := inv_depositUSDC s amount caller s' h_step
+  have hx : s'.apxUSDBal caller = s.apxUSDBal caller + amount := by
+    rw [hs']; simp [emitEvent, mintApxUSD]
+  have hy : s'.apyUSDBal caller = s.apyUSDBal caller := by
+    rw [hs']; simp [emitEvent, mintApxUSD]
+  have hu : s'.usdcBal caller = s.usdcBal caller - amount := by
+    rw [hs']; simp [emitEvent, mintApxUSD]
+  unfold callerValue valueAt
+  rw [hx, hy, hu]
+  omega
+
+/-- `depositUSDC` never moves the exchange rate, so the fixed-rate and live readings of
+`callerValue` coincide: the deposit case carries the full, unqualified live-rate result. -/
+theorem caller_value_depositUSDC_live (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.depositUSDC amount) caller = some s') :
+    callerValue s' caller = callerValue s caller := by
+  obtain ⟨-, -, -, -, hs'⟩ := inv_depositUSDC s amount caller s' h_step
+  have hr : s'.exchangeRate = s.exchangeRate := by rw [hs']; simp [emitEvent, mintApxUSD]
+  show valueAt s'.exchangeRate s' caller = callerValue s caller
+  rw [hr]
+  exact caller_value_depositUSDC s amount caller s' h_step
+
+/-- `lockApxUSD`: at the fixed pre-step rate, the caller's `callerValue` cannot rise beyond
+the `amount` it locked — floor-rounding the newly minted shares (`lockShares`) cannot
+manufacture redeemable value beyond what was paid in. The live-rate reading may still be
+*higher* than this (S4's pool-wide rate appreciation, shared by every holder) — an honestly
+scoped, distinct effect, not the caller's own extraction from this step. -/
+theorem caller_value_lockApxUSD_fixedRate (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.lockApxUSD amount) caller = some s') :
+    valueAt s.exchangeRate s' caller ≤ callerValue s caller := by
+  obtain ⟨-, hle, hs'⟩ := inv_lockApxUSD s amount caller s' h_step
+  have hx : s'.apxUSDBal caller = s.apxUSDBal caller - amount := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  have hy : s'.apyUSDBal caller = s.apyUSDBal caller + lockShares amount s.exchangeRate := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  have hu : s'.usdcBal caller = s.usdcBal caller := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  unfold callerValue valueAt
+  rw [hx, hy, hu]
+  have hb := redeemAssets_add_lockShares_le (s.apyUSDBal caller) amount s.exchangeRate
+  omega
+
+/-- `redeemApxUSD` (ERC-20-style redemption): at the fixed pre-step rate (the op never
+touches `exchangeRate` at all, so this is also the live-rate result), the caller's
+`callerValue` cannot rise beyond rounding: the USDC credited for `amount` burned apxUSD is
+`amount * redemptionValue / ray`, which — given the standing no-premium-redemption
+invariant `redemptionValue ≤ ray` (the same side-condition `S2`'s `WellFormed` carries) —
+never exceeds `amount`. -/
+theorem caller_value_redeemApxUSD (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.redeemApxUSD amount) caller = some s') (h_rv : s.redemptionValue ≤ ray) :
+    valueAt s.exchangeRate s' caller ≤ callerValue s caller := by
+  obtain ⟨-, -, hle, -, hs'⟩ := inv_redeemApxUSD s amount caller s' h_step
+  have hx : s'.apxUSDBal caller = s.apxUSDBal caller - amount := by
+    rw [hs']; simp [emitEvent, burnApxUSD]
+  have hy : s'.apyUSDBal caller = s.apyUSDBal caller := by
+    rw [hs']; simp [emitEvent, burnApxUSD]
+  have hu : s'.usdcBal caller = s.usdcBal caller + amount * s.redemptionValue / ray := by
+    rw [hs']; simp [emitEvent, burnApxUSD]
+  unfold callerValue valueAt
+  rw [hx, hy, hu]
+  have hb := redemptionValue_div_ray_le amount s.redemptionValue h_rv
+  omega
+
+/-- `redeemApxUSD` never moves the exchange rate: the fixed-rate result above is also the
+full, unqualified live-rate result. -/
+theorem caller_value_redeemApxUSD_live (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.redeemApxUSD amount) caller = some s') (h_rv : s.redemptionValue ≤ ray) :
+    callerValue s' caller ≤ callerValue s caller := by
+  obtain ⟨-, -, -, -, hs'⟩ := inv_redeemApxUSD s amount caller s' h_step
+  have hr : s'.exchangeRate = s.exchangeRate := by rw [hs']; simp [emitEvent, burnApxUSD]
+  show valueAt s'.exchangeRate s' caller ≤ callerValue s caller
+  rw [hr]
+  exact caller_value_redeemApxUSD s amount caller s' h_step h_rv
+
+/-- `withdraw`: the withdrawn `assets` leave the caller's `apyUSDBal` (via `pullVestedYield`
+then `burnApyUSD`) and land in a cooldown *unlock request*, not directly in `apxUSDBal`/
+`usdcBal` — the three fields `callerValue` tracks. So, at the fixed pre-step rate, the
+caller's `callerValue` can only *fall* here: `apxUSDBal`/`usdcBal` are untouched and
+`apyUSDBal` only shrinks (monotone `redeemAssets` in the first argument). The eventual
+`claimUnlock` crediting `apxUSDBal` later is exactly the transfer S1 already excludes as a
+caller-paid-for credit, not a gift. -/
+theorem caller_value_withdraw_fixedRate (s : State) (assets : Nat) (receiver caller : Address)
+    (s' : State) (h_step : step s (Op.withdraw assets receiver) caller = some s') :
+    valueAt s.exchangeRate s' caller ≤ callerValue s caller := by
+  obtain ⟨-, -, -, hs'⟩ := inv_withdraw s assets receiver caller s' h_step
+  have hx : s'.apxUSDBal caller = s.apxUSDBal caller := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hy : s'.apyUSDBal caller = s.apyUSDBal caller - withdrawShares assets s.exchangeRate := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hu : s'.usdcBal caller = s.usdcBal caller := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  unfold callerValue valueAt
+  rw [hx, hy, hu]
+  have hmono : redeemAssets (s.apyUSDBal caller - withdrawShares assets s.exchangeRate) s.exchangeRate
+      ≤ redeemAssets (s.apyUSDBal caller) s.exchangeRate :=
+    Nat.div_le_div_right (Nat.mul_le_mul_right _ (Nat.sub_le _ _))
+  omega
+
+/-- `redeem` (vault, share-denominated): identical shape to `withdraw` above — the
+redeemed assets land in a cooldown unlock request, not in `apxUSDBal`/`usdcBal`, so at the
+fixed pre-step rate the caller's `callerValue` can only fall (`apyUSDBal` only shrinks by
+the burned `shares`). -/
+theorem caller_value_redeem_fixedRate (s : State) (shares : Nat) (receiver caller : Address)
+    (s' : State) (h_step : step s (Op.redeem shares receiver) caller = some s') :
+    valueAt s.exchangeRate s' caller ≤ callerValue s caller := by
+  obtain ⟨-, -, -, hs'⟩ := inv_redeem s shares receiver caller s' h_step
+  have hx : s'.apxUSDBal caller = s.apxUSDBal caller := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hy : s'.apyUSDBal caller = s.apyUSDBal caller - shares := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hu : s'.usdcBal caller = s.usdcBal caller := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  unfold callerValue valueAt
+  rw [hx, hy, hu]
+  have hmono : redeemAssets (s.apyUSDBal caller - shares) s.exchangeRate
+      ≤ redeemAssets (s.apyUSDBal caller) s.exchangeRate :=
+    Nat.div_le_div_right (Nat.mul_le_mul_right _ (Nat.sub_le _ _))
+  omega
+
+/-- **S6 `caller_net_nonpositive`** (docs/06-safety-properties.md, Tier B): the
+value-weighted no-free-money law for the acting caller, across the four named
+value-moving op families (`depositUSDC`, `lockApxUSD`, `redeemApxUSD`, `withdraw`,
+`redeem` — five op instances). Priced at the rate in force when the step began, the
+caller's `callerValue` never rises beyond what it paid into the step: flat for
+`depositUSDC` (1:1 USDC/apxUSD, no rounding), flat-or-lower for `redeemApxUSD` (given the
+standing `redemptionValue ≤ ray` invariant), and non-increasing for `lockApxUSD`/
+`withdraw`/`redeem` (rounding-favors-protocol / monotone-burn arguments above).
+
+**Scope, honestly**: this is the single-step fragment, not the trace-level sum. Composing
+it across a trace would need to reconcile each step's fixed *reference* rate with the
+*next* step's live rate — exactly the rate-drift arithmetic flagged above as out of scope,
+and the reason the design memo calls the trace-level Nat telescoping "fiddly": summing
+`valueAt R_i` terms across steps that each recompute `R_i` from a shifting `totalAssets`/
+`totalSupply` ratio does not telescope cleanly in `Nat` without re-deriving a single-step
+rate-movement bound first. Excluded operations: `mintApxUSD` (credits an address `to` that
+may differ from `caller` — already the S1/S5 "arbitrage mint" case, a purchase paid by
+`caller` for `to`, not a `caller`-value question), `requestUnlock`/`claimUnlock`/
+`flexibleRequestUnlock`/`flexibleClaimUnlock` (move value into/out of the unlock-registry
+column that `callerValue` does not track — covered instead by S1's `Penniless` argument),
+and `executeRFQRedemption` (the caller is a privileged RFQ counterparty acting on behalf of
+`user`, not an ordinary self-directed operation). -/
+theorem caller_net_nonpositive (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') (h_rv : s.redemptionValue ≤ ray)
+    (h_case :
+      (∃ amount, op = Op.depositUSDC amount) ∨
+      (∃ amount, op = Op.lockApxUSD amount) ∨
+      (∃ amount, op = Op.redeemApxUSD amount) ∨
+      (∃ amount r, op = Op.withdraw amount r) ∨
+      (∃ shares r, op = Op.redeem shares r)) :
+    valueAt s.exchangeRate s' caller ≤ callerValue s caller := by
+  rcases h_case with ⟨amount, rfl⟩ | ⟨amount, rfl⟩ | ⟨amount, rfl⟩ | ⟨amount, r, rfl⟩ | ⟨shares, r, rfl⟩
+  · exact Nat.le_of_eq (caller_value_depositUSDC s amount caller s' h_step)
+  · exact caller_value_lockApxUSD_fixedRate s amount caller s' h_step
+  · exact caller_value_redeemApxUSD s amount caller s' h_step h_rv
+  · exact caller_value_withdraw_fixedRate s amount r caller s' h_step
+  · exact caller_value_redeem_fixedRate s shares r caller s' h_step
+
+
 end Apyx
