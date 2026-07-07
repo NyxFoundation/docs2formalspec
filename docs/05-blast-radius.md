@@ -2,15 +2,25 @@
 
 (調査日 2026-07-07。docs2formalspec の次期テーマ: 「モデル内の要件証明」から「モデル外の攻撃に対する被害上限証明」への拡張)
 
-## 実装ステータス(2026-07-07)
+## 実装ステータス(2026-07-07) — **T1-T10 + 能動的no-extraction すべて完了**
 
-`lean/D2fsSpecs/BlastRadius.lean`(単一モジュール、namespace `Apyx`、公開定理35本、sorry 0・vacuous 0、全て `propext`/`Quot.sound` のみに依存)。`Apyx.lean`(81要件定理)は無傷 — blast-radius層は完全に追加的。
+`lean/D2fsSpecs/BlastRadius.lean`(単一モジュール、namespace `Apyx`、**公開定理56本**、sorry 0・vacuous 0)。`Apyx.lean`(81要件定理)は無傷 — blast-radius層は完全に追加的。公理依存: 55本が `propext`/`Quot.sound` のみ、`admin_rfq_coalition_drains` のみ追加で `Classical.choice`(Lean標準の信頼公理、sorryではない)、`base_model_has_no_timelock` は**公理ゼロ**(完全構成的)。
 
-- **Tier 1(T1-T4)完了**: pauser/yieldDistributor/admin の各ロール侵害が残高・供給量フィールドに触れないこと(単発+トレースレベル)。T4ヘッドライン `user_assets_immune_to_total_key_compromise` = 全鍵漏洩でも「署名せずRFQ標的でない傍観者」は残高を失わない。
-- **Tier 2(T5-T6)完了**: `no_theft_ledger`(傍観者の transferable 残高がトレース全体で非減少)、`oracle_alone_preserves_balances`(oracle鍵単独では抽出ゼロ)、`redeem_payout_formula` + `redeem_payout_has_no_cap`(払戻額 = `amount × redemptionValue / ray`、`redemptionValue` にクランプが無いため払戻額に上限が存在しないことを witness 付きで証明 — Tier 3 の動機)。
-- **未了**: 能動的no-extraction(caller双対台帳、in-scope安全性の能動的半分)、Tier 3(T7 rate-limit線形上限 / T8 timelock退出保証 / T9 区画化 / T10 結託表 — いずれも base `step` をラップした `step2` が必要)。
+**base Apyxモデルの性質(現行プロトコルについての定理):**
+- **T1-T3**: pauser/yieldDistributor/admin の各ロール侵害が残高・供給量フィールドに触れない(単発 `*_frame` + トレース `*_trace_blast_radius`)。
+- **T4(非保管性)**: `user_assets_immune_to_total_key_compromise` = 全鍵漏洩でも「署名せずRFQ標的でない傍観者」は4残高いずれも失わない。補助: `no_role_transfers_user_funds`/`no_role_burns_user_shares`/`no_role_debits_usdc`/`governance_token_balances_immutable`/`no_role_seizes_unlock_position`。
+- **T5**: `no_theft_ledger`(傍観者の transferable 残高がトレース全体で非減少)。
+- **T6**: `oracle_alone_preserves_balances`(oracle鍵単独では抽出ゼロ)、`redeem_payout_formula` + `redeem_payout_has_no_cap`(払戻額 = `amount × redemptionValue / ray`、`redemptionValue` にクランプが無く払戻上限が存在しないことを witness 付きで証明)。
+- **能動的no-extraction**: `apxUSD_credit_is_backed` = どの `step` ケースも「等価USDC支払い or 自分の既存ロック位置の決済」なしにapxUSDを増やせない(free-mint経路の不在、in-scope安全性の能動的半分。T5と対をなす)。
+- **T8前半・T9・T10(base側)**: `base_model_has_no_timelock`/`catastrophicBackstop_is_instantaneous`(admin変更は同一stepで即時発効=退出窓が無い、負の結果)、`distributor_compartmentalized`/`pauser_compartmentalized`(侵害の footprint がvestプール/pauseビットに限局)、`single_key_bounds`(単一鍵ではどれも元本抽出ゼロ)、`admin_rfq_coalition_drains`(admin+RFQ結託は `redemptionValue=0` で被害者のapxUSDを0 USDCで焼却=実質全損)。
 
-インフラ: `execTrace`(revert-skip意味論のトレース実行器)、ロール述語 `PauserOp`/`DistributorOp`/`AdminOp`/`OracleOp`、各opの exact-effect frame lemma、`reserve_outflow_only_via_redemption`(reserve減少はredemption経由のみ = T5/T9/T10 の帰納ステップ)、`redemption_price_admin_only`(redemption価格はadmin `catastrophicBackstop` 専有)。
+**設計定理(ラッパーが保証すること。現行モデルには当該機構が無いことの裏返し):**
+- **T7 rate-limit**: `RLState`/`step2`/`execTrace2` ラッパー上で `rate_limit_linear_bound` = 累積reserve流出 ≤ `cap × (経過epoch+1)`(被害は時間に対し高々線形)。
+- **T8後半 timelock**: `TLState`/`step2tl`/`execTraceTL` ラッパー上で `timelock_escape_guarantee`(queueされた特権opは `delay` ティック経過まで発効不可=ユーザーに保証された退出窓)+ `timelock_wrapper_is_live`。
+
+**総括**: 単一鍵漏洩はどのロールでも元本抽出ゼロ(T1-T6, single_key_bounds)。現行モデルの唯一の全損経路は **admin+RFQ counterparty の結託**(T10)で、これは rate-limit(T7)/timelock(T8)/redemption価格フロアのいずれも現行モデルに無いことに起因する。ユーザー資金の対admin安全性は「RFQ counterparty集合の信頼」と「これら防御機構の導入」に懸かっている、というのが機械検証済みの結論。
+
+インフラ: `execTrace`(revert-skip意味論)、ロール述語 `PauserOp`/`DistributorOp`/`AdminOp`/`OracleOp`、各opの exact-effect frame lemma、`reserve_outflow_only_via_redemption`(reserve減少はredemption経由のみ)、`redemption_price_admin_only`(redemption価格はadmin `catastrophicBackstop` 専有)、`netHoldings`(per-address台帳)、2つのラッパー系(`step2`/`step2tl`)。
 
 ## 1. 動機: エクスプロイトの主戦場はもうコードバグではない
 
