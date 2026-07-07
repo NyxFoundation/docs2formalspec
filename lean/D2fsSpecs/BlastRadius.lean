@@ -1504,4 +1504,127 @@ theorem no_theft_ledger (s : State) (σ : List (Op × Address)) (a : Address)
   unfold netHoldings
   omega
 
+/-! ## T6 `oracle_blast_radius` — what an oracle-key compromise can extract
+
+Two honest results.
+
+**(a)** The oracle key acting *alone* extracts exactly zero: a trace of only
+`OracleOp`s (`updateRedemptionValue`/`setApxUSDMarketPrice`) moves no balance,
+supply, or reserve — its entire footprint is the reported market-price parameter
+`apxUSDMarketPrice`. (`oracle_alone_preserves_balances`, from the oracle trace frame.)
+
+**(b)** The danger is a *coalition*, and the finding is that **the model places no
+clamp on the redemption price**, so the USDC paid out on a single redeem is unbounded
+above — there is no in-model invariant capping it. We prove this positively:
+
+* `redeem_payout_formula`: a successful `redeemApxUSD amount` pays the caller exactly
+  `amount * redemptionValue / ray` USDC out of the reserve;
+* `redeem_payout_has_no_cap`: for **any** target `N`, there is a state and a
+  *single-token* redeem whose payout is `≥ N`. The witness fixes `amount = 1` and
+  scales `redemptionValue` to `N * ray`, so one apxUSD is redeemed for `N` USDC. No
+  guard in `redeemApxUSD` (nor in the price writer `catastrophicBackstop`, which sets
+  `redemptionValue := totalCollateralValue` with no upper bound — cf.
+  `redemption_price_admin_only`) bounds `redemptionValue`, so no upper bound on payout
+  is provable: the absence of a model-level cap, itself the key finding.
+
+This is exactly the memo's T6 conclusion "in the current clamp-free model f =
+usdcReserve (full drain)" and the real-world analogue of Yearn's finding that Apyx's
+`ApxUSDRateOracle.setRate` sits behind a 0-second timelock. It motivates Tier 3's
+rate-limit / clamp. Attribution note (`redemption_price_admin_only`): in *this* model
+the redemption price is written by the admin's `catastrophicBackstop`, not the oracle
+op, so the extraction coalition is admin (price) + redeemer/RFQ-counterparty (drain);
+`updateRedemptionValue` is a placeholder no-op. -/
+
+/-- T6(a) `oracle_alone_preserves_balances`: an arbitrarily long trace whose operations
+are ALL oracle-gated leaves every balance, supply, and reserve field bitwise unchanged.
+The oracle key acting alone extracts exactly zero — its only reachable field is the
+reported market price `apxUSDMarketPrice` (`oracle_trace_blast_radius`), and the
+redemption price in particular is untouched (`redemptionValue` unchanged). -/
+theorem oracle_alone_preserves_balances (s : State) (σ : List (Op × Address))
+    (h_gated : ∀ p ∈ σ, OracleOp p.1) :
+    (execTrace s σ).apxUSDBal = s.apxUSDBal ∧
+    (execTrace s σ).apyUSDBal = s.apyUSDBal ∧
+    (execTrace s σ).usdcBal = s.usdcBal ∧
+    (execTrace s σ).governanceTokenBal = s.governanceTokenBal ∧
+    (execTrace s σ).usdcReserve = s.usdcReserve ∧
+    (execTrace s σ).totalSupply_apxUSD = s.totalSupply_apxUSD ∧
+    (execTrace s σ).totalSupply_apyUSD = s.totalSupply_apyUSD ∧
+    (execTrace s σ).vaultApxUSDBal = s.vaultApxUSDBal ∧
+    (execTrace s σ).vestTotal = s.vestTotal ∧
+    (execTrace s σ).redemptionValue = s.redemptionValue := by
+  have h := oracle_trace_blast_radius s σ h_gated 0
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simpa using congrArg State.apxUSDBal h
+  · simpa using congrArg State.apyUSDBal h
+  · simpa using congrArg State.usdcBal h
+  · simpa using congrArg State.governanceTokenBal h
+  · simpa using congrArg State.usdcReserve h
+  · simpa using congrArg State.totalSupply_apxUSD h
+  · simpa using congrArg State.totalSupply_apyUSD h
+  · simpa using congrArg State.vaultApxUSDBal h
+  · simpa using congrArg State.vestTotal h
+  · simpa using congrArg State.redemptionValue h
+
+/-- T6(b), payout formula: a successful `redeemApxUSD amount` credits the caller
+exactly `amount * redemptionValue / ray` USDC (removed from the reserve) against a burn
+of `amount` apxUSD. The payout is a bare linear function of the redemption price with
+no cap term — the object of the no-cap witness below. (Specialization of
+`reserve_outflow_only_via_redemption` to the self-service path.) -/
+theorem redeem_payout_formula (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.redeemApxUSD amount) caller = some s') :
+    s'.usdcBal caller = s.usdcBal caller + amount * s.redemptionValue / ray ∧
+    s'.usdcReserve = s.usdcReserve - amount * s.redemptionValue / ray ∧
+    s'.apxUSDBal caller = s.apxUSDBal caller - amount := by
+  obtain ⟨_, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
+  subst hs'
+  refine ⟨?_, ?_, ?_⟩ <;> simp [emitEvent, burnApxUSD]
+
+/-- Witness state for `redeem_payout_has_no_cap`: defaults except a whitelisted holder
+of one apxUSD, a reserve of `N`, and a redemption price of `N * ray` (i.e. `N` dollars
+per apxUSD). One apxUSD redeems for `N` USDC. -/
+private def noCapWitness (N : Nat) : State :=
+  { (default : State) with
+      whitelist := fun _ => true
+      apxUSDBal := fun _ => 1
+      redemptionValue := N * ray
+      usdcReserve := N }
+
+/-- T6(b), the finding: **the single-redeem payout has no upper bound in the model.**
+
+For any target `N`, there is a state and a single-token (`amount = 1`) redemption whose
+USDC payout to the redeemer is at least `N`: the witness sets `redemptionValue = N * ray`
+(everything else at defaults, whitelisted caller with one apxUSD and an `N`-unit
+reserve), so one apxUSD redeems for `N` USDC. Because `redeemApxUSD` has **no guard**
+bounding `redemptionValue`, and its only writer `catastrophicBackstop` sets it to the
+unbounded `totalCollateralValue` (`redemption_price_admin_only`), there is no
+in-model invariant capping the payout — no upper bound is provable, because none
+exists. This is the honest T6 result: in the current clamp-free model the extractable
+amount is limited only by the reserve, motivating a Tier-3 rate-limit / price clamp.
+
+(Not a claim that the model is *wrong*: it is a faithful mirror of a real design whose
+rate oracle has a 0-second timelock. The theorem *characterizes the missing cap*.) -/
+theorem redeem_payout_has_no_cap (N : Nat) :
+    ∃ (s s' : State) (amount : Nat) (caller : Address),
+      step s (Op.redeemApxUSD amount) caller = some s' ∧
+      s.usdcBal caller = 0 ∧
+      N ≤ s'.usdcBal caller := by
+  have hray : 0 < ray := Nat.pow_pos (by decide)
+  have hpay : (1 : Nat) * (N * ray) / ray = N := by
+    rw [Nat.one_mul, Nat.mul_div_cancel _ hray]
+  have h0 : (noCapWitness N).usdcBal 0 = 0 := rfl
+  have hrv : (noCapWitness N).redemptionValue = N * ray := rfl
+  have hts : (default : State).totalSupply_apxUSD = 0 := rfl
+  have htc : (default : State).totalCollateralValue = 0 := rfl
+  cases hs : step (noCapWitness N) (Op.redeemApxUSD 1) 0 with
+  | none =>
+      -- all guards pass on the witness (buffer stays at 0), so the redeem cannot revert
+      simp [noCapWitness, step, overcollateralizationBuffer, hts, htc] at hs
+      rw [Nat.mul_div_cancel N hray] at hs
+      exact absurd (hs rfl) (Nat.lt_irrefl _)
+  | some s' =>
+      refine ⟨noCapWitness N, s', 1, 0, hs, h0, ?_⟩
+      obtain ⟨hbal, _, _⟩ := redeem_payout_formula (noCapWitness N) 1 0 s' hs
+      rw [hbal, h0, hrv, Nat.one_mul, Nat.mul_div_cancel _ hray]
+      omega
+
 end Apyx
