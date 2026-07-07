@@ -1,10 +1,9 @@
 import D2fsSpecs.Apyx
-import D2fsSpecs.ApyxBlastRadius
 
 /-!
 # Blast-radius theorems: damage upper bounds under privileged-key compromise
 
-This module belongs to the Tier-1 theorem list (T1-T4) of `docs/05-blast-radius.md`:
+This module implements the Tier-1 theorem list (T1-T4) of `docs/05-blast-radius.md`:
 upper bounds on user-asset loss when a privileged role's key is fully compromised
 (the social-engineering threat model, cf. Bybit 2025).
 
@@ -14,29 +13,31 @@ arbitrary sequence of operations with those callers, interleaved with honest tra
 A failed operation reverts (state unchanged), so a trace executes with revert-skip
 semantics (`execTrace`).
 
-Division of labor with the companion module `D2fsSpecs.ApyxBlastRadius` (namespace
-`Apyx.Tier1`, which holds the single-step balance-field statements of T1-T4 by
-exhaustive case analysis):
+Contents:
 
-* **Exact-effect (frame) theorems** for every role-gated operation (here): a
-  successful `pause`/`unpause`/`creditYield`/admin-op/oracle-op is shown to equal the
+* **Exact-effect (frame) theorems** for every role-gated operation: a successful
+  `pause`/`unpause`/`creditYield`/admin-op/oracle-op is shown to equal the
   pre-state with only its named non-asset fields overridden, so no balance, supply,
   reserve, or unlock-position field can move.
-* **Trace forms** (here): the frame results are lifted by induction to arbitrarily
+* **Balance-field forms** (T1-T3): the frame results instantiated on every balance
+  and supply field, by exhaustive case analysis over the closed `Op` inductive —
+  the same pattern as the requirement theorems in `Apyx.lean`.
+* **Trace forms**: the frame results are lifted by induction to arbitrarily
   long attack traces (`execTrace`), giving the memo's headline shape
   `userLoss(execSeq s₀ σ) ≤ B(R, s₀)` with `B` read off the surviving fields.
-* **Non-custodial theorems (T4)**: the single-step debit analyses live in the
-  companion module (`no_role_transfers_user_funds`, `no_role_burns_user_shares`,
-  `no_role_debits_usdc`); this module adds the pieces they leave open —
-  governance-token immutability, unlock-position seizure bounds — and the
-  trace-level headline: even if **every** operator key is stolen, a user who signs
-  nothing and is not targeted by an approved RFQ counterparty cannot lose a single
-  unit of any balance.
+* **Non-custodial theorems (T4)**: the single-step debit analyses
+  (`no_role_transfers_user_funds`, `no_role_burns_user_shares`,
+  `no_role_debits_usdc`), governance-token immutability, unlock-position seizure
+  bounds, and the trace-level headline: even if **every** operator key is stolen,
+  a user who signs nothing and is not targeted by an approved RFQ counterparty
+  cannot lose a single unit of any balance.
+* **Tier-2 stepping stones**: redemption-price provenance and the reserve-outflow
+  law, the single-step characterizations behind T5/T6.
 
 Everything here is additive: the ground-truth model and its 81 requirement theorems
 in `D2fsSpecs/Apyx.lean` are untouched. Because that file's helper lemmas are
 `private`, the small set of step-inversion lemmas needed here is re-derived locally
-(named `inv_*` to distinguish them from the companion module's local `step_*_some`).
+(named `inv_*`).
 -/
 
 namespace Apyx
@@ -451,9 +452,9 @@ theorem step_creditYield_exact (s : State) (amount : Nat) (caller : Address) (s'
 /-- T2 (single step, frame form): a distributor-gated operation demands the
 yieldDistributor role, agrees with the pre-state on every field other than
 `usdcReserve`/`vestTotal`/`vestStart`, and the two asset-bearing fields among those
-can only **increase** — the role can pay in, never extract. (The balance-field
-instantiation of this statement is `Apyx.Tier1.yield_distributor_cannot_extract` in
-the companion module `D2fsSpecs.ApyxBlastRadius`.) -/
+can only **increase** — the role can pay in, never extract. (The exact per-field
+effect, including the precise `+ amount` increments, is `step_creditYield_exact`
+above.) -/
 theorem yield_distributor_frame (s : State) (op : Op) (caller : Address) (s' : State)
     (h_gated : DistributorOp op) (h_step : step s op caller = some s') :
     caller = s.yieldDistributor ∧
@@ -498,11 +499,10 @@ theorem yield_distributor_trace_blast_radius (s : State) (σ : List (Op × Addre
 
 Full compromise of the `admin` key reaches exactly nine fields — the two access
 lists and seven pricing/schedule parameters — and no balance, supply, reserve, or
-unlock-position field. The single-step balance statement is
-`Apyx.Tier1.admin_cannot_touch_balances` in `D2fsSpecs.ApyxBlastRadius`; here each of the
-eight admin-gated operations gets an *exact-effect* lemma (the entire post-state is
-the pre-state with named fields overridden), and the frames are lifted to
-arbitrary-length admin-only traces.
+unlock-position field. Each of the eight admin-gated operations gets an
+*exact-effect* lemma (the entire post-state is the pre-state with named fields
+overridden), the frames are combined into the single-step balance statement
+`admin_cannot_touch_balances`, and lifted to arbitrary-length admin-only traces.
 
 Scope caveats (what a compromised admin CAN do, all deferred effects on future
 operations rather than debits of recorded holdings):
@@ -645,6 +645,45 @@ theorem admin_frame (s : State) (op : Op) (caller : Address) (s' : State)
   · obtain ⟨hc, rfl⟩ := step_setVestPeriod_exact s p caller s' h_step
     exact ⟨hc, fun _ _ _ _ _ _ _ _ _ => rfl⟩
 
+/-- T3 `admin_cannot_touch_balances` (docs/05-blast-radius.md, Tier 1) — the
+single-step balance-field form.
+
+Threat model: the `admin` key is fully compromised. The operations gated on
+`caller = s.admin` in `step` are exactly the eight of `AdminOp`: `addToWhitelist`,
+`removeFromWhitelist`, `addToDenylist`, `removeFromDenylist`, `setYieldRate`,
+`handleStressEvent`, `catastrophicBackstop`, and `setVestPeriod`.
+
+Claim: none of these operations changes any balance or supply field — every apxUSD,
+apyUSD, and USDC balance, both total supplies, the vault's apxUSD holdings, and the
+USDC reserve are unchanged. A compromised admin cannot *directly* move or destroy a
+single unit of anyone's funds.
+
+Scope note (what is NOT claimed): the admin can still attack *future liveness and
+economics* — denylisting/de-whitelisting blocks a user's future deposits and
+redemptions, `setVestPeriod`/`setYieldRate` distort future yield accrual, and
+`handleStressEvent`/`catastrophicBackstop` rewrite `totalCollateralValue`/
+`redemptionValue`, changing the USDC value paid out by *future* redemptions. Those are
+parameter attacks on future operations (Tier 2/Tier 3 territory, cf. T6/T8 in the
+memo), not direct debits of recorded holdings — which is precisely the honest scope of
+this theorem. -/
+theorem admin_cannot_touch_balances (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_gated : AdminOp op) (h_step : step s op caller = some s') :
+    s'.apxUSDBal = s.apxUSDBal ∧
+    s'.apyUSDBal = s.apyUSDBal ∧
+    s'.usdcBal = s.usdcBal ∧
+    s'.totalSupply_apxUSD = s.totalSupply_apxUSD ∧
+    s'.totalSupply_apyUSD = s.totalSupply_apyUSD ∧
+    s'.vaultApxUSDBal = s.vaultApxUSDBal ∧
+    s'.usdcReserve = s.usdcReserve := by
+  obtain ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨bps, rfl⟩ | ⟨amt, rfl⟩ | rfl | ⟨p, rfl⟩ :=
+    h_gated
+  all_goals
+    simp only [step] at h_step
+    split at h_step <;>
+      first
+        | (cases Option.some.inj h_step; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩)
+        | exact absurd h_step (by simp)
+
 /-- T3 (trace form): an arbitrarily long attack trace consisting solely of
 admin-gated operations leaves every field outside the nine admin-parameter fields
 unchanged. A compromised admin key can rewrite access lists and pricing/schedule
@@ -758,11 +797,252 @@ theorem oracle_trace_blast_radius (s : State) (σ : List (Op × Address))
           = { s1 with apxUSDMarketPrice := mp } := ih s1 h_tail mp
         _ = { s with apxUSDMarketPrice := mp } := hframe mp
 
-/-! ## T4 completion: governance tokens, unlock positions, and the trace headline
+/-! ## T4: the non-custodial invariants and the trace headline
 
-The companion module proves the single-step non-custodial invariants for the three
-fungible balances. Two asset classes remain, plus the trace-level statement that is
-the memo's headline. -/
+First the single-step non-custodial invariants for the three fungible balances
+(apxUSD, apyUSD shares, external USDC) — by total case analysis over every
+operation — then the two remaining asset classes (governance tokens, unlock
+positions), and finally the trace-level statement that is the memo's headline. -/
+
+/-- T4 `no_role_transfers_user_funds` (docs/05-blast-radius.md, Tier 1) — the
+non-custodial invariant for apxUSD.
+
+Threat model: ANY set of privileged keys (admin, oracle, pauseController,
+yieldDistributor, governance — all of them at once) is compromised, e.g. the whole team
+is phished. Can the attacker move an arbitrary user's apxUSD?
+
+Claim: total case analysis over every operation shows that if any address `a`'s apxUSD
+balance strictly decreased across a successful step, then either
+* `a` was the caller of that very operation (the debit was self-initiated: `lockApxUSD`,
+  `requestUnlock`, `flexibleRequestUnlock`, or `redeemApxUSD` spending the caller's own
+  tokens), or
+* the operation was `executeRFQRedemption a amount` — the single carve-out — in which
+  case the caller was an approved RFQ counterparty and `a` was *simultaneously
+  compensated in the same step* with the full redemption payout
+  (`amount * redemptionValue / ray` USDC credited to `a`'s USDC balance).
+
+No privileged role has any pathway to debit an arbitrary user's apxUSD: pause/unpause,
+list management, rate/period setting, yield crediting, oracle updates, stress handling,
+and the backstop all leave every apxUSD balance unchanged (they fall into the
+contradiction branch of this proof).
+
+Carve-out honesty: `executeRFQRedemption` genuinely debits a non-caller, so the naive
+"only the caller can be debited" claim is FALSE of this model and is not what we prove.
+The carve-out is a *swap*, not a theft — the debited user atomically receives the
+corresponding USDC at the recorded `redemptionValue`. Note that a compromised admin can
+first move `redemptionValue` via `catastrophicBackstop` (and RFQ counterparty onboarding
+is not itself an `Op`, so `rfqCounterparties` is effectively static in-model); pricing
+the worst case of that combination is exactly Tier 2's `oracle_blast_radius` (T6), not
+this theorem. -/
+theorem no_role_transfers_user_funds (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') (a : Address)
+    (h_dec : s'.apxUSDBal a < s.apxUSDBal a) :
+    a = caller ∨
+    ∃ amount, op = Op.executeRFQRedemption a amount ∧
+      s.rfqCounterparties.contains caller = true ∧
+      s'.usdcBal a = s.usdcBal a + (amount * s.redemptionValue) / ray := by
+  cases op
+  case depositUSDC amount =>
+    obtain ⟨_, _, _, _, hs'⟩ := inv_depositUSDC _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [emitEvent, mintApxUSD] at h_dec
+    split at h_dec <;> omega
+  case mintApxUSD to amount =>
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := inv_mintApxUSD _ _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [emitEvent, mintApxUSD] at h_dec
+    split at h_dec <;> omega
+  case lockApxUSD amount =>
+    obtain ⟨_, _, hs'⟩ := inv_lockApxUSD _ _ _ _ h_step
+    subst hs'
+    by_cases hac : a = caller
+    · exact Or.inl hac
+    · exfalso
+      simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD, hac] at h_dec
+  case requestUnlock amount =>
+    obtain ⟨_, _, hs'⟩ := inv_requestUnlock _ _ _ _ h_step
+    subst hs'
+    by_cases hac : a = caller
+    · exact Or.inl hac
+    · exfalso
+      simp [createStandardUnlock, burnApxUSD, hac] at h_dec
+  case claimUnlock id =>
+    obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := inv_claimUnlock _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [mintApxUSD, burnUnlockNFT] at h_dec
+    split at h_dec <;> omega
+  case redeemApxUSD amount =>
+    obtain ⟨_, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
+    subst hs'
+    by_cases hac : a = caller
+    · exact Or.inl hac
+    · exfalso
+      simp [emitEvent, burnApxUSD, hac] at h_dec
+  case withdraw assets receiver =>
+    obtain ⟨_, _, _, hs'⟩ := inv_withdraw _ _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD] at h_dec
+  case redeem shares receiver =>
+    obtain ⟨_, _, _, hs'⟩ := inv_redeem _ _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD] at h_dec
+  case flexibleRequestUnlock amount =>
+    obtain ⟨_, _, hs'⟩ := inv_flexibleRequestUnlock _ _ _ _ h_step
+    subst hs'
+    by_cases hac : a = caller
+    · exact Or.inl hac
+    · exfalso
+      simp [createFlexibleUnlock, burnApxUSD, hac] at h_dec
+  case flexibleClaimUnlock id =>
+    obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := inv_flexibleClaimUnlock _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [mintApxUSD, burnUnlockNFT] at h_dec
+    split at h_dec <;> omega
+  case executeRFQRedemption user amount =>
+    obtain ⟨_, hrfq, _, _, hs'⟩ := inv_executeRFQRedemption _ _ _ _ _ h_step
+    subst hs'
+    by_cases hau : a = user
+    · subst hau
+      refine Or.inr ⟨amount, rfl, hrfq, ?_⟩
+      simp [burnApxUSD]
+    · exfalso
+      simp [burnApxUSD, hau] at h_dec
+  all_goals
+    simp only [step] at h_step
+    split at h_step <;>
+      first
+        | (cases Option.some.inj h_step; exact absurd h_dec (Nat.lt_irrefl _))
+        | exact absurd h_step (by simp)
+
+/-- T4 companion — the non-custodial invariant for apyUSD (vault shares).
+
+Threat model: as in `no_role_transfers_user_funds`, arbitrary role compromise.
+
+Claim: if any address `a`'s apyUSD share balance strictly decreased across a successful
+step, then `a` itself was the caller. Here the statement needs NO carve-out at all: the
+only operations that ever burn apyUSD are `withdraw` and `redeem`, and both burn
+exclusively from the caller. No privileged role — and no RFQ counterparty — can debit
+anyone else's vault shares. -/
+theorem no_role_burns_user_shares (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') (a : Address)
+    (h_dec : s'.apyUSDBal a < s.apyUSDBal a) :
+    a = caller := by
+  rcases req_token_no_rebase s op caller s' h_step a (Nat.ne_of_lt h_dec) with
+    ⟨x, rfl⟩ | ⟨x, r, rfl⟩ | ⟨x, r, rfl⟩
+  · -- lockApxUSD only mints apyUSD (to the caller); a strict decrease is impossible
+    obtain ⟨_, _, hs'⟩ := inv_lockApxUSD _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD] at h_dec
+    split at h_dec <;> omega
+  · -- withdraw burns shares from the caller only
+    obtain ⟨_, _, _, hs'⟩ := inv_withdraw _ _ _ _ _ h_step
+    subst hs'
+    by_cases hac : a = caller
+    · exact hac
+    · exfalso
+      simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD, hac] at h_dec
+  · -- redeem burns shares from the caller only
+    obtain ⟨_, _, _, hs'⟩ := inv_redeem _ _ _ _ _ h_step
+    subst hs'
+    by_cases hac : a = caller
+    · exact hac
+    · exfalso
+      simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD, hac] at h_dec
+
+/-- T4 companion — the non-custodial invariant for external USDC balances.
+
+Threat model: as in `no_role_transfers_user_funds`, arbitrary role compromise.
+
+Claim: if any address `a`'s USDC balance strictly decreased across a successful step,
+then `a` itself was the caller — again with NO carve-out. The only operations that ever
+debit a USDC balance are `depositUSDC` and the arbitrage `mintApxUSD`, and both spend
+exclusively the caller's USDC (every other operation, including both redemption payouts
+and `executeRFQRedemption`, only *credits* USDC balances or leaves them unchanged). -/
+theorem no_role_debits_usdc (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') (a : Address)
+    (h_dec : s'.usdcBal a < s.usdcBal a) :
+    a = caller := by
+  cases op
+  case depositUSDC amount =>
+    obtain ⟨_, _, _, _, hs'⟩ := inv_depositUSDC _ _ _ _ h_step
+    subst hs'
+    by_cases hac : a = caller
+    · exact hac
+    · exfalso
+      simp [emitEvent, mintApxUSD, hac] at h_dec
+  case mintApxUSD to amount =>
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := inv_mintApxUSD _ _ _ _ _ h_step
+    subst hs'
+    by_cases hac : a = caller
+    · exact hac
+    · exfalso
+      simp [emitEvent, mintApxUSD, hac] at h_dec
+  case lockApxUSD amount =>
+    obtain ⟨_, _, hs'⟩ := inv_lockApxUSD _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD] at h_dec
+  case requestUnlock amount =>
+    obtain ⟨_, _, hs'⟩ := inv_requestUnlock _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [createStandardUnlock, burnApxUSD] at h_dec
+  case claimUnlock id =>
+    obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := inv_claimUnlock _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [mintApxUSD, burnUnlockNFT] at h_dec
+  case redeemApxUSD amount =>
+    obtain ⟨_, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [emitEvent, burnApxUSD] at h_dec
+    split at h_dec <;>
+      first
+        | exact absurd h_dec (Nat.not_lt.mpr (Nat.le_add_right _ _))
+        | exact absurd h_dec (Nat.lt_irrefl _)
+  case withdraw assets receiver =>
+    obtain ⟨_, _, _, hs'⟩ := inv_withdraw _ _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD] at h_dec
+  case redeem shares receiver =>
+    obtain ⟨_, _, _, hs'⟩ := inv_redeem _ _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD] at h_dec
+  case flexibleRequestUnlock amount =>
+    obtain ⟨_, _, hs'⟩ := inv_flexibleRequestUnlock _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [createFlexibleUnlock, burnApxUSD] at h_dec
+  case flexibleClaimUnlock id =>
+    obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := inv_flexibleClaimUnlock _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [mintApxUSD, burnUnlockNFT] at h_dec
+  case executeRFQRedemption user amount =>
+    obtain ⟨_, _, _, _, hs'⟩ := inv_executeRFQRedemption _ _ _ _ _ h_step
+    subst hs'
+    exfalso
+    simp [burnApxUSD] at h_dec
+    split at h_dec <;>
+      first
+        | exact absurd h_dec (Nat.not_lt.mpr (Nat.le_add_right _ _))
+        | exact absurd h_dec (Nat.lt_irrefl _)
+  all_goals
+    simp only [step] at h_step
+    split at h_step <;>
+      first
+        | (cases Option.some.inj h_step; exact absurd h_dec (Nat.lt_irrefl _))
+        | exact absurd h_step (by simp)
 
 /-- T4 companion — governance-token immutability: **no** operation, by **any**
 caller, ever changes **any** address's governance-token balance. The model has no
@@ -990,18 +1270,18 @@ theorem user_assets_immune_to_total_key_compromise
       obtain ⟨ih_apx, ih_apy, ih_usdc, ih_gov⟩ := ih s1 h_u_tail h_rfq_tail
       have h_apx : s.apxUSDBal u ≤ s1.apxUSDBal u := by
         rcases Nat.lt_or_ge (s1.apxUSDBal u) (s.apxUSDBal u) with hlt | hge
-        · rcases Tier1.no_role_transfers_user_funds s op c s1 hstep u hlt with
+        · rcases no_role_transfers_user_funds s op c s1 hstep u hlt with
             huc | ⟨amount, hop, -, -⟩
           · exact absurd huc hcu
           · exact absurd hop (h_rfq (op, c) List.mem_cons_self amount)
         · exact hge
       have h_apy : s.apyUSDBal u ≤ s1.apyUSDBal u := by
         rcases Nat.lt_or_ge (s1.apyUSDBal u) (s.apyUSDBal u) with hlt | hge
-        · exact absurd (Tier1.no_role_burns_user_shares s op c s1 hstep u hlt) hcu
+        · exact absurd (no_role_burns_user_shares s op c s1 hstep u hlt) hcu
         · exact hge
       have h_usdc : s.usdcBal u ≤ s1.usdcBal u := by
         rcases Nat.lt_or_ge (s1.usdcBal u) (s.usdcBal u) with hlt | hge
-        · exact absurd (Tier1.no_role_debits_usdc s op c s1 hstep u hlt) hcu
+        · exact absurd (no_role_debits_usdc s op c s1 hstep u hlt) hcu
         · exact hge
       have h_gov : s1.governanceTokenBal u = s.governanceTokenBal u :=
         congrFun (governance_token_balances_immutable s op c s1 hstep) u
