@@ -308,10 +308,35 @@ than an explicit gap:
 - **`rebalance-overcollateralization`** — the model tracks only aggregate collateral value, not basket
   composition, and has no active rebalancing operation (only the passive invariant is modeled).
 
-### 6.4 Outside any state-machine model (bytecode-audit territory)
-Reentrancy, cross-protocol flash-loan composition, implementation-level input validation, gas, storage
-layout, and upgrade safety cannot be expressed in this atomic transition model. These are the subject of an
-implementation-level audit (recommendation §5.7).
+### 6.4 What the design layer cannot check — hand-off to implementation-level tools
+
+This report verifies an **abstract, atomic, hand-built** model. Everything below is invisible to it *by
+construction* and must be checked against the **deployed Solidity** with static analysis, SMT/symbolic
+execution, and invariant fuzzing. This is the honest boundary — the design-level proofs and this list are
+complementary, not redundant. (Tool classes: **Static** = Slither/Aderyn/semgrep; **SMT** = Certora Prover,
+Halmos, hevm; **Fuzz** = Echidna, Medusa, Foundry invariant; **Config** = role-graph/delay/storage review.)
+
+| # | Item the design model cannot cover | Why the Lean layer can't see it | Check with |
+|---|---|---|---|
+| 1 | **Reentrancy** (single-fn, cross-fn, and **read-only** — a view returning mid-update state) | `step` is atomic; there is no notion of an external call re-entering mid-transition | Static + SMT (reentrancy rules) + Fuzz |
+| 2 | **Cross-protocol / flash-loan composition** (e.g. manipulating an external pool the protocol reads) | The model has one protocol, one closed `Op`; no external mutable state | SMT with attacker harness + economic sim |
+| 3 | **Bytecode ⊨ model** — the model is a *hand-built interpretation* and can diverge from the contract (as the vesting and catastrophic-per-unit cases here showed) | Proofs are about the Lean model, not `ApxUSD`/`ApyUSD`/`RedemptionPoolV0`/`LinearVestV0` bytecode | **SMT (Certora/Halmos) on the actual contracts** — the primary complement |
+| 4 | **Fixed-point rounding & decimals** — the Lean `rounding_favors_protocol` is over abstract `Nat`; the Solidity `mulDiv`/round directions and USDC(6)↔apxUSD/apyUSD(18) scaling must match | Model uses ideal `Nat` division; no `uint256`/decimals semantics | SMT + Static |
+| 5 | **Overflow / unchecked / division-by-zero** — Lean `x/0 = 0` masks a Solidity revert; `unchecked{}` blocks | Nat arithmetic never overflows or reverts | Static + SMT |
+| 6 | **ERC-20/4626 ledger identity** `Σ balances = totalSupply` — the model *assumes* it (`solvency_preserved`/`req_overcollateralization_limit` take `WellFormed` as a hypothesis) | Balances are bare `Address → Nat` with no summation structure | SMT invariant on the deployed token/vault |
+| 7 | **ERC-4626 inflation defense in the real vault** — the Lean proves donation-immunity of the *abstract* model; the Solidity must actually use virtual-shares/offset (or a seed deposit) so `totalAssets` isn't donatable | Model has no raw-transfer sink; the real `balanceOf`-based `totalAssets` might | SMT (share-price manipulation rule) + Fuzz |
+| 8 | **Vesting timestamp detail** — `LinearVestV0` separates `lastDepositTimestamp`/`lastTransferTimestamp`; the model collapses to a single `vestStart` (documented simplification), so a pull can shift the vesting end | Model has one clock anchor | SMT/Fuzz on `LinearVestV0` |
+| 9 | **Per-holder pro-rata distribution** (catastrophic-backstop 2nd clause) | Needs `Σ_holder reserve·balance/totalSupply`; aggregate ledger can't express it (§6.2) | Implementation audit + SMT |
+| 10 | **Access-control configuration** — the OZ `AccessManager` role graph and the **actual per-function delays** (the 0-second-timelock risk Yearn flagged; the model proves `base_model_has_no_timelock`), plus `MinterV0` rate-limit params | Model abstracts roles to `caller = admin/oracle/…`; it does not carry the deployed authority wiring or delay values | **Config review** + Static |
+| 11 | **Signature handling** in `MinterV0` — EIP-712 order signing and ERC-1271 contract signatures: replay, malleability, nonce/expiry, domain separator | The model has no signatures; mint authorization is abstracted away | Static + SMT (signature-replay rules) |
+| 12 | **Upgradeability** — the UUPS oracles (`ApxUSDRateOracle`, `ApyUSDRateOracle`): `_authorizeUpgrade` gating, initializer protection, and **ERC-7201 storage-layout** stability across upgrades | Model has no proxies, no storage layout, no upgrade op | Static (upgradeability) + OZ upgrades plugin + storage-layout diff |
+| 13 | **Gas / DoS** — e.g. `MinterV0`'s `mintHistory` `DoubleEndedQueue` growth and any unbounded loops | Model has no gas metering or loop cost | Static + gas profiling + Fuzz |
+| 14 | **Cross-chain** — `BridgedApyxToken` / `CCIPBridge` in the repo | Out of the single-chain state machine entirely | Separate bridge audit |
+| 15 | **Off-chain processes** — USD collection & the mint/redeem **spread** (`price-may-include-spreads`, applied off-chain — §6.3), treasury custody, attestations, and the oracle **price-setting process** feeding `setRate` | Not on-chain state | Operational / process audit |
+
+**Priority within this list:** #3 (bytecode⊨model) and #7 (real-vault inflation defense) are the highest-value
+SMT targets — they directly re-check, at the implementation level, the two guarantees this report proves
+abstractly. #10 (delays/roles) directly determines whether the §5 timelock recommendation is already met.
 
 ---
 
