@@ -1,4 +1,5 @@
 import D2fsSpecs.BlastRadius
+import LeanAtlas.Metadata.Attribute.Confidence
 
 /-!
 # In-scope safety: protocol-design soundness against an ordinary (honest-roles) attacker
@@ -565,7 +566,7 @@ given that ledger well-formedness holds at every point visited along the way and
 trace never calls `claimUnlock`/`flexibleClaimUnlock`/`handleStressEvent`. -/
 @[formalMeta "Solvency preservation"
   "Aggregate overcollateralization (apxUSD supply + buffer ≤ collateral + USDC reserve) is preserved across arbitrary operation traces, given ledger well-formedness at every step and excluding the three documented margin-consuming operations."
-  mainTheorem]
+  mainTheorem, confidence perfect]
 theorem solvency_preserved (s : State) (σ : List (Op × Address))
     (h_solvent : Solvent s)
     (h_wf : ∀ n, WellFormed (execTrace s (σ.take n)))
