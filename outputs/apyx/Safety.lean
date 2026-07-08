@@ -1277,4 +1277,109 @@ theorem requestUnlock_backs_claim_by_burn (s : State) (amount : Nat) (caller : A
     rw [hs', requestUnlockStep_apxUSDBal]; simp [burnApxUSD]
   omega
 
+/-! ## S9 — trace-level no-free-money for the value-preserving operation fragment
+
+This lifts the single-step `caller_net_nonpositive` (S6) to arbitrary-length traces, for the
+fragment of operations on which a *fixed* reference-rate valuation is sound. Excluded are the
+share-moving operations (`lockApxUSD`/`withdraw`/`redeem`, which move the stored exchange rate,
+so the fixed rate ceases to be the operative one), the unlock settlements
+(`claimUnlock`/`flexibleClaimUnlock`, which realize an unlock position the flat `valueAt` ledger
+does not carry), and the gift arbitrage mint (`mintApxUSD`, which credits a third party). Over
+any trace of the remaining operations — under the standing no-premium-redemption side condition
+`redemptionValue ≤ ray`, re-supplied at each visited state exactly as `solvency_preserved` does —
+no address's holdings, valued at *any* fixed rate `R`, can increase: there is no free-money
+extraction through the redemption / RFQ / unlock-request channels, at any length or interleaving.
+
+The remaining share-op + *live*-rate closure (valuing at the moving exchange rate, where a share
+redemption after accrued yield legitimately realizes pool appreciation) is the distinct,
+genuinely hard arithmetic problem left explicitly open in `docs/06-safety-properties.md` §4b. -/
+
+/-- Operations on which the flat fixed-rate `valueAt` ledger is a sound value measure: neither
+share-moving (`lockApxUSD`/`withdraw`/`redeem`), nor an unlock settlement
+(`claimUnlock`/`flexibleClaimUnlock`), nor a third-party gift mint (`mintApxUSD`). -/
+def ValuePreservingOp (op : Op) : Prop :=
+  (∀ to n, op ≠ Op.mintApxUSD to n) ∧ (∀ n, op ≠ Op.lockApxUSD n) ∧
+  (∀ n r, op ≠ Op.withdraw n r) ∧ (∀ sh r, op ≠ Op.redeem sh r) ∧
+  (∀ id, op ≠ Op.claimUnlock id) ∧ (∀ id, op ≠ Op.flexibleClaimUnlock id)
+
+/-- Single step of S9: a value-preserving operation never increases any address's holdings
+valued at a fixed rate `R` (given the no-premium-redemption side condition). -/
+theorem valueAt_step_le (R : Nat) (s : State) (op : Op) (caller a : Address) (s' : State)
+    (h_step : step s op caller = some s') (h_op : ValuePreservingOp op)
+    (h_rv : s.redemptionValue ≤ ray) :
+    valueAt R s' a ≤ valueAt R s a := by
+  obtain ⟨hm, hl, hw, hr, hc, hf⟩ := h_op
+  cases op
+  case mintApxUSD to n => exact absurd rfl (hm to n)
+  case lockApxUSD n => exact absurd rfl (hl n)
+  case withdraw n r => exact absurd rfl (hw n r)
+  case redeem sh r => exact absurd rfl (hr sh r)
+  case claimUnlock id => exact absurd rfl (hc id)
+  case flexibleClaimUnlock id => exact absurd rfl (hf id)
+  case depositUSDC amount =>
+    obtain ⟨-, -, -, hle, hs'⟩ := inv_depositUSDC s amount caller s' h_step
+    subst hs'
+    unfold valueAt
+    by_cases hac : a = caller <;>
+      simp [emitEvent, mintApxUSD, hac] <;> omega
+  case redeemApxUSD amount =>
+    obtain ⟨-, -, hle, -, -, hs'⟩ := inv_redeemApxUSD s amount caller s' h_step
+    subst hs'
+    have hb := redemptionValue_div_ray_le amount s.redemptionValue h_rv
+    unfold valueAt
+    by_cases hac : a = caller <;>
+      simp [emitEvent, burnApxUSD, hac] <;> omega
+  case requestUnlock amount =>
+    obtain ⟨-, hle, hs'⟩ := inv_requestUnlock s amount caller s' h_step
+    subst hs'
+    unfold valueAt
+    have hx : (requestUnlockStep s caller amount).apxUSDBal a ≤ s.apxUSDBal a := by
+      rw [requestUnlockStep_apxUSDBal]; simp [burnApxUSD]; split <;> omega
+    simp only [requestUnlockStep_apyUSDBal, requestUnlockStep_usdcBal]
+    omega
+  case flexibleRequestUnlock amount =>
+    obtain ⟨-, hle, hs'⟩ := inv_flexibleRequestUnlock s amount caller s' h_step
+    subst hs'
+    unfold valueAt
+    by_cases hac : a = caller <;>
+      simp [createFlexibleUnlock, burnApxUSD, hac] <;> omega
+  case executeRFQRedemption user amount =>
+    obtain ⟨-, -, hle, -, hs'⟩ := inv_executeRFQRedemption s user amount caller s' h_step
+    subst hs'
+    have hb := redemptionValue_div_ray_le amount s.redemptionValue h_rv
+    unfold valueAt
+    by_cases hau : a = user <;>
+      simp [burnApxUSD, hau] <;> omega
+  all_goals
+    simp only [step] at h_step
+    split at h_step <;>
+      first
+        | (cases Option.some.inj h_step; simp [valueAt])
+        | exact absurd h_step (by simp)
+
+/-- **S9 `caller_net_nonpositive_trace`** — the trace-level generalization of
+`caller_net_nonpositive`: for any fixed reference rate `R` and any trace built only from
+value-preserving operations (§`ValuePreservingOp`), with the no-premium-redemption side
+condition `redemptionValue ≤ ray` holding at every visited prefix state, no address's holdings
+valued at `R` increase across the whole trace. -/
+theorem caller_net_nonpositive_trace (R : Nat) (s : State) (σ : List (Op × Address)) (a : Address)
+    (h_ops : ∀ p ∈ σ, ValuePreservingOp p.1)
+    (h_rv : ∀ n, (execTrace s (σ.take n)).redemptionValue ≤ ray) :
+    valueAt R (execTrace s σ) a ≤ valueAt R s a := by
+  induction σ generalizing s with
+  | nil => simp [execTrace]
+  | cons p σ ih =>
+    obtain ⟨op, c⟩ := p
+    have hop := h_ops (op, c) List.mem_cons_self
+    have hrv0 : s.redemptionValue ≤ ray := by simpa [execTrace] using h_rv 0
+    have htailops : ∀ q ∈ σ, ValuePreservingOp q.1 :=
+      fun q hq => h_ops q (List.mem_cons_of_mem _ hq)
+    simp only [execTrace]
+    cases hstep : step s op c with
+    | none =>
+      exact ih s htailops (by intro n; simpa [execTrace, hstep] using h_rv (n + 1))
+    | some s1 =>
+      have htail := ih s1 htailops (by intro n; simpa [execTrace, hstep] using h_rv (n + 1))
+      exact Nat.le_trans htail (valueAt_step_le R s op c a s1 hstep hop hrv0)
+
 end Apyx
