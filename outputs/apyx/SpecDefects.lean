@@ -90,4 +90,32 @@ theorem req_catastrophic_backstop_distributes_buffer :
       simp [bufWitness', bufWitness]
     omega
 
+/-- Witness for the missing redemption-price **floor** (docs/08 pattern G, gap-witness).
+The redeem guards' fields are set explicitly (all to plausible values) so evaluation is closed. -/
+private def floorWitness : State :=
+  { (default : State) with
+      globalPause := false, whitelist := fun _ => true, apxUSDBal := fun _ => 1,
+      redemptionValue := 0, apxUSDMarketPrice := 0, usdcReserve := 0,
+      totalCollateralValue := 0, totalSupply_apxUSD := 1 }
+
+/-- **`redemption_has_no_floor`** (docs/08 §B.3 / templates/invariants `G`): the redemption path
+has **no lower floor** on the redemption price. In a state whose `redemptionValue` is 0 (reachable
+via `catastrophicBackstop` from a zero-collateral state), a whitelisted holder can still
+successfully `redeemApxUSD` — the guards do not forbid it — yet the USDC paid for `amount` apxUSD is
+`amount · redemptionValue / ray = 0`: the redeemer burns their apxUSD for **zero**. This is the
+lower-bound companion to `BlastRadius.redeem_payout_has_no_cap` (no *upper* bound) and generalizes
+`admin_rfq_coalition_drains` (same via the RFQ path) to the ordinary redeem entry point. Fix: a
+redemption-price floor / clamp (README §5). -/
+theorem redemption_has_no_floor :
+    ∃ (s : State) (caller amount : Nat),
+      0 < amount ∧ s.redemptionValue = 0 ∧ s.whitelist caller = true ∧
+      amount ≤ s.apxUSDBal caller ∧
+      (∃ s', step s (Op.redeemApxUSD amount) caller = some s') ∧
+      amount * s.redemptionValue / ray = 0 := by
+  have hray : (0 : Nat) < ray := Nat.pow_pos (by decide)
+  refine ⟨floorWitness, 0, 1, Nat.one_pos, rfl, rfl, by simp [floorWitness], ?_, by simp [floorWitness]⟩
+  rcases h : step floorWitness (Op.redeemApxUSD 1) 0 with _ | s'
+  · exact absurd h (by simp [step, floorWitness, overcollateralizationBuffer, Nat.not_le.mpr hray])
+  · exact ⟨s', rfl⟩
+
 end Apyx
