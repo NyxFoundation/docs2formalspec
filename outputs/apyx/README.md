@@ -350,34 +350,32 @@ axioms of Lean's logic; none is an unproved assumption. Compile status is record
 
 ---
 
-## 9. A consistency check on the requirements — and an extraction artifact (not an Apyx defect)
+## 9. A consistency check on the requirements — an extraction artifact, now fixed
 
 The three groups above take the specification as the reference. This one turns the lens on the extracted
-requirement set itself: **are the requirements mutually consistent?** The check flagged one apparent
-conflict and we proved it (`SpecDefects.lean`, `extracted_reqs_inconsistent_buffer_vs_catastrophic`):
+requirement set itself: **are the requirements mutually consistent?** The check flagged one apparent conflict:
 
-- `buffer-non-decreasing` (as extracted) requires, *unconditionally*, that the buffer **MUST NOT decrease**.
+- `buffer-non-decreasing` (as first extracted) required, *unconditionally*, that the buffer **MUST NOT
+  decrease**.
 - `catastrophic-backstop` requires that, on a catastrophic event, the system **distribute the entire buffer**.
 
-The proof exhibits a state with a positive buffer on which the mandated catastrophic-backstop step strictly
-decreases it — so those two *extracted* statements are jointly unsatisfiable.
+A proof confirmed those two *extracted* statements were jointly unsatisfiable. Tracing the requirement back to
+the source documentation (`corpus.md`) then showed the **source is consistent**: it states the buffer is "not
+consumed during **routine redemptions**" and "preserved through **stress events**," and separately that a
+**catastrophic scenario** (a devastating hack or wind-down) distributes the entire buffer — an explicitly
+*separate*, terminal mechanism. Our automated extractor had generalized the *stress-events* sentence into an
+*unconditional* "MUST NOT decrease," dropping the scope. **This was a defect in our tooling, not in Apyx.**
 
-**But this is an artifact of our automated requirement extraction, not a flaw in Apyx.** Tracing the
-requirement back to the source documentation (`corpus.md`) shows the **source is consistent**: it states the
-buffer is "not consumed during **routine redemptions**" and "preserved through **stress events**," and
-separately that a **catastrophic scenario** (a devastating hack or wind-down) distributes the entire buffer —
-an explicitly *separate*, terminal mechanism. The `buffer-non-decreasing` requirement's own source quote is
-the *stress-events* sentence; our extractor generalized it into an *unconditional* "MUST NOT decrease,"
-dropping the scope. The correctly-scoped requirements (`buffer-preservation` for routine, `buffer-growth-stress`
-for stress) are already present and faithful.
+**Resolution (applied).** We corrected `requirements.json` and `SPEC.md` to restore the routine/stress scope
+with the explicit catastrophic exception; the Lean model's `req_buffer_non_decreasing` was already scoped to
+routine operations and now matches. The proof is retained, renamed
+`req_catastrophic_backstop_distributes_buffer`, as the machine-checked statement of the catastrophic
+*exception* — the backstop drives the buffer to zero, which the corrected requirement excludes and
+`catastrophic-backstop` mandates (this also partially closes the §6.2 gap on that requirement's second
+clause). **No change to Apyx's specification or contracts was warranted.**
 
-**Conclusion:** no change to Apyx's specification or contracts is warranted. The fix belongs in our
-extraction pipeline (don't drop scope adverbs / exception clauses). We keep the proof as a machine-checked
-demonstration of the consistency-search method — and as a reminder that every flagged conflict must be
-traced to the source before it is attributed to the protocol.
-
-Methodology and further candidate checks are in
-[`docs/07-spec-defects.md`](https://github.com/NyxFoundation/docs2formalspec/blob/main/docs/07-spec-defects.md).
+The methodology, the source-tracing rule this exemplifies, and four further candidate checks (in progress) are
+in [`docs/07-spec-defects.md`](https://github.com/NyxFoundation/docs2formalspec/blob/main/docs/07-spec-defects.md).
 
 ---
 

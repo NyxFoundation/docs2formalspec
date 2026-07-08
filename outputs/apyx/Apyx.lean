@@ -3138,11 +3138,16 @@ theorem req_mint_redeem_at_redemption_value (s : State) (amount : Nat) (to calle
     subst hs'
     simp [emitEvent, burnApxUSD]
 
-/-- REQ buffer-non-decreasing: The overcollateralization buffer, defined as the difference
-between Redemption Value and Total Collateral Value, MUST NOT decrease; it MAY increase over
-time due to yield spreads and collateral appreciation. (Model: across every operation that
-burns apxUSD — standard and flexible unlock requests, direct redemptions and RFQ
-redemptions — the buffer is non-decreasing.) -/
+/-- REQ buffer-non-decreasing (corrected 2026-07-08 to match `corpus.md`): outside of a
+catastrophic backstop, the overcollateralization buffer MUST NOT decrease during routine
+redemptions or stress events; it MAY increase over time via yield spreads and collateral
+appreciation. A catastrophic backstop is the sole exception and distributes the entire buffer
+(see `req_catastrophic_backstop` and `SpecDefects.req_catastrophic_backstop_distributes_buffer`).
+(Model: across every routine apxUSD-burning operation — standard and flexible unlock requests,
+direct redemptions and RFQ redemptions — the buffer is non-decreasing. `catastrophicBackstop`
+is correctly *not* covered here, matching the corrected requirement's exception; the earlier
+unconditional wording of this requirement was an over-generalized extraction, see
+`docs/07-spec-defects.md` candidate 1.) -/
 theorem req_buffer_non_decreasing (s s' : State) (op : Op) (caller : Address)
     (h_step : step s op caller = some s')
     (h_redemption : (∃ a, op = Op.redeemApxUSD a) ∨ (∃ a, op = Op.requestUnlock a) ∨

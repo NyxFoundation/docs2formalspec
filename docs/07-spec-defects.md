@@ -84,16 +84,17 @@ Trail of Bits の **invariant-driven development**[^idd] は、設計欠陥(busi
 >
 > 候補を機械証明できても、それは「**抽出された** requirements.json が矛盾する」ことしか示さない。矛盾の**根本原因**が (a) 原典仕様(corpus.md / 実コントラクト)自体の欠陥なのか、(b) LLM 抽出が原典を**取りこぼした/過剰一般化した**「**抽出欠陥**(D6)」なのかは、**各要件をその `source_quote` と原典に遡って**初めて判定できる。**この照合を省くと、ツール自身の抽出ミスを「プロトコルの欠陥」と誤報告する。** 候補1がまさにこの罠だった(下記)。手順: 矛盾を検出 → 各要件の `source_quote` を確認 → 原典(corpus.md、可能なら Solidity)で当該条項のスコープ・例外を読む → (a)/(b) を判定。
 
-### 候補1 ✅ **確定(機械証明済み)= 抽出欠陥(D6)**。原典仕様は無矛盾。
+### 候補1 ✅ **解決済み**(抽出欠陥 D6 と判明 → spec 修正・モデル整合済み、2026-07-08)
 
-**機械証明**: `outputs/apyx/SpecDefects.lean` の `extracted_reqs_inconsistent_buffer_vs_catastrophic`(sorry 0)。バッファ>0 の witness 上で、`catastrophic-backstop` が要求する step が**バッファを厳密に減少させる**ことを検証 ⇒ 抽出された「MUST NOT decrease(無条件)」と「buffer 全額分配」は同時に守れない。
+**経緯**: バッファ>0 の witness 上で `catastrophic-backstop` の step が**バッファを厳密に減少させる**ことを機械証明 ⇒ 抽出された「MUST NOT decrease(無条件)」と「buffer 全額分配」が矛盾。だが §3.0 の原典照合により **抽出欠陥(D6)** と判明:
+- `corpus.md` は無矛盾:バッファは「**routine redemptions** の間は消費されない」「**stress events** を通じて保全」。catastrophic(終端事象)は「buffer 全額分配」と**別枠**。
+- `buffer-non-decreasing` の `source_quote` は *stress events* の文なのに statement が無条件化されていた(過剰一般化)。正しくスコープした `buffer-preservation`(routine)・`buffer-growth-stress`(stress)が別に存在し冗長。
 
-**しかし原典照合の結果、これは *抽出欠陥* であり *原典仕様の欠陥ではない*(2026-07-08 確認)**:
-- `corpus.md` は明確にスコープ分けしており**無矛盾**: バッファは「**routine redemptions** の間は消費されない」「**stress events** を通じて保全される(むしろ増加)」。一方 catastrophic(壊滅的ハック・wind-down 等の**終端事象**)では「buffer を含む reserve 全額を分配」と**別枠で**規定。
-- ところが `buffer-non-decreasing` の **`source_quote`** は *stress events* の文(「preserved through **stress events**」)なのに、抽出された **statement** は「**MUST NOT decrease**(無条件)」— **LLM がスコープを落として過剰一般化**した。
-- しかも原典を忠実に反映した版(`buffer-preservation`=routine 限定、`buffer-growth-stress`=stress 限定)が**別に存在**し、`buffer-non-decreasing` は冗長かつ過剰一般化。
-
-**是正**: `requirements.json` の `buffer-non-decreasing` を原典どおり「**routine/stress 下で** MUST NOT decrease(catastrophic を除く)」に修正するか、冗長なので削除する。**Apyx のプロトコル・ドキュメントに修正は不要。** これはツール(抽出パイプライン)側の欠陥。
+**是正(完了)**:
+- `requirements.json` / `SPEC.md` の `buffer-non-decreasing` を原典どおり「**catastrophic を除き、routine/stress 下で** MUST NOT decrease」に修正済み。
+- Lean モデルの `req_buffer_non_decreasing` は元から routine op 限定で**修正仕様と整合**(モデルは正しかった)。docstring を修正仕様に更新。
+- SpecDefects の定理を `req_catastrophic_backstop_distributes_buffer` に改名し、**catastrophic 例外の肯定的言明**(backstop が buffer を 0 にする=修正済み要件が除外する挙動)として保持。`README` §6.2 の「catastrophic 第2節が未モデル化」ギャップを部分的に closing(buffer→0 を証明。per-holder 按分は集約台帳の表現限界で残置)。
+- **Apyx 側の修正は不要。** これはツール(抽出パイプライン)の欠陥だった。
 - `buffer-non-decreasing`: 「overcollateralization buffer は **MUST NOT decrease**」
 - `buffer-growth-stress`: 「ストレス事象では **むしろ増加** すべき(drain されない)」
 - `catastrophic-backstop`: 「カタストロフィ検出時、Redemption Value を Total Collateral Value に等しくし、**buffer を含む reserve 全額を** holder に pro-rata 分配する」
@@ -134,7 +135,7 @@ Trail of Bits の **invariant-driven development**[^idd] は、設計欠陥(busi
 - **invariant ギャップ表**(§2.3)を要件抽出時に併走生成し、各不変条件に「強制する要件」を紐付け、空欄=ギャップとして自動フラグ。
 - **テンプレート化**: `templates/spec-defects/` に M1–M8 の Lean スケルトン(充足性 witness・トリプル矛盾・悪状態到達・vacuity・被覆表)を用意する構想。
 
-**最初の一歩(完了)**: 候補1を M1+M2 で `outputs/apyx/SpecDefects.lean` に機械証明済み(`extracted_reqs_inconsistent_buffer_vs_catastrophic`)。手法の有効性を実証すると同時に、**原典照合(§3.0)の重要性**をも実証した — 機械証明された矛盾が *抽出欠陥(D6)* であり原典プロトコルの欠陥ではなかった。次段は候補2(MAY vs MUST、M12)・候補4(下限の沈黙、M3+M5)を**原典照合込みで**検証する。
+**候補1(完了)**: M1+M2 で機械証明 → §3.0 の原典照合で **抽出欠陥(D6)** と判明 → `requirements.json`/`SPEC.md` 修正・Lean モデル整合・定理を `req_catastrophic_backstop_distributes_buffer`(catastrophic 例外の肯定形)に改名、まで完了。手法の有効性と**原典照合の不可欠性**を同時に実証した。次段は候補2(MAY vs MUST、M12)・候補4(下限の沈黙、M3+M5)を**原典照合込みで**検証する。
 
 **是正先はツール(抽出パイプライン)**: `requirements.json` の `buffer-non-decreasing` を原典どおり routine/stress 限定に修正または削除する(冗長)。**Apyx 側の仕様修正は不要。** 併せて、抽出パイプラインに「MAY 節・スコープ副詞(during routine/stress 等)・例外条項を落とさない」チェック(M11 の予防層)を組み込むべき。
 
