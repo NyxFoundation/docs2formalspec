@@ -5,7 +5,7 @@
 | **Subject** | Apyx (apyx.fi) — the apxUSD / apyUSD dividend-backed stablecoin protocol |
 | **Contracts** (Ethereum mainnet, per the ingested documentation) | apxUSD [`0x98A8…4665`](https://etherscan.io/address/0x98A878b1Cd98131B271883B390f68D2c90674665) · apyUSD [`0x38EE…8a6A`](https://etherscan.io/address/0x38EEb52F0771140d10c4E9A9a72349A329Fe8a6A) · UnlockToken [`0x9377…BF4e6`](https://etherscan.io/address/0x93775E2dFa4e716c361A1f53F212c7AE031BF4e6) |
 | **Method** | RFC 2119 specification → Lean 4 state-machine model → machine-checked theorems |
-| **Result** | 167 theorems proved, 0 `sorry`, kernel-verified (`lake build`, Lean 4.31.0) — including one machine-checked **specification contradiction** (§9) |
+| **Result** | 167 theorems proved, 0 `sorry`, kernel-verified (`lake build`, Lean 4.31.0). No defect was found in Apyx's protocol or documentation; §9 records one *extraction* artifact in our own tooling. |
 | **Date** | 2026-07-07 |
 
 ---
@@ -22,7 +22,7 @@ source by the Lean kernel, in four groups:
 | **Requirement conformance** | Does the design behave as the documentation specifies? | 82 | [`Apyx.lean`](Apyx.lean) |
 | **Key-compromise blast radius** | If a privileged operator key is stolen, how much can be lost? | 56 | [`BlastRadius.lean`](BlastRadius.lean) |
 | **Design safety** | Can an ordinary user drain the protocol using only legitimate calls? | 28 | [`Safety.lean`](Safety.lean) |
-| **Spec-defect search** | Is the requirement set itself internally consistent? | 1 | [`SpecDefects.lean`](SpecDefects.lean) |
+| **Spec-defect search** | Is the requirement set itself internally consistent? | 1 | [`SpecDefects.lean`](SpecDefects.lean) — surfaced an *extraction* artifact only (§9) |
 
 Headline findings for Apyx:
 
@@ -32,9 +32,10 @@ Headline findings for Apyx:
   RFQ counterparty), because the model has no lower bound on the redemption price (§4.2, §5).
 - **The vesting logic is correct.** Formalizing it prompted a close reading of `LinearVestV0.sol`, which
   confirmed the deployed two-accumulator vesting design does not forfeit accrued yield (§4.3).
-- **The specification has one internal contradiction** (§9, machine-checked): the requirement that the
-  overcollateralization buffer "MUST NOT decrease" conflicts with the catastrophic-backstop requirement to
-  "distribute the entire buffer." One of the two needs an explicit catastrophic-case exception.
+- **No contradiction in Apyx's own documentation.** A consistency search flagged an apparent conflict
+  between two *extracted* requirements, but tracing it to the source docs showed the source is consistent —
+  the conflict was an artifact of our automated extraction over-generalizing one requirement (§9). No change
+  to Apyx's spec is warranted; the fix is in our tooling.
 - **Design recommendations** (a redemption-price floor, a withdrawal rate limit, and an admin timelock)
   are backed by proof: §5 shows exactly what each would guarantee.
 
@@ -349,28 +350,33 @@ axioms of Lean's logic; none is an unproved assumption. Compile status is record
 
 ---
 
-## 9. A specification-level contradiction (machine-checked)
+## 9. A consistency check on the requirements — and an extraction artifact (not an Apyx defect)
 
-The three groups above take the specification as the reference. This one turns the lens on the
-specification itself: **are the requirements mutually consistent?** We found one that are not, and proved
-it (`SpecDefects.lean`, `spec_defect_buffer_nondecrease_vs_catastrophic`):
+The three groups above take the specification as the reference. This one turns the lens on the extracted
+requirement set itself: **are the requirements mutually consistent?** The check flagged one apparent
+conflict and we proved it (`SpecDefects.lean`, `extracted_reqs_inconsistent_buffer_vs_catastrophic`):
 
-- `buffer-non-decreasing` requires, *unconditionally*, that the overcollateralization buffer **MUST NOT
-  decrease** (it "MAY increase … over time").
-- `catastrophic-backstop` requires that, on a catastrophic event, the system **distribute the entire
-  reserve, including the buffer**, pro-rata to holders — i.e. drive the buffer to zero.
+- `buffer-non-decreasing` (as extracted) requires, *unconditionally*, that the buffer **MUST NOT decrease**.
+- `catastrophic-backstop` requires that, on a catastrophic event, the system **distribute the entire buffer**.
 
-These two obligations cannot both be met: the proof exhibits a state with a positive buffer on which the
-mandated catastrophic-backstop step (its own postcondition holds) **strictly decreases** the buffer. So the
-specification as written is internally contradictory in the catastrophic case. (The model already had to
-scope its `req_buffer_non_decreasing` proof to the routine-redemption operations for exactly this reason —
-an exclusion the natural-language requirement never states.)
+The proof exhibits a state with a positive buffer on which the mandated catastrophic-backstop step strictly
+decreases it — so those two *extracted* statements are jointly unsatisfiable.
 
-**Recommendation:** add an explicit catastrophic-case exception — either "the buffer MUST NOT decrease
-*during routine operation*" on the first requirement, or "the buffer is exempt from routine
-non-decrease during a catastrophic backstop" on the second. This is a documentation fix, not a code change.
+**But this is an artifact of our automated requirement extraction, not a flaw in Apyx.** Tracing the
+requirement back to the source documentation (`corpus.md`) shows the **source is consistent**: it states the
+buffer is "not consumed during **routine redemptions**" and "preserved through **stress events**," and
+separately that a **catastrophic scenario** (a devastating hack or wind-down) distributes the entire buffer —
+an explicitly *separate*, terminal mechanism. The `buffer-non-decreasing` requirement's own source quote is
+the *stress-events* sentence; our extractor generalized it into an *unconditional* "MUST NOT decrease,"
+dropping the scope. The correctly-scoped requirements (`buffer-preservation` for routine, `buffer-growth-stress`
+for stress) are already present and faithful.
 
-Methodology and four further (as-yet-unverified) candidate spec defects are in
+**Conclusion:** no change to Apyx's specification or contracts is warranted. The fix belongs in our
+extraction pipeline (don't drop scope adverbs / exception clauses). We keep the proof as a machine-checked
+demonstration of the consistency-search method — and as a reminder that every flagged conflict must be
+traced to the source before it is attributed to the protocol.
+
+Methodology and further candidate checks are in
 [`docs/07-spec-defects.md`](https://github.com/NyxFoundation/docs2formalspec/blob/main/docs/07-spec-defects.md).
 
 ---

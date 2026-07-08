@@ -2,12 +2,24 @@ import D2fsSpecs.Apyx
 
 /-! # Spec-level defect demonstrations (`docs/07-spec-defects.md`)
 
-Machine-checked confirmations of **specification-level defects** — internal contradictions
-between the RFC 2119 requirements themselves, as opposed to model-fidelity gaps or
-implementation bugs. Unlike the requirement-conformance theorems in `Apyx.lean` (which prove
-`model ⊨ requirement`, and so treat the specification as ground truth and can never find the
-spec *wrong*), the theorems here prove the *requirement set itself* is inconsistent: they are
-the "fourth activity" of §`docs/07`, run against the spec rather than assuming it.
+Machine-checked confirmations that the RFC 2119 requirement set is internally inconsistent.
+Unlike the requirement-conformance theorems in `Apyx.lean` (which prove `model ⊨ requirement`,
+treating the specification as ground truth and so never able to find the spec *wrong*), the
+theorem here proves the *requirement set itself* is inconsistent — the "fourth activity" of
+§`docs/07`, run against the spec rather than assuming it.
+
+**Important attribution (root cause is EXTRACTION, not the protocol).** The inconsistency below
+is between two entries in the LLM-*extracted* `requirements.json`, and tracing it back to the
+source documentation (`corpus.md`) shows the **source is consistent**: the docs scope buffer
+preservation to *routine redemptions* and *stress events*, and treat the catastrophic backstop
+(a terminal hack/wind-down event) as a separate mechanism that deliberately distributes the
+buffer. The contradiction arises only because the extractor **over-generalized**
+`buffer-non-decreasing` into an *unconditional* "MUST NOT decrease", dropping the "through
+stress events" scope that is present in its own `source_quote`. So this is a **requirement-
+extraction defect** (a defect in the tool's own output), not a flaw in Apyx's protocol or
+documentation. It is kept because it is a genuine, machine-checked demonstration of the
+spec-defect-search method — and a cautionary example of why every candidate must be traced to
+the source before being reported (see `docs/07` §3).
 
 This module is additive and leaves `Apyx.lean`/`BlastRadius.lean`/`Safety.lean` untouched. -/
 
@@ -26,27 +38,30 @@ model's effect (`redemptionValue := totalCollateralValue`, `emergencyFlag := tru
 private def bufWitness' : State :=
   { bufWitness with redemptionValue := bufWitness.totalCollateralValue, emergencyFlag := true }
 
-/-- **Confirmed spec defect (docs/07 candidate 1): `buffer-non-decreasing` contradicts
-`catastrophic-backstop`.**
+/-- **Requirement-extraction defect (docs/07 candidate 1): the *extracted* requirements
+`buffer-non-decreasing` and `catastrophic-backstop` are jointly unsatisfiable.**
 
-`buffer-non-decreasing` states, *unconditionally*, that the overcollateralization buffer
-"MUST NOT decrease" (it "MAY increase … over time"). `catastrophic-backstop` mandates that,
-on a catastrophic event, the system "set Redemption Value equal to Total Collateral Value and
-… distribute the entire reserve, including the buffer, pro-rata to remaining holders" — i.e.
-drive the buffer to zero. The two obligations are jointly unsatisfiable in any catastrophic
-scenario reached from a positive-buffer state.
+As written in `requirements.json`, `buffer-non-decreasing` states *unconditionally* that the
+overcollateralization buffer "MUST NOT decrease" (it "MAY increase … over time"), while
+`catastrophic-backstop` mandates that, on a catastrophic event, the system "distribute the
+entire reserve, including the buffer, pro-rata" — i.e. drive the buffer to zero. This theorem
+proves the two are jointly unsatisfiable: a state with a strictly positive buffer on which the
+mandated `catastrophicBackstop` step (its own postcondition `redemptionValue =
+totalCollateralValue` holds on the result) *strictly decreases* the buffer.
 
-The witness makes this concrete: a state with a strictly positive buffer on which the
-mandated `catastrophicBackstop` step — whose own postcondition `redemptionValue =
-totalCollateralValue` holds on the result — *strictly decreases* the buffer, violating
-`buffer-non-decreasing`. No system can satisfy both requirements as written; one of them must
-carry an explicit catastrophic-case exception that the specification does not state.
-
-Corroboration inside the model itself: `Apyx.req_buffer_non_decreasing` had to be scoped to
-the routine-redemption operations (`redeemApxUSD` / `requestUnlock` / `flexibleRequestUnlock`
-/ `executeRFQRedemption`) — it is *false* for `catastrophicBackstop`, exactly the exclusion
-this theorem forces, and one the natural-language requirement never authorizes. -/
-theorem spec_defect_buffer_nondecrease_vs_catastrophic :
+**Root cause — extraction, not protocol (verified against the source).** The source
+documentation (`corpus.md`) is *consistent*: it says the buffer "is **not** consumed during
+**routine redemptions**" and "is preserved through **stress events**", and separately that "in
+a **catastrophic scenario** — a devastating hack, wind-down, … — the entire reserve, buffer
+included, is distributed." The catastrophic case is an explicit, separate terminal mechanism.
+The `buffer-non-decreasing` requirement's own `source_quote` is the *stress-events* sentence —
+but the extractor generalized it into an unconditional "MUST NOT decrease", dropping the scope.
+So the contradiction is a defect in the tool's **extraction** (this repo's `requirements.json`),
+not in Apyx's protocol or docs; the correctly-scoped `buffer-preservation` (routine) and
+`buffer-growth-stress` (stress) entries already capture the source faithfully and are redundant
+with this over-generalized one. Corroboration: `Apyx.req_buffer_non_decreasing` is itself scoped
+to routine-redemption ops precisely because the unconditional reading is false. -/
+theorem extracted_reqs_inconsistent_buffer_vs_catastrophic :
     ∃ (s s' : State),
       -- a reachable-shaped state with a strictly positive buffer
       0 < overcollateralizationBuffer s ∧
