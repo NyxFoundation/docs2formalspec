@@ -104,7 +104,7 @@
     "id": "price-may-include-spreads",
     "category": "economic",
     "statement": "The protocol MAY reflect spreads and offchain execution expenses in the price during minting and redemption.",
-    "rationale": "Spreads and execution expenses may be reflected in the price.",
+    "rationale": "On-chain, src/MinterV0.sol mints exactly order.amount apxUSD with NO spread; any spreads / offchain execution expenses are applied OFF-CHAIN at USD collection time, outside the on-chain state machine. So this MAY clause is off-chain (unformalizable on-chain) and does not conflict with the on-chain 'issuance priced at $1' guarantee (docs/07 candidate 2).",
     "source_quote": "Any spreads and offchain execution expenses incurred during minting and redemption may be reflected in the price.",
     "formalizable": true,
     "sources": [
@@ -236,7 +236,7 @@
     "id": "exchange-rate-non-decreasing",
     "category": "arithmetic",
     "statement": "The exchange rate between apyUSD and apxUSD MUST be non‑decreasing over time.",
-    "rationale": "Yield accrues through a gradually increasing exchange rate.",
+    "rationale": "The apyUSD/apxUSD exchange rate (src/oracles/ApyUSDRateOracle.sol reads the ERC-4626 vault's convertToAssets, i.e. apxUSD-per-apyUSD) is apxUSD-denominated and insulated from apxUSD-collateral stress: a collateral loss reduces apxUSD's USD redemption value, not the apxUSD count backing apyUSD. Non-decreasing (yield-driven) is therefore faithful (docs/07 candidate 5).",
     "source_quote": "Yield accrues through a gradually increasing exchange rate, meaning each apyUSD can be redeemed for more apxUSD over time.",
     "formalizable": true,
     "sources": [
@@ -543,8 +543,8 @@
   {
     "id": "catastrophic-backstop",
     "category": "state",
-    "statement": "Upon detection of a catastrophic scenario, the system MUST set Redemption Value equal to Total Collateral Value and MUST distribute the entire reserve, including the buffer, pro‑rata to remaining holders.",
-    "rationale": "The document defines the final backstop behavior in catastrophic events.",
+    "statement": "Upon detection of a catastrophic scenario, the system MUST set the per-apxUSD Redemption Value to Total Collateral Value divided by the total apxUSD supply, so that redeeming the entire supply distributes the full reserve (buffer included) pro-rata to holders. Redemption Value is a per-unit apxUSD→USDC price (the deployed ApxUSDRateOracle rate, 1e18 precision), not an aggregate.",
+    "rationale": "Cross-check with src/oracles/ApxUSDRateOracle.sol (2026-07-08): `rate` is a per-unit apxUSD→USDC price with a `newRate > 0` guard. The corpus phrase 'Total Collateral Value becomes the redemption value' therefore means the per-unit rate = TCV / totalSupply, not TCV itself; the model was corrected accordingly (docs/07 candidate 3).",
     "source_quote": "In a catastrophic scenario—a devastating hack, wind-down, or any event ending the protocol's future viability—Total Collateral Value becomes the redemption value, and the entire reserve, buffer included, is distributed pro-rata to remaining holders.",
     "formalizable": true,
     "sources": [

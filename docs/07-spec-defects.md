@@ -82,7 +82,9 @@ Trail of Bits の **invariant-driven development**[^idd] は、設計欠陥(busi
 
 > ### 3.0 最重要の教訓 — 抽出欠陥 vs 原典仕様欠陥を必ず区別せよ
 >
-> 候補を機械証明できても、それは「**抽出された** requirements.json が矛盾する」ことしか示さない。矛盾の**根本原因**が (a) 原典仕様(corpus.md / 実コントラクト)自体の欠陥なのか、(b) LLM 抽出が原典を**取りこぼした/過剰一般化した**「**抽出欠陥**(D6)」なのかは、**各要件をその `source_quote` と原典に遡って**初めて判定できる。**この照合を省くと、ツール自身の抽出ミスを「プロトコルの欠陥」と誤報告する。** 候補1がまさにこの罠だった(下記)。手順: 矛盾を検出 → 各要件の `source_quote` を確認 → 原典(corpus.md、可能なら Solidity)で当該条項のスコープ・例外を読む → (a)/(b) を判定。
+> 候補を機械証明できても、それは「**抽出された** requirements.json が矛盾する」ことしか示さない。矛盾の**根本原因**が (a) 原典仕様(corpus.md / 実コントラクト)自体の欠陥なのか、(b) LLM 抽出が原典を**取りこぼした/過剰一般化した**「**抽出欠陥**(D6)」なのかは、**各要件をその `source_quote` と原典に遡って**初めて判定できる。**この照合を省くと、ツール自身の抽出ミスを「プロトコルの欠陥」と誤報告する。** 候補1がまさにこの罠だった(下記)。
+>
+> **手順**: 矛盾を検出 → 各要件の `source_quote` を確認 → 原典で当該条項のスコープ・例外・単位を読む → (a)/(b) を判定。**原典の優先順位: ① corpus.md(散文ドキュメント)→ ② corpus が曖昧・暗黙・不精密な場合は Solidity 実装(`apyx-labs/evm-contracts`)を ground truth とし、それに従って spec を構成する。** 実装が最終真実(corpus は実装の非形式的記述にすぎない)。候補2・3・5 は corpus が曖昧だったため Solidity で解決した(下記)。
 
 ### 候補1 ✅ **解決済み**(抽出欠陥 D6 と判明 → spec 修正・モデル整合済み、2026-07-08)
 
@@ -101,38 +103,42 @@ Trail of Bits の **invariant-driven development**[^idd] は、設計欠陥(busi
 
 → カタストロフィ/ストレス状態において、「バッファを減らしてはならない」と「バッファを全額分配せよ」が**同時に要求される**。三つ組(あるいは buffer の定義 C を介した A+B+C)を見て初めて現れる合成的矛盾。**検証法 M1+M2**: バッファ>0 の到達可能なカタストロフィ状態で、`buffer-non-decreasing` の事後条件と `catastrophic-backstop` の事後条件の連言が `False` を導くことを Lean で示せる(候補中もっとも形式化しやすい — 次段の推奨)。
 
-**候補2–5 の三分結果(2026-07-08、§3.0 の原典照合を実施)**: いずれも候補1のような *ハードな矛盾* でも *抽出欠陥* でもなかった。候補2・3・5 は **原典自体の曖昧性/不完全性(D2/D3)** で、Apyx への **明確化依頼**が適切(ツール側では機械的に「証明」できない — 人間の判断が要る)。候補4 は **真の不完全性(D3)** だが blast-radius で既に機械証明済み。**原典照合が4件の偽陽性「仕様欠陥」報告を未然に防いだ** — これ自体が §3.0 手順の有効性の実証。
+**候補2–5 の三分結果(2026-07-08、§3.0 の原典照合 = corpus → Solidity を実施)**: いずれも候補1のような *ハードな矛盾* ではなかった。候補2・3・5 は **corpus が曖昧**だったため **Solidity 実装を ground truth として解決**(下記、spec 修正済み・候補3 はモデルも修正)。候補4 は **真の不完全性(D3)** だが blast-radius で既に機械証明済み。**corpus 照合の段階で4件の偽陽性「仕様欠陥」報告を防ぎ、さらに Solidity 照合で確定的に解決** — §3.0 手順の有効性の実証。
 
-### 候補2 → **原典レベルの曖昧性(D2)。抽出欠陥ではない。Apyx へ明確化依頼。**
-- `mint-price`/`issuance-price-one`(quote L123/L355「issuance is **always priced at $1**」)vs `price-may-include-spreads`(quote **L23**「spreads … during minting **and** redemption may be reflected in the price」)。
-- **原典照合**: この緊張は *原典 corpus.md 自体に存在する*(L23 と L123 の両方)。抽出は両文を忠実に反映しており、候補1のような抽出欠陥ではない。「$1」が nominal anchor で spread が運用上の微小調整、と読めば整合する(D2 曖昧性/不精密)。
-- **モデルの解**: mint は厳密に 1:1(= $1、`req_mint_price`/`req_deposit_mint_apxusd` で証明済)。すなわちモデルは exact-$1 解を採用し、minting spread は実現しない。3文が同時成立するのは minting spread = 0 のときのみ。
-- **依頼**: 「minting は厳密に $1 か、$1＋微小な運用スプレッドか」を原典で明確化されたい。ツール側の spec 修正は不要(原典どおり)。
+### 候補2 → ✅ **Solidity で解決(D2 corpus 曖昧 → 実装が真実)**
+- `issuance-price-one`(quote L123/L355「issuance is **always priced at $1**」)vs `price-may-include-spreads`(quote **L23**「spreads … during minting **and** redemption may be reflected in the price」)。corpus 自体に緊張(L23 と L123)。
+- **Solidity 照合**: `src/MinterV0.sol` は `apxUSD.mint(beneficiary, amount, nonce)` で **order.amount をそのまま 1:1 で mint**(オンチェーンにスプレッド無し)。スプレッド/execution 費用は **オフチェーン**の USD 収受時に適用され、オンチェーン状態機械の**範囲外**。
+- **解決**: `price-may-include-spreads` の rationale に「オンチェーンは 1:1、スプレッドはオフチェーン」を明記(spec 修正済み)。オンチェーンでは矛盾しない。モデルは exact-$1(`req_mint_price`)で忠実。
 
-### 候補3 → **原典の不精密な言い回し(D2、軽微)。Apyx へ明確化依頼。**
-- `catastrophic-backstop`(quote L375「**Total Collateral Value becomes the redemption value**」)。TCV は「reserve の**総額**」(L359)、Redemption Value は「償還が起きる**単価**」(L353)。総額を単価に等号で結ぶ**次元的に不精密**な表現。
-- **原典照合**: 意図は明確(wind-down で holder が TCV を pro-rata で受け取る=単価が TCV/supply に上がる)。ハードな欠陥ではなく言い回しの不精密。モデルは字義どおり `redemptionValue := totalCollateralValue` を採用(`req_catastrophic_backstop` で証明)。
-- **依頼**: 「Redemption Value = Total Collateral Value / totalSupply(per-unit)」の意図であることを原典で明示されたい。
+### 候補3 → ✅ **Solidity で解決 + モデル修正(D2 corpus 不精密 → 実装が真実)**
+- `catastrophic-backstop`(quote L375「**Total Collateral Value becomes the redemption value**」)。総額を単価に等号で結ぶ不精密表現。
+- **Solidity 照合**: `src/oracles/ApxUSDRateOracle.sol` の `rate` は **per-unit** apxUSD→USDC 価格(1e18)で `newRate > 0` ガード付き。したがって「TCV becomes redemption value」= **単価 = TCV / totalSupply**。
+- **解決**: `requirements.json`/`SPEC.md` の `catastrophic-backstop` を per-unit(TCV ÷ totalSupply)に修正。**モデルも修正**: `Op.catastrophicBackstop` を `redemptionValue := totalCollateralValue * ray / totalSupply_apxUSD` に変更(旧 `:= totalCollateralValue` は総額を単価フィールドに代入する**次元エラー**だった)。`req_catastrophic_backstop`・`step_catastrophicBackstop_exact`・`redemption_price_admin_only`・`catastrophicBackstop_is_instantaneous`・coalition/timelock witness・`SpecDefects` を per-unit に整合(全緑・sorry 0)。
 
 ### 候補4 → **真の不完全性(D3)。ただし blast-radius で機械証明済み・提言済み。**
 - `redemptionValue` の**下限**を縛る要件が無い。`catastrophic-backstop`+`handleStressEvent` で `totalCollateralValue`→0 ⇒ 償還 0 USDC。
 - **原典照合**: L123/L367「Redemption Value acts as a **hard floor** where arbitrageurs step in」は *二次市場価格* が redemption value を下回らない話(裁定)であって、*redemptionValue 自体* の下限ではない。redemptionValue は「basket に追随し cash で緩和」(L353)して下落しうる。よって仕様は redemptionValue のフロアに **沈黙**(D3)。
 - **状態**: 既に `BlastRadius.admin_rfq_coalition_drains`(redemptionValue=0 で 0 USDC 焼却)・`redeem_payout_has_no_cap` で機械証明済み。是正提案(redemption 価格フロア)も `README` §5 に記載済み。→ **新規証明は不要**、仕様の不完全性として本メモに再分類。
 
-### 候補5 → **原典の不完全性(D3、軽微)。Apyx へ明確化依頼。**
-- `exchange-rate-non-decreasing`(quote L161「yield accrues through a **gradually increasing** exchange rate」)。原典は交換レートを *yield による増加* として記述し、stress/担保喪失がこれを下げるかには **沈黙**。
-- **原典照合**: モデルは apyUSD 交換レート(=`totalAssets`=vault+vested 由来)を apxUSD 側 stress(`handleStressEvent` は `totalCollateralValue` を減らす)から**分離**しており、`req_exchange_rate_non_decreasing` を無条件に証明。原典が stress→交換レートに沈黙のため、この分離は *仮定* であって矛盾ではない。
-- **依頼**: 「apxUSD 担保の stress 損失が apyUSD 交換レートを引き下げるべきか(vault へ伝播するか)」を原典で明確化されたい。
+### 候補5 → ✅ **Solidity で解決(D3 corpus 沈黙 → 実装が真実)**
+- `exchange-rate-non-decreasing`(quote L161「yield accrues through a **gradually increasing** exchange rate」)。corpus は stress/担保喪失が交換レートを下げるかに **沈黙**。
+- **Solidity 照合**: `src/oracles/ApyUSDRateOracle.sol` の `rate` は `IERC4626(vault).convertToAssets(1e18)`(= apxUSD-per-apyUSD)× adjustment。すなわち apyUSD 交換レートは **apxUSD 建て**であり、担保 stress は *apxUSD の USD 償還価値*(ApxUSDRateOracle)を下げるだけで、vault が保有する *apxUSD トークン数* には影響しない。よって交換レートは stress から**構造的に分離**され、yield でのみ非減少に増える。
+- **解決**: モデルの分離は **実装に忠実**(仮定ではなく実装どおり)。`req_exchange_rate_non_decreasing` は正しい。rationale に apxUSD 建ての根拠を明記(spec 修正済み)。
 
-### 候補2–5 のまとめ表
-| 候補 | クラス | 原典照合の結論 | アクション |
+### 候補4 → **真の不完全性(D3)。blast-radius で機械証明済み・提言済み。**
+- `redemptionValue` の**下限**を縛る要件が無い。
+- **Solidity 照合**: `ApxUSDRateOracle.setRate` は `newRate > 0` ガードのみ(厳密 0 は不可だが 1 wei まで許容=実質フロア無し・上限も無し)。corpus L367「hard floor」は *二次市場価格* の話で redemptionValue 自体のフロアではない。
+- **状態**: `BlastRadius.admin_rfq_coalition_drains`・`redeem_payout_has_no_cap` で機械証明済み。是正提案(redemption 価格フロア)は `README` §5。→ 新規証明不要。
+
+### 候補2–5 のまとめ表(§3.0 = corpus → Solidity 適用後)
+| 候補 | corpus | Solidity 照合の結論 | 状態 |
 |---|---|---|---|
-| 2 | D2 原典曖昧性 | 原典自体に $1 vs minting spread の緊張。抽出は忠実 | Apyx へ明確化依頼(モデルは exact-$1) |
-| 3 | D2 原典不精密 | 総額=単価の言い回し。意図は明確 | Apyx へ明確化依頼(per-unit の明示) |
-| 4 | D3 不完全性 | redemptionValue フロアに沈黙(真のギャップ) | 既に blast-radius で証明・提言済み |
-| 5 | D3 原典不完全 | stress→交換レートに沈黙。モデルは分離を仮定 | Apyx へ明確化依頼 |
+| 2 | 曖昧($1 vs minting spread) | オンチェーン mint は 1:1、スプレッドはオフチェーン(`MinterV0`) | ✅ spec rationale 修正・モデル忠実 |
+| 3 | 不精密(総額=単価) | redemption value は per-unit=TCV/supply(`ApxUSDRateOracle`) | ✅ spec＋**モデル**を per-unit に修正 |
+| 4 | 沈黙(フロア無し) | `setRate` は `>0` のみ・実質フロア無し | 既に blast-radius で証明・提言済 |
+| 5 | 沈黙(stress→レート) | 交換レートは apxUSD 建てで stress から分離(`ApyUSDRateOracle`) | ✅ モデルは実装に忠実・spec rationale 修正 |
 
-**Apyx への明確化依頼(まとめ)**: (2) minting は厳密 $1 か $1＋運用スプレッドか。(3) catastrophic の「Redemption Value = Total Collateral Value」は per-unit(TCV/supply)の意か。(5) 担保 stress 損失を apyUSD 交換レートへ伝播すべきか。いずれも *原典ドキュメント* の明確化であり、ツール側の spec 修正では解決しない。
+**結論**: corpus が曖昧・暗黙・不精密だった候補(2/3/5)は Solidity 実装を ground truth として **確定的に解決**(spec 修正済み、候補3 はモデルも per-unit に修正)。候補4 は既知の設計ギャップで対応済み。Apyx への「明確化依頼」は不要となった — 実装が答えを与えた。今後も corpus 曖昧時は Solidity に従う(§3.0)。
 
 ---
 

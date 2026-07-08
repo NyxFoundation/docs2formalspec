@@ -291,9 +291,11 @@ Two clauses need structure the abstract model does not carry; encoding a fiction
 than an explicit gap:
 
 - **`catastrophic-backstop`, second clause** — "distribute the entire reserve pro-rata to remaining
-  holders." The first clause (setting the redemption basis to total collateral value) **is** proved
-  (`req_catastrophic_backstop`); a genuine pro-rata split requires a `Σ_holder reserve · balance/totalSupply`
-  over the holder set, but balances are aggregate `Address → Nat` maps with no summation structure — the same
+  holders." The first clause (setting the per-unit redemption value to `totalCollateralValue / totalSupply`,
+  matching the deployed `ApxUSDRateOracle`) **is** proved (`req_catastrophic_backstop`), and the resulting
+  buffer-to-zero effect is proved in `SpecDefects`; a genuine *per-holder* pro-rata split requires a
+  `Σ_holder reserve · balance/totalSupply` over the holder set, but balances are aggregate `Address → Nat`
+  maps with no summation structure — the same
   limitation that makes `solvency_preserved` take well-formedness as a hypothesis.
 - **`caller_net_nonpositive`, trace-level closure** — the value-weighted no-free-money property is proved
   single-step at a fixed reference rate; extending it to arbitrary traces under a *moving* exchange rate is a

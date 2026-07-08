@@ -688,7 +688,7 @@ theorem step_handleStressEvent_exact (s : State) (amount : Nat) (caller : Addres
 theorem step_catastrophicBackstop_exact (s : State) (caller : Address) (s' : State)
     (h : step s Op.catastrophicBackstop caller = some s') :
     caller = s.admin ∧
-    s' = { s with redemptionValue := s.totalCollateralValue
+    s' = { s with redemptionValue := s.totalCollateralValue * ray / s.totalSupply_apxUSD
                   emergencyFlag := true } := by
   simp only [step] at h
   split at h
@@ -1430,7 +1430,7 @@ theorem redemption_price_admin_only (s : State) (op : Op) (caller : Address) (s'
     (h_step : step s op caller = some s')
     (h_changed : s'.redemptionValue ≠ s.redemptionValue) :
     op = Op.catastrophicBackstop ∧ caller = s.admin ∧
-    s'.redemptionValue = s.totalCollateralValue := by
+    s'.redemptionValue = s.totalCollateralValue * ray / s.totalSupply_apxUSD := by
   cases op
   case catastrophicBackstop =>
     obtain ⟨hc, rfl⟩ := step_catastrophicBackstop_exact s caller s' h_step
@@ -2151,7 +2151,7 @@ old price. Direct projection of `step_catastrophicBackstop_exact`. -/
 theorem catastrophicBackstop_is_instantaneous (s : State) (caller : Address) (s' : State)
     (h : step s Op.catastrophicBackstop caller = some s') :
     caller = s.admin ∧ s'.now = s.now ∧
-    s'.redemptionValue = s.totalCollateralValue := by
+    s'.redemptionValue = s.totalCollateralValue * ray / s.totalSupply_apxUSD := by
   obtain ⟨hc, rfl⟩ := step_catastrophicBackstop_exact s caller s' h
   exact ⟨hc, rfl, rfl⟩
 
@@ -2169,8 +2169,10 @@ theorem base_model_has_no_timelock :
       step s Op.catastrophicBackstop s.admin = some s' ∧
       s'.redemptionValue ≠ s.redemptionValue ∧
       s'.now = s.now := by
-  refine ⟨{ (default : State) with totalCollateralValue := 1 }, _, rfl, ?_, rfl⟩
-  decide
+  have hray : 0 < ray := Nat.pow_pos (by decide)
+  refine ⟨{ (default : State) with totalCollateralValue := 1, totalSupply_apxUSD := ray }, _, rfl, ?_, rfl⟩
+  show (1 : Nat) * ray / ray ≠ (0 : Nat)
+  rw [Nat.one_mul, Nat.div_self hray]; decide
 
 /-! ## T8 Half 2 — a timelock wrapper DOES give the escape guarantee (DESIGN theorem)
 
@@ -2436,7 +2438,7 @@ theorem timelock_wrapper_is_live :
     ∃ (tl : TLState) (τ : List TLOp),
       countTicks τ = tl.delay ∧
       (execTraceTL tl τ).base.redemptionValue ≠ tl.base.redemptionValue := by
-  refine ⟨⟨{ (default : State) with totalCollateralValue := 1 }, 0, [], 1⟩,
+  refine ⟨⟨{ (default : State) with totalCollateralValue := 1, totalSupply_apxUSD := ray }, 0, [], 1⟩,
     [TLOp.queue Op.catastrophicBackstop 0, TLOp.tick, TLOp.execute 0], rfl, ?_⟩
   decide
 
@@ -2561,13 +2563,15 @@ theorem rfq_payout_formula (s : State) (user : Address) (amount : Nat) (caller :
   subst hs'
   exact ⟨by simp [burnApxUSD], by simp [burnApxUSD]⟩
 
-/-- Forward direction for `catastrophicBackstop`: the admin's call always succeeds
-and publishes `redemptionValue := totalCollateralValue`. -/
+/-- Forward direction for `catastrophicBackstop`: the admin's call always succeeds and
+publishes the per-unit `redemptionValue := totalCollateralValue * ray / totalSupply_apxUSD`. -/
 private theorem step_catastrophicBackstop_forward (s : State) :
     step s Op.catastrophicBackstop s.admin
-      = some { s with redemptionValue := s.totalCollateralValue, emergencyFlag := true } := by
+      = some { s with redemptionValue := s.totalCollateralValue * ray / s.totalSupply_apxUSD,
+                      emergencyFlag := true } := by
   show (if (s.admin == s.admin) = true then
-          some { s with redemptionValue := s.totalCollateralValue, emergencyFlag := true }
+          some { s with redemptionValue := s.totalCollateralValue * ray / s.totalSupply_apxUSD,
+                        emergencyFlag := true }
         else none) = _
   rw [if_pos (beq_self_eq_true _)]
 

@@ -36,9 +36,12 @@ private def bufWitness : State :=
       totalSupply_apxUSD := ray, totalCollateralValue := 1, redemptionValue := 0 }
 
 /-- The post-state of the mandated `catastrophicBackstop` step on `bufWitness`: exactly the
-model's effect (`redemptionValue := totalCollateralValue`, `emergencyFlag := true`). -/
+model's per-unit effect (`redemptionValue := totalCollateralValue * ray / totalSupply_apxUSD`,
+`emergencyFlag := true`). On `bufWitness` (TCV = 1, supply = ray) this evaluates to `1`. -/
 private def bufWitness' : State :=
-  { bufWitness with redemptionValue := bufWitness.totalCollateralValue, emergencyFlag := true }
+  { bufWitness with
+      redemptionValue := bufWitness.totalCollateralValue * ray / bufWitness.totalSupply_apxUSD,
+      emergencyFlag := true }
 
 /-- **`req_catastrophic_backstop_distributes_buffer`** (docs/07 candidate 1, resolved): the
 machine-checked *catastrophic exception* to buffer preservation. On a catastrophic backstop the
@@ -61,25 +64,27 @@ theorem req_catastrophic_backstop_distributes_buffer :
       0 < overcollateralizationBuffer s ∧
       -- the catastrophic-backstop step fires (admin-authorized, as its requirement demands)
       step s Op.catastrophicBackstop s.admin = some s' ∧
-      -- catastrophic-backstop's own postcondition holds on the result
-      s'.redemptionValue = s'.totalCollateralValue ∧
-      -- yet the buffer STRICTLY decreased — a direct violation of `buffer-non-decreasing`
+      -- catastrophic-backstop's own (corrected, per-unit) postcondition holds on the result
+      s'.redemptionValue = s.totalCollateralValue * ray / s.totalSupply_apxUSD ∧
+      -- yet the buffer STRICTLY decreased — the catastrophic exception to `buffer-non-decreasing`
       overcollateralizationBuffer s' < overcollateralizationBuffer s := by
   have hray : 0 < ray := Nat.pow_pos (by decide)
+  have hval : bufWitness.totalCollateralValue * ray / bufWitness.totalSupply_apxUSD = 1 := by
+    show (1 : Nat) * ray / ray = 1; rw [Nat.one_mul, Nat.div_self hray]
   refine ⟨bufWitness, bufWitness', ?_, ?_, ?_, ?_⟩
   · -- buffer bufWitness = 1 - 0 = 1 > 0
     simp [overcollateralizationBuffer, bufWitness]
-  · -- the step: caller = admin, so it succeeds with the mandated redemptionValue := TCV
+  · -- the step: caller = admin, so it succeeds with the per-unit redemptionValue
     simp [step, bufWitness']
-  · -- redemptionValue and totalCollateralValue coincide on the result
+  · -- the per-unit redemption value on the result
     rfl
-  · -- buffer after = 0 (redemptionTotal = ray·1/ray = 1 = TCV), buffer before = 1
+  · -- buffer after = 0 (redemptionTotal = ray·(1)/ray = 1 = TCV), buffer before = 1
     have h1 : overcollateralizationBuffer bufWitness = 1 := by
       simp [overcollateralizationBuffer, bufWitness]
     have h2 : overcollateralizationBuffer bufWitness' = 0 := by
       have hrt : bufWitness'.totalSupply_apxUSD * bufWitness'.redemptionValue / ray = 1 := by
-        show ray * 1 / ray = 1
-        rw [Nat.mul_one, Nat.div_self hray]
+        show ray * (bufWitness.totalCollateralValue * ray / bufWitness.totalSupply_apxUSD) / ray = 1
+        rw [hval, Nat.mul_one, Nat.div_self hray]
       simp only [overcollateralizationBuffer]
       rw [hrt]
       simp [bufWitness', bufWitness]

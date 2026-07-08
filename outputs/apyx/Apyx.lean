@@ -729,10 +729,14 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
       some { s with totalCollateralValue := s.totalCollateralValue - amount, emergencyFlag := true }
     else none
   | Op.catastrophicBackstop =>
-    -- catastrophic scenario: redemption value is set to track total collateral value,
-    -- distributing the entire reserve (including the buffer) pro-rata to holders
+    -- catastrophic scenario: the per-apxUSD redemption value is set so that the entire
+    -- reserve (including the buffer) is distributed pro-rata to holders — i.e. the per-unit
+    -- rate becomes Total Collateral Value ÷ total apxUSD supply (matching the deployed
+    -- `ApxUSDRateOracle` rate, which is a per-unit apxUSD→USDC price, not an aggregate).
     if caller == s.admin then
-      some { s with redemptionValue := s.totalCollateralValue, emergencyFlag := true }
+      some { s with
+        redemptionValue := s.totalCollateralValue * ray / s.totalSupply_apxUSD
+        emergencyFlag := true }
     else none
   | Op.setVestPeriod p =>
     -- accrue first, same pattern as `creditYield`: reconfiguring the vesting period
@@ -2392,22 +2396,25 @@ theorem req_buffer_not_consumed (s : State) (amount : Nat) (caller : Address) (s
   exact overcollateralizationBuffer_mono _ _ (by simp [emitEvent, burnApxUSD])
     (by simp [emitEvent, burnApxUSD]) (by simp [emitEvent, burnApxUSD])
 
-/-- REQ catastrophic_backstop: Upon detection of a catastrophic scenario, the system MUST set
-Redemption Value equal to Total Collateral Value and MUST distribute the entire reserve, including
-the buffer, pro‑rata to remaining holders.
+/-- REQ catastrophic_backstop: Upon detection of a catastrophic scenario, the system MUST set the
+(per‑apxUSD) Redemption Value so that Total Collateral Value is distributed pro‑rata to holders, and
+MUST distribute the entire reserve, including the buffer.
 
-Scope (honest limitation): only the first clause — `redemptionValue := totalCollateralValue` — is
-formalized here. The second clause ("distribute the entire reserve pro‑rata to remaining holders")
-is **outside this model's expressible scope**: a genuine pro‑rata split requires iterating a
-`Σ_holder reserve · balance/totalSupply` over the set of holders, but `apxUSDBal`/`usdcBal` are bare
-`Address → Nat` maps carrying no finite-support/summation structure (the same ledger limitation
-documented for the per-address bound in `Safety.solvency_preserved`). Rather than encode a fictional
-distribution, the setting of the redemption basis — the on‑chain trigger that *makes* every holder's
-claim track collateral — is proved, and the distribution mechanics are left to an
-implementation-level (bytecode) audit. -/
+Corrected against the deployed `ApxUSDRateOracle` (2026-07-08): its `rate` is a *per‑unit* apxUSD→USDC
+price (1e18 precision), not an aggregate, so "Total Collateral Value becomes the redemption value"
+means the per‑unit rate is set to `totalCollateralValue / totalSupply_apxUSD` (in `ray`), which is
+what redeeming the whole supply then pays out (`Σ amount · rate / ray = TCV`). The earlier
+`redemptionValue := totalCollateralValue` (a total assigned to a per‑unit field) was a dimensional
+model‑fidelity error surfaced by the source cross‑check (docs/07 candidate 3).
+
+Scope (honest limitation): only this redemption‑basis clause is formalized. The explicit *per‑holder*
+pro‑rata split requires a `Σ_holder reserve · balance/totalSupply` over the holder set, which the bare
+`Address → Nat` ledger cannot express (same limitation as `Safety.solvency_preserved`); it is left to
+an implementation‑level audit. The buffer‑distribution effect (buffer → 0) is proved separately in
+`SpecDefects.req_catastrophic_backstop_distributes_buffer`. -/
 theorem req_catastrophic_backstop (s : State) (s' : State)
     (h_step : step s Op.catastrophicBackstop s.admin = some s') :
-    s'.redemptionValue = s'.totalCollateralValue := by
+    s'.redemptionValue = s.totalCollateralValue * ray / s.totalSupply_apxUSD := by
   simp [step] at h_step
   subst h_step
   rfl
