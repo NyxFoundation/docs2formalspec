@@ -489,7 +489,7 @@ This is the trace-level contrapositive of the single-step
 `apxUSD_credit_is_backed` (`BlastRadius.lean`): since every apxUSD credit is
 backed by a USDC payment or by settlement of the recipient's own previously
 funded unlock position, an address with no funding source can never be credited. -/
-@[formalMeta "No free value"
+@[confidence perfect, formalMeta "No free value"
   "No operation sequence of any length — including operations signed by the address itself — lets an address that starts penniless and receives no third-party gift end up holding a single unit of apxUSD: value cannot be created from nothing."
   mainTheorem]
 theorem no_free_value_trace (s : State) (σ : List (Op × Address)) (a : Address)
