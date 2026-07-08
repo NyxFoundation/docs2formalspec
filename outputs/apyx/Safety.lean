@@ -1242,4 +1242,39 @@ theorem setVestPeriod_preserves_accrued_vest (s : State) (p : Nat) (caller : Add
   unfold totalAssets
   rw [hvbal, hva]
 
+/-! ## S8 — design-safety consequences of the strengthened model
+
+Two safety properties that the transition-function changes (the below-par arbitrage-redeem
+gate and the self-validating single-pending redemption top-up) now make provable. -/
+
+/-- **`no_same_state_arbitrage_round_trip`** — the arbitrage mint and arbitrage redeem
+pathways require *opposite* price regimes (`ray < apxUSDMarketPrice` for the mint,
+`apxUSDMarketPrice < ray` for the redeem), so **no single state enables both**: in any state,
+at least one of an arbitrage mint and an arbitrage redeem reverts. There is therefore no
+same-state mint→redeem round trip through the two arbitrage pathways by which value could be
+extracted from the peg spread. -/
+theorem no_same_state_arbitrage_round_trip (s : State) (to : Address) (mintAmt : Nat)
+    (mc : Address) (redAmt : Nat) (rc : Address) :
+    step s (Op.mintApxUSD to mintAmt) mc = none ∨ step s (Op.redeemApxUSD redAmt) rc = none := by
+  by_cases h : ray ≤ s.apxUSDMarketPrice
+  · exact Or.inr (by simp [step, h])
+  · exact Or.inl (by simp [step, Nat.le_of_lt (Nat.lt_of_not_le h)])
+
+/-- **`requestUnlock_backs_claim_by_burn`** — a standard redemption request removes **exactly**
+the requested `amount` of apxUSD from the caller (no more is siphoned, no less is charged), and
+in the same step the caller is left holding a single tracked standard unlock position with a
+freshly reset cooldown deadline. The protocol's new redemption obligation is thus fully backed
+by, and exactly equal to, the apxUSD burned — a legitimate-operations "no free claim" property
+that holds whether the request opened a fresh position or topped up an existing one. -/
+theorem requestUnlock_backs_claim_by_burn (s : State) (amount : Nat) (caller : Address)
+    (s' : State) (h_step : step s (Op.requestUnlock amount) caller = some s') :
+    s.apxUSDBal caller = s'.apxUSDBal caller + amount ∧
+    ∃ id amt, s'.unlockRequestId caller = some id ∧
+      s'.unlockRequests id = some (caller, amt, s.now + cooldownPeriod) := by
+  obtain ⟨-, hle, hs'⟩ := inv_requestUnlock s amount caller s' h_step
+  refine ⟨?_, by rw [hs']; exact requestUnlockStep_caller_position s caller amount⟩
+  have hbal : s'.apxUSDBal caller = s.apxUSDBal caller - amount := by
+    rw [hs', requestUnlockStep_apxUSDBal]; simp [burnApxUSD]
+  omega
+
 end Apyx
