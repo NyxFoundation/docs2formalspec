@@ -101,27 +101,38 @@ Trail of Bits の **invariant-driven development**[^idd] は、設計欠陥(busi
 
 → カタストロフィ/ストレス状態において、「バッファを減らしてはならない」と「バッファを全額分配せよ」が**同時に要求される**。三つ組(あるいは buffer の定義 C を介した A+B+C)を見て初めて現れる合成的矛盾。**検証法 M1+M2**: バッファ>0 の到達可能なカタストロフィ状態で、`buffer-non-decreasing` の事後条件と `catastrophic-backstop` の事後条件の連言が `False` を導くことを Lean で示せる(候補中もっとも形式化しやすい — 次段の推奨)。
 
-### 候補2(許可 vs 義務 D1): 固定 $1 価格 vs スプレッド許可
-- `mint-price` / `issuance-price-one`: 「apxUSD は **正確に $1** で価格付けする」(MUST/SHALL)
-- `price-may-include-spreads`: 「minting/redemption 時に価格へスプレッドを反映して **よい**(MAY)」
+**候補2–5 の三分結果(2026-07-08、§3.0 の原典照合を実施)**: いずれも候補1のような *ハードな矛盾* でも *抽出欠陥* でもなかった。候補2・3・5 は **原典自体の曖昧性/不完全性(D2/D3)** で、Apyx への **明確化依頼**が適切(ツール側では機械的に「証明」できない — 人間の判断が要る)。候補4 は **真の不完全性(D3)** だが blast-radius で既に機械証明済み。**原典照合が4件の偽陽性「仕様欠陥」報告を未然に防いだ** — これ自体が §3.0 手順の有効性の実証。
 
-→ MAY を行使すると価格は「正確に $1」でなくなり MUST を破る。RFC 2119 の古典的欠陥(**義務を破る許可**)。`price-may-include-spreads` は §`docs/06`/§`README` で「モデルに写せない(unformalizable)」と判定済みだが、それは *モデル化の限界* であると同時に *仕様の内部矛盾* の兆候でもある。検証法 M12(義務節と許可節の述語衝突)。
+### 候補2 → **原典レベルの曖昧性(D2)。抽出欠陥ではない。Apyx へ明確化依頼。**
+- `mint-price`/`issuance-price-one`(quote L123/L355「issuance is **always priced at $1**」)vs `price-may-include-spreads`(quote **L23**「spreads … during minting **and** redemption may be reflected in the price」)。
+- **原典照合**: この緊張は *原典 corpus.md 自体に存在する*(L23 と L123 の両方)。抽出は両文を忠実に反映しており、候補1のような抽出欠陥ではない。「$1」が nominal anchor で spread が運用上の微小調整、と読めば整合する(D2 曖昧性/不精密)。
+- **モデルの解**: mint は厳密に 1:1(= $1、`req_mint_price`/`req_deposit_mint_apxusd` で証明済)。すなわちモデルは exact-$1 解を採用し、minting spread は実現しない。3文が同時成立するのは minting spread = 0 のときのみ。
+- **依頼**: 「minting は厳密に $1 か、$1＋微小な運用スプレッドか」を原典で明確化されたい。ツール側の spec 修正は不要(原典どおり)。
 
-### 候補3(次元不一致・危険な曖昧性 D2): 単価 = 総額
-- `catastrophic-backstop`: 「Redemption Value(= apxUSD 1単位あたりの償還価格、ray 建て)を Total Collateral Value(= 担保バスケットの**総額**、ドル)に等しくする」
+### 候補3 → **原典の不精密な言い回し(D2、軽微)。Apyx へ明確化依頼。**
+- `catastrophic-backstop`(quote L375「**Total Collateral Value becomes the redemption value**」)。TCV は「reserve の**総額**」(L359)、Redemption Value は「償還が起きる**単価**」(L353)。総額を単価に等号で結ぶ**次元的に不精密**な表現。
+- **原典照合**: 意図は明確(wind-down で holder が TCV を pro-rata で受け取る=単価が TCV/supply に上がる)。ハードな欠陥ではなく言い回しの不精密。モデルは字義どおり `redemptionValue := totalCollateralValue` を採用(`req_catastrophic_backstop` で証明)。
+- **依頼**: 「Redemption Value = Total Collateral Value / totalSupply(per-unit)」の意図であることを原典で明示されたい。
 
-→ 単価と総額を等号で結ぶ**次元不一致**。実際 Lean 化時に `redemptionValue := totalCollateralValue` として露出し(M10 の実例)、buffer 計算に不整合を持ち込みうる。検証法 M9(独立形式化が単価解釈/総額解釈で割れる)。
+### 候補4 → **真の不完全性(D3)。ただし blast-radius で機械証明済み・提言済み。**
+- `redemptionValue` の**下限**を縛る要件が無い。`catastrophic-backstop`+`handleStressEvent` で `totalCollateralValue`→0 ⇒ 償還 0 USDC。
+- **原典照合**: L123/L367「Redemption Value acts as a **hard floor** where arbitrageurs step in」は *二次市場価格* が redemption value を下回らない話(裁定)であって、*redemptionValue 自体* の下限ではない。redemptionValue は「basket に追随し cash で緩和」(L353)して下落しうる。よって仕様は redemptionValue のフロアに **沈黙**(D3)。
+- **状態**: 既に `BlastRadius.admin_rfq_coalition_drains`(redemptionValue=0 で 0 USDC 焼却)・`redeem_payout_has_no_cap` で機械証明済み。是正提案(redemption 価格フロア)も `README` §5 に記載済み。→ **新規証明は不要**、仕様の不完全性として本メモに再分類。
 
-### 候補4(不完全性・沈黙 D3): redemptionValue の下限が無い
-- `redemptionValue` の**下限**を制約する要件が存在しない。`catastrophic-backstop`+`handleStressEvent` で `totalCollateralValue`→0 まで到達可能 ⇒ 償還が 0 USDC。
+### 候補5 → **原典の不完全性(D3、軽微)。Apyx へ明確化依頼。**
+- `exchange-rate-non-decreasing`(quote L161「yield accrues through a **gradually increasing** exchange rate」)。原典は交換レートを *yield による増加* として記述し、stress/担保喪失がこれを下げるかには **沈黙**。
+- **原典照合**: モデルは apyUSD 交換レート(=`totalAssets`=vault+vested 由来)を apxUSD 側 stress(`handleStressEvent` は `totalCollateralValue` を減らす)から**分離**しており、`req_exchange_rate_non_decreasing` を無条件に証明。原典が stress→交換レートに沈黙のため、この分離は *仮定* であって矛盾ではない。
+- **依頼**: 「apxUSD 担保の stress 損失が apyUSD 交換レートを引き下げるべきか(vault へ伝播するか)」を原典で明確化されたい。
 
-→ M5(被覆解析)で「`redemptionValue` を下から縛る要件ゼロ」として検出。M3 で悪状態(payout=0)到達を witness 付きで証明可能。← 既に blast-radius `redeem_payout_has_no_cap` で実質顕在化しており、**仕様の不完全性**として再分類すべき。
+### 候補2–5 のまとめ表
+| 候補 | クラス | 原典照合の結論 | アクション |
+|---|---|---|---|
+| 2 | D2 原典曖昧性 | 原典自体に $1 vs minting spread の緊張。抽出は忠実 | Apyx へ明確化依頼(モデルは exact-$1) |
+| 3 | D2 原典不精密 | 総額=単価の言い回し。意図は明確 | Apyx へ明確化依頼(per-unit の明示) |
+| 4 | D3 不完全性 | redemptionValue フロアに沈黙(真のギャップ) | 既に blast-radius で証明・提言済み |
+| 5 | D3 原典不完全 | stress→交換レートに沈黙。モデルは分離を仮定 | Apyx へ明確化依頼 |
 
-### 候補5(ストレス下の非現実性 D1b/D3): exchange-rate 非減少 vs 担保喪失
-- `exchange-rate-non-decreasing`: 「apyUSD/apxUSD 交換レートは **MUST 非減少**」
-- しかし `handleStressEvent`(担保喪失)や catastrophic は資産価値を毀損しうる。
-
-→ モデルでは交換レートが `totalAssets`(=vault+vested)由来で `totalCollateralValue` と切れているため衝突は顕在化しないが、それは *モデルが stress を vault へ伝播しない簡略化* の可能性がある。仕様が「担保喪失下でも非減少」を無条件に要求しているなら**非現実的な過剰制約(D4/D1b)**。要調査(M2 条件付き矛盾 or M8 load-bearing)。
+**Apyx への明確化依頼(まとめ)**: (2) minting は厳密 $1 か $1＋運用スプレッドか。(3) catastrophic の「Redemption Value = Total Collateral Value」は per-unit(TCV/supply)の意か。(5) 担保 stress 損失を apyUSD 交換レートへ伝播すべきか。いずれも *原典ドキュメント* の明確化であり、ツール側の spec 修正では解決しない。
 
 ---
 
