@@ -153,7 +153,7 @@ Apyx は `redeem_payout_has_no_cap`(払戻上限の不在)・`admin_rfq_coalitio
 
 優先度 = 「捕捉する損失パターン数 × 平均損失規模 × テンプレ再利用性」で評価する:
 
-1. **`templates/invariants/`(コア4:I2,I3,I5,I4)を最優先で汎用化**。generic な `‹State›/‹Op›/‹step›` に対する schema + インスタンス化チェックリスト。Apyx `Safety.lean` を worked reference に。→ **単一の投資で Lending/Vault/AMM/Stablecoin を横断**。最も高い breadth。
+1. **`templates/invariants/`(コア4:I2,I3,I5,I4 + I1 + gap-witness)を汎用化 — ✅ 実装済み**([templates/invariants/](../templates/invariants/):README = 記入ガイド、`Invariants.template.lean` = 骨格)。generic な `‹State›/‹Op›/‹step›` に対する schema + Step-0 プロファイル + インスタンス化チェックリスト。Apyx `Safety.lean`/`SpecDefects.lean` を worked reference に。→ **単一の投資で Lending/Vault/AMM/Stablecoin を横断**。最も高い breadth。
 2. **gap-witness テンプレ(B.3)** を同梱。安全性が証明できない箇所を「確定した脆弱性」に。特に **I6 無制限パラメータの不在証明**(業界最頻の G を確定発見に)。
 3. **blast-radius テンプレ(`docs/05`)** を役割集合パラメトリックに。鍵漏洩・多役割結託(2024-25 最大の損失バケット)を被害上限で定量。
 4. **spec-consistency 層(`docs/07`)を監査の第一歩に**。realizability/充足性で Beanstalk/UST 型を**モデル化前に**除外。安価で上流。

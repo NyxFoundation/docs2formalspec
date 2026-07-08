@@ -127,7 +127,7 @@
 
 ## 6. docs2formalspecへの組み込み
 
-第2の柱と同様、`templates/safety/` に Tier A の性質族(保存則・solvency・丸め方向・非希釈・インフレ耐性)のパラメータ化スキーマを置く(将来)。ボトムアップ入力は**ドメイン別**: DeFi は公開被害集計、合意プロトコルは `ethereum-vuln-dataset`。生成定理は要件由来 / 脅威モデル由来 / **設計不変条件由来** の3種を `review.json` で区別報告。
+第2の柱と同様、Tier A の性質族(保存則・solvency・丸め方向・非希釈・インフレ耐性)のパラメータ化スキーマを **[`templates/invariants/`](../templates/invariants/) に実装済み**(README = 記入ガイド、`Invariants.template.lean` = `‹PLACEHOLDER›` 付き骨格、`outputs/apyx/Safety.lean` = worked reference)。設計方針と業界脆弱性パターンとの対応は [`docs/08-defi-vuln-patterns.md`](08-defi-vuln-patterns.md)。ボトムアップ入力は**ドメイン別**: DeFi は公開被害集計、合意プロトコルは `ethereum-vuln-dataset`。生成定理は要件由来 / 脅威モデル由来 / **設計不変条件由来** / spec-consistency 由来 の4種を `review.json` で区別報告。
 
 ## 参考リンク
 
