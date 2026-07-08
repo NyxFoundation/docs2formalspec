@@ -5,7 +5,7 @@
 | **Subject** | Apyx (apyx.fi) — the apxUSD / apyUSD dividend-backed stablecoin protocol |
 | **Contracts** (Ethereum mainnet, per the ingested documentation) | apxUSD [`0x98A8…4665`](https://etherscan.io/address/0x98A878b1Cd98131B271883B390f68D2c90674665) · apyUSD [`0x38EE…8a6A`](https://etherscan.io/address/0x38EEb52F0771140d10c4E9A9a72349A329Fe8a6A) · UnlockToken [`0x9377…BF4e6`](https://etherscan.io/address/0x93775E2dFa4e716c361A1f53F212c7AE031BF4e6) |
 | **Method** | RFC 2119 specification → Lean 4 state-machine model → machine-checked theorems |
-| **Result** | 167 theorems proved, 0 `sorry`, kernel-verified (`lake build`, Lean 4.31.0). No defect was found in Apyx's protocol or documentation; §9 records one *extraction* artifact in our own tooling. |
+| **Result** | 170 theorems proved, 0 `sorry`, kernel-verified (`lake build`, Lean 4.31.0). No internal *contradiction* was found in Apyx's specification, but the analysis machine-proved concrete design *weaknesses* — a two-key (admin + RFQ) total-loss path, and the absence of a redemption-price floor/cap and an admin timelock (§4.1, §5). |
 | **Date** | 2026-07-07 |
 
 ---
@@ -14,15 +14,15 @@
 
 Apyx's public protocol documentation was formalized into (a) a normative RFC 2119 specification
 ([`SPEC.md`](SPEC.md)) and (b) an executable Lean 4 model of the protocol's state machine
-([`Apyx.lean`](Apyx.lean)). Against that model we proved **167 theorems**, each re-checked from
+([`Apyx.lean`](Apyx.lean)). Against that model we proved **170 theorems**, each re-checked from
 source by the Lean kernel, in four groups:
 
 | Group | Question answered | Count | File |
 |---|---|---|---|
 | **Requirement conformance** | Does the design behave as the documentation specifies? | 82 | [`Apyx.lean`](Apyx.lean) |
 | **Key-compromise blast radius** | If a privileged operator key is stolen, how much can be lost? | 56 | [`BlastRadius.lean`](BlastRadius.lean) |
-| **Design safety** | Can an ordinary user drain the protocol using only legitimate calls? | 28 | [`Safety.lean`](Safety.lean) |
-| **Spec-defect search** | Is the requirement set itself internally consistent? | 1 | [`SpecDefects.lean`](SpecDefects.lean) — surfaced an *extraction* artifact only (§9) |
+| **Design safety** | Can an ordinary user drain the protocol using only legitimate calls? | 30 | [`Safety.lean`](Safety.lean) |
+| **Spec-defect / gap search** | Is the requirement set consistent, and are the economic parameters bounded? | 2 | [`SpecDefects.lean`](SpecDefects.lean) — §9 |
 
 Headline findings for Apyx:
 
@@ -206,7 +206,7 @@ payout is exactly `amount × redemptionValue / ray` with no cap on `redemptionVa
 (`redeem_payout_formula`, `redeem_payout_has_no_cap`) — so the loss is unbounded. This directly motivates
 the recommendations in §5.
 
-### 4.2 Design safety — honest-actor attacks (24 theorems, [`Safety.lean`](Safety.lean))
+### 4.2 Design safety — honest-actor attacks (30 theorems, [`Safety.lean`](Safety.lean))
 
 This group assumes every actor is honest and asks whether the *design itself* lets an ordinary attacker
 extract value using only legitimate operations.
@@ -224,6 +224,7 @@ extract value using only legitimate operations.
 | No peg-spread round trip | The arbitrage mint (needs price > $1) and arbitrage redeem (needs price < $1) require opposite price regimes, so no single state enables both | `no_same_state_arbitrage_round_trip` |
 | Redemption request is backed | A redemption request burns exactly the requested apxUSD and leaves the caller one tracked position — the obligation exactly equals the burn (no free claim) | `requestUnlock_backs_claim_by_burn` |
 | No free extraction (trace) | Over arbitrary traces of non-share operations, no address's fixed-rate holdings can increase — no free money through the redemption / RFQ / request channels at any length (the share-op + live-rate closure is left open, see §6.2) | `caller_net_nonpositive_trace` |
+| Share-price monotonicity | A new deposit never dilutes the exchange rate, and crediting yield preserves it (raising it only as yield vests over time) — the ERC-4626 dilution invariant | `exchange_rate_monotone_deposit`, `exchange_rate_monotone_creditYield`, `req_exchange_rate_non_decreasing` |
 
 ### 4.3 The vesting cross-check (a positive finding)
 
@@ -345,17 +346,37 @@ axioms of Lean's logic; none is an unproved assumption. Compile status is record
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine |
 | [`Apyx.lean`](Apyx.lean) | The formal model (`State`, `Op`, `step`) and the 82 requirement proofs |
 | [`BlastRadius.lean`](BlastRadius.lean) | The 56 key-compromise blast-radius proofs and the defense wrappers |
-| [`Safety.lean`](Safety.lean) | The 28 design-safety proofs |
-| [`SpecDefects.lean`](SpecDefects.lean) | The machine-checked specification-contradiction proof (§9) |
+| [`Safety.lean`](Safety.lean) | The 30 design-safety proofs |
+| [`SpecDefects.lean`](SpecDefects.lean) | The spec-consistency and parameter-bound gap-witness proofs (§9) |
 | [`leancheck.json`](leancheck.json) | Build status: requirement theorems, `sorry` count, vacuous count |
 | [`corpus.md`](corpus.md) | The raw ingested source documentation |
 
 ---
 
-## 9. A consistency check on the requirements — an extraction artifact, now fixed
+## 9. Requirement-consistency and parameter-bound gaps
 
-The three groups above take the specification as the reference. This one turns the lens on the extracted
-requirement set itself: **are the requirements mutually consistent?** The check flagged one apparent conflict:
+This group turns the lens on the requirement set itself and on the economic parameters.
+
+### 9.1 A machine-checked parameter gap — the redemption price has no floor or cap
+
+The redemption price (`redemptionValue`) has **no enforced floor and no enforced cap** in the design, and it
+is written by the admin (`catastrophicBackstop`; on-chain, the `ApxUSDRateOracle`, gated only by `> 0`). Two
+witnesses prove the consequences:
+
+- **`redemption_has_no_floor`** — there is a reachable state (`redemptionValue = 0`) in which a whitelisted
+  holder's `redeemApxUSD` **succeeds** yet pays **0 USDC** for the apxUSD it burns: a total loss the guards do
+  not prevent.
+- **`BlastRadius.redeem_payout_has_no_cap`** — symmetrically, no upper bound on the payout exists.
+
+Together with the two-key coalition (§4.1), these are the concrete design weaknesses of the model. **Fix:** a
+redemption-price floor/clamp, a withdrawal rate limit, and an admin timelock (§5) — the same three defenses §5
+already quantifies. (This matches the two most common industry loss patterns — unbounded parameters and
+privileged-key/governance gaps; see [`docs/08-defi-vuln-patterns.md`](https://github.com/NyxFoundation/docs2formalspec/blob/main/docs/08-defi-vuln-patterns.md).)
+
+### 9.2 A consistency check on the requirements — an extraction artifact, now fixed
+
+Turning the lens on the extracted requirement set itself: **are the requirements mutually consistent?** The
+check flagged one apparent conflict:
 
 - `buffer-non-decreasing` (as first extracted) required, *unconditionally*, that the buffer **MUST NOT
   decrease**.
@@ -376,8 +397,9 @@ routine operations and now matches. The proof is retained, renamed
 `catastrophic-backstop` mandates (this also partially closes the §6.2 gap on that requirement's second
 clause). **No change to Apyx's specification or contracts was warranted.**
 
-The methodology, the source-tracing rule this exemplifies, and four further candidate checks (in progress) are
-in [`docs/07-spec-defects.md`](https://github.com/NyxFoundation/docs2formalspec/blob/main/docs/07-spec-defects.md).
+The methodology, the source-tracing rule this exemplifies (corpus → Solidity), and four further candidate
+checks (all traced to the source and resolved — none a protocol defect) are in
+[`docs/07-spec-defects.md`](https://github.com/NyxFoundation/docs2formalspec/blob/main/docs/07-spec-defects.md).
 
 ---
 
