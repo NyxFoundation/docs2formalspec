@@ -5,7 +5,7 @@
 | **Subject** | Apyx (apyx.fi) — the apxUSD / apyUSD dividend-backed stablecoin protocol |
 | **Contracts** (Ethereum mainnet, per the ingested documentation) | apxUSD [`0x98A8…4665`](https://etherscan.io/address/0x98A878b1Cd98131B271883B390f68D2c90674665) · apyUSD [`0x38EE…8a6A`](https://etherscan.io/address/0x38EEb52F0771140d10c4E9A9a72349A329Fe8a6A) · UnlockToken [`0x9377…BF4e6`](https://etherscan.io/address/0x93775E2dFa4e716c361A1f53F212c7AE031BF4e6) |
 | **Method** | RFC 2119 specification → Lean 4 state-machine model → machine-checked theorems |
-| **Result** | 162 theorems proved, 0 `sorry`, kernel-verified (`lake build`, Lean 4.31.0) |
+| **Result** | 166 theorems proved, 0 `sorry`, kernel-verified (`lake build`, Lean 4.31.0) |
 | **Date** | 2026-07-07 |
 
 ---
@@ -14,14 +14,14 @@
 
 Apyx's public protocol documentation was formalized into (a) a normative RFC 2119 specification
 ([`SPEC.md`](SPEC.md)) and (b) an executable Lean 4 model of the protocol's state machine
-([`Apyx.lean`](Apyx.lean)). Against that model we proved **162 theorems**, each re-checked from
+([`Apyx.lean`](Apyx.lean)). Against that model we proved **166 theorems**, each re-checked from
 source by the Lean kernel, in three groups:
 
 | Group | Question answered | Count | File |
 |---|---|---|---|
 | **Requirement conformance** | Does the design behave as the documentation specifies? | 82 | [`Apyx.lean`](Apyx.lean) |
 | **Key-compromise blast radius** | If a privileged operator key is stolen, how much can be lost? | 56 | [`BlastRadius.lean`](BlastRadius.lean) |
-| **Design safety** | Can an ordinary user drain the protocol using only legitimate calls? | 24 | [`Safety.lean`](Safety.lean) |
+| **Design safety** | Can an ordinary user drain the protocol using only legitimate calls? | 28 | [`Safety.lean`](Safety.lean) |
 
 Headline findings for Apyx:
 
@@ -216,6 +216,9 @@ extract value using only legitimate operations.
 | No free extraction | A caller cannot end richer than they started (single-step, fixed reference rate) | `caller_net_nonpositive`, and the `caller_value_*` family |
 | No early yield drain | Vested yield cannot be pulled forward faster than its linear schedule | `vest_no_early_drain` |
 | Vesting conservation | Both crediting new yield and reconfiguring the vesting period preserve already-accrued yield | `creditYield_preserves_accrued_vest`, `setVestPeriod_preserves_accrued_vest` |
+| No peg-spread round trip | The arbitrage mint (needs price > $1) and arbitrage redeem (needs price < $1) require opposite price regimes, so no single state enables both | `no_same_state_arbitrage_round_trip` |
+| Redemption request is backed | A redemption request burns exactly the requested apxUSD and leaves the caller one tracked position — the obligation exactly equals the burn (no free claim) | `requestUnlock_backs_claim_by_burn` |
+| No free extraction (trace) | Over arbitrary traces of non-share operations, no address's fixed-rate holdings can increase — no free money through the redemption / RFQ / request channels at any length (the share-op + live-rate closure is left open, see §6.2) | `caller_net_nonpositive_trace` |
 
 ### 4.3 The vesting cross-check (a positive finding)
 
@@ -335,7 +338,7 @@ axioms of Lean's logic; none is an unproved assumption. Compile status is record
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine |
 | [`Apyx.lean`](Apyx.lean) | The formal model (`State`, `Op`, `step`) and the 82 requirement proofs |
 | [`BlastRadius.lean`](BlastRadius.lean) | The 56 key-compromise blast-radius proofs and the defense wrappers |
-| [`Safety.lean`](Safety.lean) | The 24 design-safety proofs |
+| [`Safety.lean`](Safety.lean) | The 28 design-safety proofs |
 | [`leancheck.json`](leancheck.json) | Build status: requirement theorems, `sorry` count, vacuous count |
 | [`corpus.md`](corpus.md) | The raw ingested source documentation |
 
