@@ -77,9 +77,11 @@ Trail of Bits の **invariant-driven development**[^idd] は、設計欠陥(busi
 
 ## 3. Apyx 仕様の欠陥候補(本手法の初期適用)
 
-**重要**: 以下は §2 の手法を Apyx の `requirements.json` に手動適用して得た**未検証の候補(仮説)**であり、確定した欠陥ではない。各候補は指定の手法で機械検証(または反証)できる。ユーザーの認識どおり、現時点で*確定した*仕様矛盾はまだ無い — 本節はそれを**確定させるための道具立て**である。
+以下は §2 の手法を Apyx の `requirements.json` に手動適用して得た候補。**候補1 は Lean で機械証明済み(確定)** — 本ツールで初めて確定した仕様レベルの矛盾である。候補2–5 は未検証の仮説であり、指定の手法で機械検証(または反証)できる。
 
-### 候補1(最有力・合成的矛盾 D1c): バッファ非減少 vs カタストロフィ全額分配
+### 候補1 ✅ **確定(機械証明済み)**(合成的矛盾 D1c): バッファ非減少 vs カタストロフィ全額分配
+
+**証明**: `outputs/apyx/SpecDefects.lean` の `spec_defect_buffer_nondecrease_vs_catastrophic`(sorry 0、公理 `propext`/`Classical.choice`/`Quot.sound` のみ)。バッファ>0 の具体状態 witness 上で、`catastrophic-backstop` が要求する step(その事後条件 `redemptionValue = totalCollateralValue` も成立)が **バッファを厳密に減少させる**ことを機械検証。よって「MUST NOT decrease」と「buffer 全額分配」は同時に守れない。
 - `buffer-non-decreasing`: 「overcollateralization buffer は **MUST NOT decrease**」
 - `buffer-growth-stress`: 「ストレス事象では **むしろ増加** すべき(drain されない)」
 - `catastrophic-backstop`: 「カタストロフィ検出時、Redemption Value を Total Collateral Value に等しくし、**buffer を含む reserve 全額を** holder に pro-rata 分配する」
@@ -120,7 +122,9 @@ Trail of Bits の **invariant-driven development**[^idd] は、設計欠陥(busi
 - **invariant ギャップ表**(§2.3)を要件抽出時に併走生成し、各不変条件に「強制する要件」を紐付け、空欄=ギャップとして自動フラグ。
 - **テンプレート化**: `templates/spec-defects/` に M1–M8 の Lean スケルトン(充足性 witness・トリプル矛盾・悪状態到達・vacuity・被覆表)を用意する構想。
 
-**推奨する最初の一歩**: 候補1(バッファ矛盾)を M1+M2 で Lean 形式化し、`buffer-non-decreasing` の事後条件 ∧ `catastrophic-backstop` の事後条件が到達可能状態で `False` を導くことを機械証明する。成功すれば **本ツールで初めて確定する仕様レベル矛盾**となり、手法の有効性を実証できる。
+**最初の一歩(完了)**: 候補1(バッファ矛盾)を M1+M2 で `outputs/apyx/SpecDefects.lean` に機械証明済み(`spec_defect_buffer_nondecrease_vs_catastrophic`)。**本ツールで初めて確定した仕様レベル矛盾**であり、手法の有効性を実証した。次段は候補2(MAY vs MUST、M12)・候補4(下限の沈黙、M3+M5)の形式化。
+
+**Apyx への是正提案**: `buffer-non-decreasing` に「カタストロフィ事象を除く(routine operation 下で)」という**明示的な例外**を付す(現在モデルの `req_buffer_non_decreasing` が routine op に限定しているのと整合させる)。または `catastrophic-backstop` 側に「buffer は分配対象外」と明記する。いずれにせよ NL 仕様に例外条項が欠けている。
 
 ---
 
