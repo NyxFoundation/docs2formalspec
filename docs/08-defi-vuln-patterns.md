@@ -145,7 +145,7 @@ Apyx は `redeem_payout_has_no_cap`(払戻上限の不在)・`admin_rfq_coalitio
 | F 清算設計 | I2 + gap witness | Tier 1 + B.3 |
 | G 無制限パラメータ | **I6 / gap witness** | Tier 2 + B.3(不在の証明) |
 | H 報酬会計 | I1 保存則(reward 版) | Tier 1 |
-| I index 単調 | **I7 単調 accumulator** | Tier 2 |
+| I index 単調 | **I7 単調 accumulator** | Tier 2(Apyx 実装済: `exchange_rate_monotone_deposit`〔新規入金は希釈しない〕・`exchange_rate_monotone_creditYield`〔yield credit は不変〕・`req_exchange_rate_non_decreasing`〔時間方向〕) |
 | ガバナンス結託 | blast-radius(役割集合)+ I9 realizability | Tier 3/4 |
 | 死のスパイラル | **I9 realizability**(挙動前) | Tier 4(`docs/07`) |
 

@@ -1382,4 +1382,58 @@ theorem caller_net_nonpositive_trace (R : Nat) (s : State) (σ : List (Op × Add
       have htail := ih s1 htailops (by intro n; simpa [execTrace, hstep] using h_rv (n + 1))
       exact Nat.le_trans htail (valueAt_step_le R s op c a s1 hstep hop hrv0)
 
+/-! ## I7 — exchange-rate (share price) monotonicity (docs/08 pattern B/I; templates/invariants I7)
+
+The stored `exchangeRate` is a monotone accumulator: it moves only at the vault's own operations,
+and the two operations that move it meaningfully never lower it. A new deposit cannot dilute it
+(`exchange_rate_monotone_deposit`), and crediting yield preserves it in the same step while raising
+it over time (`exchange_rate_monotone_creditYield` + `req_exchange_rate_non_decreasing`). This is the
+share-price-monotonicity invariant whose violation is the ERC4626 inflation/dilution class. -/
+
+/-- **I7 (deposit).** A `lockApxUSD` by any caller never lowers the stored exchange rate, provided
+the rate does not already overstate backing (`hbacked` — automatic when it is the pre-state's true
+`computeExchangeRate`) and there is at least one existing share (`hTS`). Exposes the rate-level
+monotonicity that `no_dilution` uses internally. -/
+theorem exchange_rate_monotone_deposit (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.lockApxUSD amount) caller = some s')
+    (hTS : 0 < s.totalSupply_apyUSD)
+    (hbacked : s.exchangeRate * s.totalSupply_apyUSD ≤ totalAssets s * ray) :
+    s.exchangeRate ≤ s'.exchangeRate := by
+  obtain ⟨-, -, hs'⟩ := inv_lockApxUSD s amount caller s' h_step
+  have hnow : s'.now = s.now := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  have hva : vestedAmount s' s'.now = vestedAmount s s.now := by
+    rw [hs']
+    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD, vestedAmount, newlyVestedAmount]
+  have hTA : totalAssets s' = totalAssets s + amount := by
+    have hvbal : s'.vaultApxUSDBal = s.vaultApxUSDBal + amount := by
+      rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+    unfold totalAssets; rw [hvbal, hva]; omega
+  have hTS' : s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount s.exchangeRate := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD, lockShares]
+  have hcomp : s'.exchangeRate = computeExchangeRate s' := by
+    rw [hs']
+    simp [emitEvent, updateExchangeRate, computeExchangeRate, totalAssets, vestedAmount,
+      newlyVestedAmount, mintApyUSD, burnApxUSD]
+  have hrate : s'.exchangeRate
+      = (totalAssets s + amount) * ray / (s.totalSupply_apyUSD + lockShares amount s.exchangeRate) := by
+    rw [hcomp]; unfold computeExchangeRate
+    rw [if_neg (by rw [hTS']; omega), hTA, hTS']
+  rw [hrate]
+  exact rate_non_decreasing_of_deposit (totalAssets s) s.totalSupply_apyUSD amount
+    s.exchangeRate hTS hbacked
+
+/-- **I7 (yield credit).** `creditYield` preserves the per-share `computeExchangeRate` in the same
+step — the accrue-first design keeps `totalAssets` (at the unchanged `now`) and the apyUSD supply
+fixed — so the credit never lowers the rate; the credited amount raises it only as it subsequently
+vests (monotone in time, `Apyx.req_exchange_rate_non_decreasing`). Requires `0 < vestPeriod`. -/
+theorem exchange_rate_monotone_creditYield (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.creditYield amount) caller = some s') (hvp : 0 < s.vestPeriod) :
+    computeExchangeRate s' = computeExchangeRate s := by
+  obtain ⟨-, hTA⟩ := creditYield_preserves_accrued_vest s amount caller s' h_step hvp
+  obtain ⟨-, hs'⟩ := step_creditYield_exact s amount caller s' h_step
+  have hsupply : s'.totalSupply_apyUSD = s.totalSupply_apyUSD := by rw [hs']
+  unfold computeExchangeRate
+  rw [hTA, hsupply]
+
 end Apyx
