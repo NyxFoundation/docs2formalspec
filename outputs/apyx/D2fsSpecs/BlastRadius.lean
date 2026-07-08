@@ -1,5 +1,6 @@
 import D2fsSpecs.Apyx
 import LeanAtlas.Metadata.Attribute.Meta
+import LeanAtlas.Metadata.Attribute.Confidence
 
 /-!
 # Blast-radius theorems: damage upper bounds under privileged-key compromise
@@ -1600,23 +1601,17 @@ for a passive bystander.
 
 Threat model: **every** privileged key at once (admin, oracle, pauseController,
 yieldDistributor, governance) plus any number of ordinary accounts is the attacker,
-running an arbitrarily long trace `σ`.
+running an arbitrarily long trace `σ`. Two carve-outs, stated as hypotheses:
+`h_never_signs` (`a` is never a caller in `σ`) and `h_never_rfq_target` (`a` is
+never the user-argument of an `executeRFQRedemption` — the one compensated-swap
+pathway that can debit a non-caller; a priced swap, not theft; pricing it is T6).
 
-Hypotheses (the two carve-outs stated explicitly):
-* `h_never_signs`: `a` is never the caller of any operation in `σ`;
-* `h_never_rfq_target`: `a` is never the user-argument of an `executeRFQRedemption`
-  anywhere in `σ` (the one compensated-swap pathway that can debit a non-caller; it
-  is a priced swap, not theft, and is carved out here — pricing it is T6).
-
-Claim: each of `a`'s three transferable balances is non-decreasing across the entire
-trace, hence so is the derived ledger `netHoldings`. A passive bystander who signs
-nothing and is not RFQ-targeted cannot be made to lose a single unit of any holding.
-Proved by lifting the single-step non-custodial lemmas
-(`no_role_transfers_user_funds`/`no_role_burns_user_shares`/`no_role_debits_usdc`)
-through the trace — the induction is packaged in
+Claim: each of `a`'s three transferable balances is non-decreasing across the
+entire trace, hence so is the derived ledger `netHoldings` — proved by lifting the
+single-step non-custodial lemmas through the trace via
 `user_assets_immune_to_total_key_compromise`. -/
-@[formalMeta "No-theft ledger conservation"
-  "A passive bystander's transferable ledger (apxUSD + apyUSD shares + USDC) is non-decreasing across any operation trace even with every operator key compromised — the ledger form of the non-custodial guarantee."
+@[confidence perfect, formalMeta "No-theft ledger conservation"
+  "A passive bystander — an address that signs nothing and is never the target of an RFQ redemption — has a transferable ledger (apxUSD + apyUSD shares + USDC) that is non-decreasing across any operation trace, even with every operator key compromised: the ledger form of the non-custodial guarantee."
   mainTheorem]
 theorem no_theft_ledger (s : State) (σ : List (Op × Address)) (a : Address)
     (h_never_signs : ∀ p ∈ σ, p.2 ≠ a)
