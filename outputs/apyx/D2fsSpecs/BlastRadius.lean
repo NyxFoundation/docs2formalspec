@@ -2665,7 +2665,7 @@ their USDC stays 0 — a **total, uncompensated loss of principal**. Contrast ev
 row of `single_key_bounds`, where each key alone extracts 0. This is the memo's
 headline: user-fund security against a compromised admin rests entirely on the RFQ
 counterparty set and on the missing rate-limit / price-floor (T7/T8). -/
-@[formalMeta "Total-loss coalition witness"
+@[confidence high, formalMeta "Total-loss coalition witness"
   "The one structural total-loss path, machine-checked: a compromised admin crashes redemptionValue to 0 via catastrophicBackstop, then an approved RFQ counterparty burns the victim's entire apxUSD for 0 USDC — 100% uncompensated loss, requiring two colluding roles."
   mainTheorem]
 theorem admin_rfq_coalition_drains :
