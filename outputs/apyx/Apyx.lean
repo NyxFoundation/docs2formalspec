@@ -30,6 +30,13 @@ structure State where
   whitelist : Address → Bool
   denylist : Address → Bool
   rfqCounterparties : List Address
+  /-- Pending RFQ redemption requests: the apxUSD amount each user has asked to have
+  redeemed through the structured RFQ process (corpus.md "Users may submit redemption
+  requests through a structured RFQ process") but that no approved counterparty has
+  executed yet. Registered by `Op.submitRFQRequest` (the user's own submission) and
+  consumed by `Op.executeRFQRedemption` — a counterparty can only execute against a
+  user's outstanding request, never unilaterally. -/
+  rfqRequests : Address → Nat
   governanceThreshold : Nat
   emergencyFlag : Bool
   totalSupply_apxUSD : Nat
@@ -517,6 +524,7 @@ inductive Op
   | setYieldRate (bps : Nat)
   | creditYield (amount : Nat)
   | voteBufferDeployment
+  | submitRFQRequest (amount : Nat)
   | executeRFQRedemption (user : Address) (amount : Nat)
   | updateRedemptionValue
   | handleStressEvent (amount : Nat)
@@ -703,10 +711,22 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     -- only governance-token holders may vote; a vote reaching the threshold deploys the buffer
     if s.governanceTokenBal caller = 0 then none
     else some { s with bufferDeployed := s.bufferDeployed || (s.governanceTokenBal caller ≥ s.governanceThreshold) }
+  | Op.submitRFQRequest amount =>
+    -- a user submits a redemption request through the structured RFQ process
+    -- (corpus.md); an approved counterparty may later execute it against the
+    -- reserve via `Op.executeRFQRedemption`
+    if s.globalPause then none
+    else some { s with
+      rfqRequests := fun a => if a = caller then s.rfqRequests a + amount else s.rfqRequests a }
   | Op.executeRFQRedemption user amount =>
-    -- only approved RFQ counterparties may execute a user's redemption request
+    -- an approved RFQ counterparty executes `user`'s previously submitted redemption
+    -- request (model.md guard: caller ∈ rfqCounterparties ∧ whitelist[user]); the
+    -- execution is capped by the user's outstanding request, which it consumes —
+    -- a counterparty cannot redeem against a user who has not asked for it
     if s.globalPause then none
     else if ¬ (s.rfqCounterparties.contains caller) then none
+    else if ¬ s.whitelist user then none
+    else if s.rfqRequests user < amount then none
     else if s.apxUSDBal user < amount then none
     else
       let usdcAmount := (amount * s.redemptionValue) / ray
@@ -714,6 +734,7 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
       else
         let s1 := burnApxUSD s user amount
         let s2 := { s1 with
+          rfqRequests := fun a => if a = user then s1.rfqRequests a - amount else s1.rfqRequests a
           usdcReserve := s1.usdcReserve - usdcAmount
           usdcBal := fun a => if a = user then s1.usdcBal a + usdcAmount else s1.usdcBal a
         }
@@ -729,14 +750,21 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
       some { s with totalCollateralValue := s.totalCollateralValue - amount, emergencyFlag := true }
     else none
   | Op.catastrophicBackstop =>
-    -- catastrophic scenario: the per-apxUSD redemption value is set so that the entire
-    -- reserve (including the buffer) is distributed pro-rata to holders — i.e. the per-unit
-    -- rate becomes Total Collateral Value ÷ total apxUSD supply (matching the deployed
-    -- `ApxUSDRateOracle` rate, which is a per-unit apxUSD→USDC price, not an aggregate).
-    if caller == s.admin then
+    -- catastrophic scenario (model.md guard: "Governance emergency flag set" — the
+    -- backstop can only fire once the emergency flag is already up, raised by the
+    -- stress pathway `Op.handleStressEvent`; it does not raise the flag itself).
+    -- Effect, per model.md/corpus.md: every claim is repriced so the per-apxUSD
+    -- redemption value becomes Total Collateral Value ÷ total apxUSD supply, in `ray`
+    -- fixed-point per token (matching the deployed `ApxUSDRateOracle`, whose `rate` is a
+    -- per-unit apxUSD→USDC price, not an aggregate — the dimensional fix from
+    -- docs/07 candidate 3), and the entire USDC reserve — buffer included — is
+    -- distributed pro-rata to apxUSD holders, zeroing the reserve and the buffer.
+    if caller = s.admin ∧ s.emergencyFlag = true then
       some { s with
-        redemptionValue := s.totalCollateralValue * ray / s.totalSupply_apxUSD
-        emergencyFlag := true }
+        redemptionValue := (s.totalCollateralValue * ray) / s.totalSupply_apxUSD
+        usdcBal := fun a => s.usdcBal a + (s.usdcReserve * s.apxUSDBal a) / s.totalSupply_apxUSD
+        usdcReserve := 0
+        overcollateralizationBuffer := 0 }
     else none
   | Op.setVestPeriod p =>
     -- accrue first, same pattern as `creditYield`: reconfiguring the vesting period
@@ -1177,9 +1205,13 @@ private theorem step_redeemApxUSD_some (s : State) (amount : Nat) (caller : Addr
 private theorem step_executeRFQRedemption_some (s : State) (user : Address) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.executeRFQRedemption user amount) caller = some s') :
     s.globalPause = false ∧ s.rfqCounterparties.contains caller = true ∧
+    s.whitelist user = true ∧
+    amount ≤ s.rfqRequests user ∧
     amount ≤ s.apxUSDBal user ∧
     (amount * s.redemptionValue) / ray ≤ s.usdcReserve ∧
     s' = { burnApxUSD s user amount with
+        rfqRequests := fun a => if a = user then (burnApxUSD s user amount).rfqRequests a - amount
+                                else (burnApxUSD s user amount).rfqRequests a
         usdcReserve := (burnApxUSD s user amount).usdcReserve - (amount * s.redemptionValue) / ray
         usdcBal := fun a => if a = user then (burnApxUSD s user amount).usdcBal a + (amount * s.redemptionValue) / ray
                             else (burnApxUSD s user amount).usdcBal a } := by
@@ -1192,7 +1224,12 @@ private theorem step_executeRFQRedemption_some (s : State) (user : Address) (amo
       · exact absurd h (by simp)
       · split at h
         · exact absurd h (by simp)
-        · exact ⟨by simp_all, by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
+        · split at h
+          · exact absurd h (by simp)
+          · split at h
+            · exact absurd h (by simp)
+            · exact ⟨by simp_all, by simp_all, by simp_all, by omega, by omega, by omega,
+                (Option.some.inj h).symm⟩
 
 /- ================= requirement theorems ================= -/
 
@@ -1238,7 +1275,7 @@ private theorem apyUSDBal_unchanged_of_non_share_op (s : State) (op : Op) (calle
     subst hs'
     simp [mintApxUSD, burnUnlockNFT]
   case executeRFQRedemption u am =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
     subst hs'
     simp [burnApxUSD]
   all_goals
@@ -1294,7 +1331,7 @@ private theorem step_unlockTokenOperator_unchanged (s : State) (op : Op) (caller
     subst hs'
     simp [mintApxUSD, burnUnlockNFT]
   case executeRFQRedemption u am =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
     subst hs'
     simp [burnApxUSD]
   all_goals
@@ -1350,7 +1387,7 @@ private theorem step_unlockTokenAddress_unchanged (s : State) (op : Op) (caller 
     subst hs'
     simp [mintApxUSD, burnUnlockNFT]
   case executeRFQRedemption u am =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
     subst hs'
     simp [burnApxUSD]
   all_goals
@@ -1844,7 +1881,7 @@ private theorem unlock_position_created_only_by_vault_ops (s : State) (op : Op) 
     subst hs'
     simp [emitEvent, burnApxUSD, h_new] at h_now
   case executeRFQRedemption u am =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
     subst hs'
     simp [burnApxUSD, h_new] at h_now
   all_goals
@@ -2209,9 +2246,12 @@ State field is the required margin, so the invariant `minted + margin ≤ collat
 exactly `minted ≤ collateral − margin`. Pre-state well-formedness: no balance exceeds
 total supply and the redemption value is at most par. Scope: the unlock-claim operations
 are excluded because they re-mint apxUSD that was burned earlier when the unlock was
-requested — an outstanding obligation the aggregate state does not track — and the
+requested — an outstanding obligation the aggregate state does not track — the
 emergency stress operation is excluded because it models an exogenous collateral loss that
-deliberately eats into the margin (it raises `emergencyFlag`).) -/
+deliberately eats into the margin (it raises `emergencyFlag`), and the catastrophic
+backstop is excluded because it is the wind-down operation: it deliberately pays the
+entire reserve — margin included — out to holders, ending the overcollateralized regime
+this invariant describes.) -/
 theorem req_overcollateralization_limit (s : State) (op : Op) (caller : Address) (s' : State)
     (h_step : step s op caller = some s')
     (h_inv : s.totalSupply_apxUSD + s.overcollateralizationBuffer
@@ -2220,13 +2260,15 @@ theorem req_overcollateralization_limit (s : State) (op : Op) (caller : Address)
     (h_rv : s.redemptionValue ≤ ray)
     (h_not_claim : ∀ id, op ≠ Op.claimUnlock id)
     (h_not_flex_claim : ∀ id, op ≠ Op.flexibleClaimUnlock id)
-    (h_not_stress : ∀ a, op ≠ Op.handleStressEvent a) :
+    (h_not_stress : ∀ a, op ≠ Op.handleStressEvent a)
+    (h_not_backstop : op ≠ Op.catastrophicBackstop) :
     s'.totalSupply_apxUSD + s'.overcollateralizationBuffer
       ≤ s'.totalCollateralValue + s'.usdcReserve := by
   cases op
   case claimUnlock id => exact absurd rfl (h_not_claim id)
   case flexibleClaimUnlock id => exact absurd rfl (h_not_flex_claim id)
   case handleStressEvent a => exact absurd rfl (h_not_stress a)
+  case catastrophicBackstop => exact absurd rfl h_not_backstop
   case depositUSDC a =>
     obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
     subst hs'
@@ -2271,7 +2313,7 @@ theorem req_overcollateralization_limit (s : State) (op : Op) (caller : Address)
     simp [emitEvent, burnApxUSD]
     omega
   case executeRFQRedemption u a =>
-    obtain ⟨_, _, h3, h4, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, h3, h4, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
     subst hs'
     have hu : (a * s.redemptionValue) / ray ≤ a := by
       rw [Nat.mul_comm]; exact div_mul_le_total h_rv
@@ -2400,24 +2442,44 @@ theorem req_buffer_not_consumed (s : State) (amount : Nat) (caller : Address) (s
 (per‑apxUSD) Redemption Value so that Total Collateral Value is distributed pro‑rata to holders, and
 MUST distribute the entire reserve, including the buffer.
 
-Corrected against the deployed `ApxUSDRateOracle` (2026-07-08): its `rate` is a *per‑unit* apxUSD→USDC
-price (1e18 precision), not an aggregate, so "Total Collateral Value becomes the redemption value"
-means the per‑unit rate is set to `totalCollateralValue / totalSupply_apxUSD` (in `ray`), which is
-what redeeming the whole supply then pays out (`Σ amount · rate / ray = TCV`). The earlier
-`redemptionValue := totalCollateralValue` (a total assigned to a per‑unit field) was a dimensional
-model‑fidelity error surfaced by the source cross‑check (docs/07 candidate 3).
+Model (all three model.md clauses, plus the guard): a successful `catastrophicBackstop`
+(1) requires the governance emergency flag to be **already set** in the pre-state — the
+backstop cannot raise the flag for itself (model.md guard column: "Governance emergency
+flag set"); (2) reprices every claim to track collateral, `redemptionValue :=
+totalCollateralValue * ray / totalSupply_apxUSD` (the per-token form of "RedemptionValue =
+TotalCollateralValue / totalSupply", in `ray` fixed-point); (3) distributes the **entire**
+USDC reserve pro-rata to apxUSD holders — every address `a` is credited exactly
+`usdcReserve * apxUSDBal a / totalSupply_apxUSD` and the reserve is zeroed; and (4) zeroes
+the recorded overcollateralization buffer (the buffer is part of the distributed reserve).
 
-Scope (honest limitation): only this redemption‑basis clause is formalized. The explicit *per‑holder*
-pro‑rata split requires a `Σ_holder reserve · balance/totalSupply` over the holder set, which the bare
-`Address → Nat` ledger cannot express (same limitation as `Safety.solvency_preserved`); it is left to
-an implementation‑level audit. The buffer‑distribution effect (buffer → 0) is proved separately in
-`SpecDefects.req_catastrophic_backstop_distributes_buffer`. -/
+Redemption-basis fidelity (corrected 2026-07-08 against the deployed `ApxUSDRateOracle`): its
+`rate` is a *per‑unit* apxUSD→USDC price (1e18 precision), not an aggregate, so "Total Collateral
+Value becomes the redemption value" means the per‑unit rate is set to `totalCollateralValue /
+totalSupply_apxUSD` (in `ray`), which is what redeeming the whole supply then pays out
+(`Σ amount · rate / ray = TCV`). The earlier `redemptionValue := totalCollateralValue` (a total
+assigned to a per‑unit field) was a dimensional model‑fidelity error surfaced by the source
+cross‑check (docs/07 candidate 3), fixed here.
+
+Scope (honest limitation): clauses (1)–(4) are all discharged in this statement — including the
+per-address pro-rata credit `usdcReserve · apxUSDBal a / totalSupply` and buffer → 0. What remains
+*unformalized* is only the aggregate **conservation** of that split — that `Σ_holder` of the credits
+exactly equals the drained reserve — which needs a `Σ` over the holder set the bare `Address → Nat`
+ledger cannot express (the same limitation as `Safety.solvency_preserved`); it is left to an
+implementation‑level audit. The buffer‑distribution effect (buffer → 0) is additionally restated,
+guard-free, in `SpecDefects.req_catastrophic_backstop_distributes_buffer`. -/
 theorem req_catastrophic_backstop (s : State) (s' : State)
     (h_step : step s Op.catastrophicBackstop s.admin = some s') :
-    s'.redemptionValue = s.totalCollateralValue * ray / s.totalSupply_apxUSD := by
-  simp [step] at h_step
-  subst h_step
-  rfl
+    s.emergencyFlag = true ∧
+    s'.redemptionValue = (s.totalCollateralValue * ray) / s.totalSupply_apxUSD ∧
+    (∀ a, s'.usdcBal a = s.usdcBal a + (s.usdcReserve * s.apxUSDBal a) / s.totalSupply_apxUSD) ∧
+    s'.usdcReserve = 0 ∧
+    s'.overcollateralizationBuffer = 0 := by
+  simp only [step] at h_step
+  split at h_step
+  · rename_i hc
+    cases Option.some.inj h_step
+    exact ⟨hc.2, rfl, fun a => rfl, rfl, rfl⟩
+  · exact absurd h_step (by simp)
 
 /-- REQ governance_deploy_buffer: The system MUST restrict voting on buffer deployment to holders of the governance token. -/
 theorem req_governance_deploy_buffer (s : State) (s' : State)
@@ -2428,20 +2490,41 @@ theorem req_governance_deploy_buffer (s : State) (s' : State)
   · exact absurd h_step (by simp)
   · omega
 
-/-- REQ rfq_redemption_allowed: The system MUST allow users to submit redemption requests through the RFQ process and MUST permit only approved counterparties to execute those requests. -/
+/-- REQ rfq_redemption_allowed: The system MUST allow users to submit redemption requests
+through the RFQ process and MUST permit only approved counterparties to execute those
+requests.
+
+Model, all three clauses: (1) **submission liveness** — while not paused, any user can
+register an RFQ redemption request, and it is recorded in full in the pending-request
+registry `rfqRequests`; (2) **counterparty-only execution** — a successful execution
+requires the caller to be an approved RFQ counterparty; (3) **execution executes *those*
+requests** — a successful execution also requires (and consumes from) the user's own
+outstanding request: a counterparty can never redeem against a user who has not asked for
+it. (4) is the converse liveness: with all guards met, execution succeeds. -/
 theorem req_rfq_redemption_allowed (s : State) (user caller : Address) (amount : Nat) :
+    (s.globalPause = false →
+      ∃ s', step s (Op.submitRFQRequest amount) user = some s' ∧
+        s'.rfqRequests user = s.rfqRequests user + amount) ∧
     (∀ s', step s (Op.executeRFQRedemption user amount) caller = some s' →
-      s.rfqCounterparties.contains caller = true) ∧
+      s.rfqCounterparties.contains caller = true ∧ amount ≤ s.rfqRequests user) ∧
     (s.globalPause = false → s.rfqCounterparties.contains caller = true →
+      s.whitelist user = true → amount ≤ s.rfqRequests user →
       amount ≤ s.apxUSDBal user → (amount * s.redemptionValue) / ray ≤ s.usdcReserve →
       ∃ s', step s (Op.executeRFQRedemption user amount) caller = some s') := by
-  constructor
+  refine ⟨?_, ?_, ?_⟩
+  · intro h1
+    refine ⟨{ s with rfqRequests := fun a =>
+        if a = user then s.rfqRequests a + amount else s.rfqRequests a }, ?_, by simp⟩
+    simp only [step, h1]
+    rfl
   · intro s' h
-    exact (step_executeRFQRedemption_some _ _ _ _ _ h).2.1
-  · intro h1 h2 h3 h4
+    obtain ⟨_, hcp, _, hreq, _⟩ := step_executeRFQRedemption_some _ _ _ _ _ h
+    exact ⟨hcp, hreq⟩
+  · intro h1 h2 hwl hreq h3 h4
     have h2' : caller ∈ s.rfqCounterparties := by simpa using h2
     rcases ho : step s (Op.executeRFQRedemption user amount) caller with _ | s'
-    · exact absurd ho (by simp [step, h1, h2', Nat.not_lt.mpr h3, Nat.not_lt.mpr h4])
+    · exact absurd ho (by simp [step, h1, h2', hwl, Nat.not_lt.mpr hreq,
+        Nat.not_lt.mpr h3, Nat.not_lt.mpr h4])
     · exact ⟨s', rfl⟩
 
 /-- REQ deposit_immediate: The apyUSD vault MUST complete deposit operations synchronously and
@@ -3174,7 +3257,7 @@ theorem req_buffer_non_decreasing (s s' : State) (op : Op) (caller : Address)
     subst hs'
     exact overcollateralizationBuffer_mono _ _ (by simp [createFlexibleUnlock, burnApxUSD])
       (by simp [createFlexibleUnlock, burnApxUSD]) (by simp [createFlexibleUnlock, burnApxUSD])
-  · obtain ⟨_, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+  · obtain ⟨_, _, _, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
     subst hs'
     exact overcollateralizationBuffer_mono _ _ (by simp [burnApxUSD])
       (by simp [burnApxUSD]) (by simp [burnApxUSD])
@@ -3507,7 +3590,7 @@ private theorem vaultApxUSDBal_unchanged_of_non_vault_op (s : State) (op : Op) (
     subst hs'
     simp [mintApxUSD, burnUnlockNFT]
   case executeRFQRedemption u am =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
     subst hs'
     simp [burnApxUSD]
   all_goals
@@ -3652,7 +3735,7 @@ theorem req_unlock_cannot_be_cancelled (s : State) (op : Op) (caller : Address) 
     subst hs'
     simp [emitEvent, burnApxUSD, h_live] at h_gone
   case executeRFQRedemption u am =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
     subst hs'
     simp [burnApxUSD, h_live] at h_gone
   all_goals
@@ -3780,7 +3863,7 @@ theorem req_unlock_token_nontransferable (s : State) (op : Op) (caller : Address
     exact ⟨fun i hi => h_fresh i (by simpa [emitEvent, burnApxUSD] using hi),
       fun id owner h_own => Or.inl (by simpa [emitEvent, burnApxUSD] using h_own)⟩
   case executeRFQRedemption u am =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
+    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
     subst hs'
     exact ⟨fun i hi => h_fresh i (by simpa [burnApxUSD] using hi),
       fun id owner h_own => Or.inl (by simpa [burnApxUSD] using h_own)⟩

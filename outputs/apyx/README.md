@@ -293,10 +293,13 @@ than an explicit gap:
 
 - **`catastrophic-backstop`, second clause** — "distribute the entire reserve pro-rata to remaining
   holders." The first clause (setting the per-unit redemption value to `totalCollateralValue / totalSupply`,
-  matching the deployed `ApxUSDRateOracle`) **is** proved (`req_catastrophic_backstop`), and the resulting
-  buffer-to-zero effect is proved in `SpecDefects`; a genuine *per-holder* pro-rata split requires a
-  `Σ_holder reserve · balance/totalSupply` over the holder set, but balances are aggregate `Address → Nat`
-  maps with no summation structure — the same
+  matching the deployed `ApxUSDRateOracle`) **is** proved (`req_catastrophic_backstop`), as is the
+  *per-address* pro-rata credit itself — every holder `a` is shown to be credited exactly
+  `usdcReserve · apxUSDBal(a) / totalSupply` with the reserve and the buffer both driven to zero
+  (`req_catastrophic_backstop` clauses (3)–(4), and the buffer-to-zero effect restated in `SpecDefects`).
+  What remains unformalized is only the *aggregate conservation* of that split — that `Σ_holder` of the
+  credits exactly equals the drained reserve — which needs a `Σ` over the holder set the aggregate
+  `Address → Nat` ledger has no summation structure for; the same
   limitation that makes `solvency_preserved` take well-formedness as a hypothesis.
 - **`caller_net_nonpositive`, trace-level closure** — the value-weighted no-free-money property is proved
   single-step at a fixed reference rate; extending it to arbitrary traces under a *moving* exchange rate is a
@@ -326,7 +329,7 @@ Halmos, hevm; **Fuzz** = Echidna, Medusa, Foundry invariant; **Config** = role-g
 | 6 | **ERC-20/4626 ledger identity** `Σ balances = totalSupply` — the model *assumes* it (`solvency_preserved`/`req_overcollateralization_limit` take `WellFormed` as a hypothesis) | Balances are bare `Address → Nat` with no summation structure | SMT invariant on the deployed token/vault |
 | 7 | **ERC-4626 inflation defense in the real vault** — the Lean proves donation-immunity of the *abstract* model; the Solidity must actually use virtual-shares/offset (or a seed deposit) so `totalAssets` isn't donatable | Model has no raw-transfer sink; the real `balanceOf`-based `totalAssets` might | SMT (share-price manipulation rule) + Fuzz |
 | 8 | **Vesting timestamp detail** — `LinearVestV0` separates `lastDepositTimestamp`/`lastTransferTimestamp`; the model collapses to a single `vestStart` (documented simplification), so a pull can shift the vesting end | Model has one clock anchor | SMT/Fuzz on `LinearVestV0` |
-| 9 | **Per-holder pro-rata distribution** (catastrophic-backstop 2nd clause) | Needs `Σ_holder reserve·balance/totalSupply`; aggregate ledger can't express it (§6.2) | Implementation audit + SMT |
+| 9 | **Aggregate conservation of the pro-rata split** (catastrophic-backstop 2nd clause) | The *per-address* credit `reserve·balance/totalSupply` is proved (`req_catastrophic_backstop`); only `Σ_holder` of the credits = drained reserve is left, needing a `Σ` the aggregate ledger can't express (§6.2) | Implementation audit + SMT |
 | 10 | **Access-control configuration** — the OZ `AccessManager` role graph and the **actual per-function delays** (the 0-second-timelock risk Yearn flagged; the model proves `base_model_has_no_timelock`), plus `MinterV0` rate-limit params | Model abstracts roles to `caller = admin/oracle/…`; it does not carry the deployed authority wiring or delay values | **Config review** + Static |
 | 11 | **Signature handling** in `MinterV0` — EIP-712 order signing and ERC-1271 contract signatures: replay, malleability, nonce/expiry, domain separator | The model has no signatures; mint authorization is abstracted away | Static + SMT (signature-replay rules) |
 | 12 | **Upgradeability** — the UUPS oracles (`ApxUSDRateOracle`, `ApyUSDRateOracle`): `_authorizeUpgrade` gating, initializer protection, and **ERC-7201 storage-layout** stability across upgrades | Model has no proxies, no storage layout, no upgrade op | Static (upgradeability) + OZ upgrades plugin + storage-layout diff |

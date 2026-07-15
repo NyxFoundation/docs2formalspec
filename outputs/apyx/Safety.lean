@@ -245,9 +245,12 @@ private theorem inv_redeem (s : State) (shares : Nat) (receiver caller : Address
 private theorem inv_executeRFQRedemption (s : State) (user : Address) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.executeRFQRedemption user amount) caller = some s') :
     s.globalPause = false ∧ s.rfqCounterparties.contains caller = true ∧
+    amount ≤ s.rfqRequests user ∧
     amount ≤ s.apxUSDBal user ∧
     (amount * s.redemptionValue) / ray ≤ s.usdcReserve ∧
     s' = { burnApxUSD s user amount with
+        rfqRequests := fun a => if a = user then (burnApxUSD s user amount).rfqRequests a - amount
+                                else (burnApxUSD s user amount).rfqRequests a
         usdcReserve := (burnApxUSD s user amount).usdcReserve - (amount * s.redemptionValue) / ray
         usdcBal := fun a => if a = user then (burnApxUSD s user amount).usdcBal a + (amount * s.redemptionValue) / ray
                             else (burnApxUSD s user amount).usdcBal a } := by
@@ -260,7 +263,12 @@ private theorem inv_executeRFQRedemption (s : State) (user : Address) (amount : 
       · exact absurd h (by simp)
       · split at h
         · exact absurd h (by simp)
-        · exact ⟨by simp_all, by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
+        · split at h
+          · exact absurd h (by simp)
+          · split at h
+            · exact absurd h (by simp)
+            · exact ⟨by simp_all, by simp_all, by omega, by omega, by omega,
+                (Option.some.inj h).symm⟩
 
 /-! ## S1 `no_free_value_trace` — no apxUSD value created from nothing
 
@@ -435,7 +443,7 @@ private theorem penniless_step (s : State) (op : Op) (caller : Address) (s' : St
       simp [mintApxUSD, burnUnlockNFT, h0, hx]
     · simp [mintApxUSD, burnUnlockNFT, hao, hx]
   case executeRFQRedemption user amount =>
-    obtain ⟨-, -, hle, -, hs'⟩ := inv_executeRFQRedemption _ _ _ _ _ h_step
+    obtain ⟨-, -, -, hle, -, hs'⟩ := inv_executeRFQRedemption _ _ _ _ _ h_step
     subst hs'
     refine ⟨?_, ?_,
       by simpa [burnApxUSD] using hstd,
@@ -445,6 +453,14 @@ private theorem penniless_step (s : State) (op : Op) (caller : Address) (s' : St
         have h0 : amount = 0 := by omega
         simp [burnApxUSD, h0, hx, hu]
       · simp [burnApxUSD, hua, hx, hu]
+  case catastrophicBackstop =>
+    -- the pro-rata reserve distribution credits `a` exactly
+    -- `usdcReserve * apxUSDBal a / totalSupply`, which is 0 for a penniless `a`
+    simp only [step] at h_step
+    split at h_step
+    · cases Option.some.inj h_step
+      exact ⟨hx, by simp [hx, hu], hstd, hflex⟩
+    · exact absurd h_step (by simp)
   all_goals
     simp only [step] at h_step
     split at h_step <;>
@@ -521,13 +537,13 @@ something it manufactures from a bare initial condition.
 
 Scope, exactly mirroring `req_overcollateralization_limit`: `claimUnlock` and
 `flexibleClaimUnlock` are excluded because they re-mint apxUSD against an unlock
-obligation the aggregate state does not track as a liability, and
-`handleStressEvent` is excluded because it models an exogenous collateral loss that
-deliberately eats into the margin. `catastrophicBackstop` needs no separate
-exclusion here: it does not move any of the four quantities `Solvent` compares, so it
-trivially preserves solvency itself — it only pushes `redemptionValue` (potentially
-above `ray`) for *future* steps, which surfaces honestly as a heavier `WellFormed`
-proof burden on the caller for the remainder of the trace, not as unsoundness. -/
+obligation the aggregate state does not track as a liability, `handleStressEvent` is
+excluded because it models an exogenous collateral loss that deliberately eats into
+the margin, and `catastrophicBackstop` is excluded because it is the documented
+wind-down operation: per model.md/corpus.md it pays the **entire** USDC reserve —
+buffer included — out to holders pro-rata and zeroes the recorded buffer, which
+deliberately ends the overcollateralized regime `Solvent` describes rather than
+operating inside it. -/
 
 /-- `Solvent s`: aggregate collateralization is maintained — outstanding apxUSD claims
 plus the required margin never exceed the collateral basket plus the USDC reserve.
@@ -551,20 +567,24 @@ theorem solvency_step (s : State) (op : Op) (caller : Address) (s' : State)
     (h_step : step s op caller = some s') (h_solvent : Solvent s) (h_wf : WellFormed s)
     (h_not_claim : ∀ id, op ≠ Op.claimUnlock id)
     (h_not_flex_claim : ∀ id, op ≠ Op.flexibleClaimUnlock id)
-    (h_not_stress : ∀ a, op ≠ Op.handleStressEvent a) :
+    (h_not_stress : ∀ a, op ≠ Op.handleStressEvent a)
+    (h_not_backstop : op ≠ Op.catastrophicBackstop) :
     Solvent s' :=
   req_overcollateralization_limit s op caller s' h_step h_solvent h_wf.1 h_wf.2
-    h_not_claim h_not_flex_claim h_not_stress
+    h_not_claim h_not_flex_claim h_not_stress h_not_backstop
 
 /-- **S2 `solvency_preserved`** (docs/06-safety-properties.md, Tier A): aggregate
 overcollateralization is preserved across arbitrary traces (revert-skip semantics),
 given that ledger well-formedness holds at every point visited along the way and the
-trace never calls `claimUnlock`/`flexibleClaimUnlock`/`handleStressEvent`. -/
+trace never calls `claimUnlock`/`flexibleClaimUnlock`/`handleStressEvent`/
+`catastrophicBackstop` (the last being the documented wind-down that distributes the
+whole reserve to holders). -/
 theorem solvency_preserved (s : State) (σ : List (Op × Address))
     (h_solvent : Solvent s)
     (h_wf : ∀ n, WellFormed (execTrace s (σ.take n)))
     (h_excl : ∀ p ∈ σ, (∀ id, p.1 ≠ Op.claimUnlock id) ∧
-      (∀ id, p.1 ≠ Op.flexibleClaimUnlock id) ∧ (∀ a, p.1 ≠ Op.handleStressEvent a)) :
+      (∀ id, p.1 ≠ Op.flexibleClaimUnlock id) ∧ (∀ a, p.1 ≠ Op.handleStressEvent a) ∧
+      p.1 ≠ Op.catastrophicBackstop) :
     Solvent (execTrace s σ) := by
   induction σ generalizing s with
   | nil => exact h_solvent
@@ -572,7 +592,8 @@ theorem solvency_preserved (s : State) (σ : List (Op × Address))
     obtain ⟨op, c⟩ := p
     have hhead := h_excl (op, c) List.mem_cons_self
     have htail : ∀ q ∈ σ, (∀ id, q.1 ≠ Op.claimUnlock id) ∧
-        (∀ id, q.1 ≠ Op.flexibleClaimUnlock id) ∧ (∀ a, q.1 ≠ Op.handleStressEvent a) :=
+        (∀ id, q.1 ≠ Op.flexibleClaimUnlock id) ∧ (∀ a, q.1 ≠ Op.handleStressEvent a) ∧
+        q.1 ≠ Op.catastrophicBackstop :=
       fun q hq => h_excl q (List.mem_cons_of_mem _ hq)
     have hwf0 : WellFormed s := by simpa [execTrace] using h_wf 0
     simp only [execTrace]
@@ -583,7 +604,8 @@ theorem solvency_preserved (s : State) (σ : List (Op × Address))
       simpa [execTrace, hstep] using h_wf (n + 1)
     | some s1 =>
       have hsolvent1 : Solvent s1 :=
-        solvency_step s op c s1 hstep h_solvent hwf0 hhead.1 hhead.2.1 hhead.2.2
+        solvency_step s op c s1 hstep h_solvent hwf0 hhead.1 hhead.2.1 hhead.2.2.1
+          hhead.2.2.2
       refine ih s1 hsolvent1 ?_ htail
       intro n
       simpa [execTrace, hstep] using h_wf (n + 1)
@@ -1296,11 +1318,14 @@ genuinely hard arithmetic problem left explicitly open in `docs/06-safety-proper
 
 /-- Operations on which the flat fixed-rate `valueAt` ledger is a sound value measure: neither
 share-moving (`lockApxUSD`/`withdraw`/`redeem`), nor an unlock settlement
-(`claimUnlock`/`flexibleClaimUnlock`), nor a third-party gift mint (`mintApxUSD`). -/
+(`claimUnlock`/`flexibleClaimUnlock`), nor a third-party gift mint (`mintApxUSD`), nor the
+catastrophic backstop (`catastrophicBackstop`), which pays the entire USDC reserve — buffer
+included — out to holders pro-rata and so legitimately *increases* holders' fixed-rate value. -/
 def ValuePreservingOp (op : Op) : Prop :=
   (∀ to n, op ≠ Op.mintApxUSD to n) ∧ (∀ n, op ≠ Op.lockApxUSD n) ∧
   (∀ n r, op ≠ Op.withdraw n r) ∧ (∀ sh r, op ≠ Op.redeem sh r) ∧
-  (∀ id, op ≠ Op.claimUnlock id) ∧ (∀ id, op ≠ Op.flexibleClaimUnlock id)
+  (∀ id, op ≠ Op.claimUnlock id) ∧ (∀ id, op ≠ Op.flexibleClaimUnlock id) ∧
+  (op ≠ Op.catastrophicBackstop)
 
 /-- Single step of S9: a value-preserving operation never increases any address's holdings
 valued at a fixed rate `R` (given the no-premium-redemption side condition). -/
@@ -1308,7 +1333,7 @@ theorem valueAt_step_le (R : Nat) (s : State) (op : Op) (caller a : Address) (s'
     (h_step : step s op caller = some s') (h_op : ValuePreservingOp op)
     (h_rv : s.redemptionValue ≤ ray) :
     valueAt R s' a ≤ valueAt R s a := by
-  obtain ⟨hm, hl, hw, hr, hc, hf⟩ := h_op
+  obtain ⟨hm, hl, hw, hr, hc, hf, hcb⟩ := h_op
   cases op
   case mintApxUSD to n => exact absurd rfl (hm to n)
   case lockApxUSD n => exact absurd rfl (hl n)
@@ -1316,6 +1341,7 @@ theorem valueAt_step_le (R : Nat) (s : State) (op : Op) (caller a : Address) (s'
   case redeem sh r => exact absurd rfl (hr sh r)
   case claimUnlock id => exact absurd rfl (hc id)
   case flexibleClaimUnlock id => exact absurd rfl (hf id)
+  case catastrophicBackstop => exact absurd rfl hcb
   case depositUSDC amount =>
     obtain ⟨-, -, -, hle, hs'⟩ := inv_depositUSDC s amount caller s' h_step
     subst hs'
@@ -1344,7 +1370,7 @@ theorem valueAt_step_le (R : Nat) (s : State) (op : Op) (caller a : Address) (s'
     by_cases hac : a = caller <;>
       simp [createFlexibleUnlock, burnApxUSD, hac] <;> omega
   case executeRFQRedemption user amount =>
-    obtain ⟨-, -, hle, -, hs'⟩ := inv_executeRFQRedemption s user amount caller s' h_step
+    obtain ⟨-, -, -, hbal, -, hs'⟩ := inv_executeRFQRedemption s user amount caller s' h_step
     subst hs'
     have hb := redemptionValue_div_ray_le amount s.redemptionValue h_rv
     unfold valueAt
