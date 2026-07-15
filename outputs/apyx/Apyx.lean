@@ -753,9 +753,11 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     -- catastrophic scenario (model.md guard: "Governance emergency flag set" — the
     -- backstop can only fire once the emergency flag is already up, raised by the
     -- stress pathway `Op.handleStressEvent`; it does not raise the flag itself).
-    -- Effect, per model.md/corpus.md: every claim is repriced to track collateral
-    -- (RedemptionValue = TotalCollateralValue / totalSupply_apxUSD, in `ray`
-    -- fixed-point per token), and the entire USDC reserve — buffer included — is
+    -- Effect, per model.md/corpus.md: every claim is repriced so the per-apxUSD
+    -- redemption value becomes Total Collateral Value ÷ total apxUSD supply, in `ray`
+    -- fixed-point per token (matching the deployed `ApxUSDRateOracle`, whose `rate` is a
+    -- per-unit apxUSD→USDC price, not an aggregate — the dimensional fix from
+    -- docs/07 candidate 3), and the entire USDC reserve — buffer included — is
     -- distributed pro-rata to apxUSD holders, zeroing the reserve and the buffer.
     if caller = s.admin ∧ s.emergencyFlag = true then
       some { s with
@@ -2436,9 +2438,9 @@ theorem req_buffer_not_consumed (s : State) (amount : Nat) (caller : Address) (s
   exact overcollateralizationBuffer_mono _ _ (by simp [emitEvent, burnApxUSD])
     (by simp [emitEvent, burnApxUSD]) (by simp [emitEvent, burnApxUSD])
 
-/-- REQ catastrophic_backstop: Upon detection of a catastrophic scenario, the system MUST set
-Redemption Value equal to Total Collateral Value and MUST distribute the entire reserve, including
-the buffer, pro‑rata to remaining holders.
+/-- REQ catastrophic_backstop: Upon detection of a catastrophic scenario, the system MUST set the
+(per‑apxUSD) Redemption Value so that Total Collateral Value is distributed pro‑rata to holders, and
+MUST distribute the entire reserve, including the buffer.
 
 Model (all three model.md clauses, plus the guard): a successful `catastrophicBackstop`
 (1) requires the governance emergency flag to be **already set** in the pre-state — the
@@ -2448,7 +2450,23 @@ totalCollateralValue * ray / totalSupply_apxUSD` (the per-token form of "Redempt
 TotalCollateralValue / totalSupply", in `ray` fixed-point); (3) distributes the **entire**
 USDC reserve pro-rata to apxUSD holders — every address `a` is credited exactly
 `usdcReserve * apxUSDBal a / totalSupply_apxUSD` and the reserve is zeroed; and (4) zeroes
-the recorded overcollateralization buffer (the buffer is part of the distributed reserve). -/
+the recorded overcollateralization buffer (the buffer is part of the distributed reserve).
+
+Redemption-basis fidelity (corrected 2026-07-08 against the deployed `ApxUSDRateOracle`): its
+`rate` is a *per‑unit* apxUSD→USDC price (1e18 precision), not an aggregate, so "Total Collateral
+Value becomes the redemption value" means the per‑unit rate is set to `totalCollateralValue /
+totalSupply_apxUSD` (in `ray`), which is what redeeming the whole supply then pays out
+(`Σ amount · rate / ray = TCV`). The earlier `redemptionValue := totalCollateralValue` (a total
+assigned to a per‑unit field) was a dimensional model‑fidelity error surfaced by the source
+cross‑check (docs/07 candidate 3), fixed here.
+
+Scope (honest limitation): clauses (1)–(4) are all discharged in this statement — including the
+per-address pro-rata credit `usdcReserve · apxUSDBal a / totalSupply` and buffer → 0. What remains
+*unformalized* is only the aggregate **conservation** of that split — that `Σ_holder` of the credits
+exactly equals the drained reserve — which needs a `Σ` over the holder set the bare `Address → Nat`
+ledger cannot express (the same limitation as `Safety.solvency_preserved`); it is left to an
+implementation‑level audit. The buffer‑distribution effect (buffer → 0) is additionally restated,
+guard-free, in `SpecDefects.req_catastrophic_backstop_distributes_buffer`. -/
 theorem req_catastrophic_backstop (s : State) (s' : State)
     (h_step : step s Op.catastrophicBackstop s.admin = some s') :
     s.emergencyFlag = true ∧
@@ -3210,11 +3228,16 @@ theorem req_mint_redeem_at_redemption_value (s : State) (amount : Nat) (to calle
     subst hs'
     simp [emitEvent, burnApxUSD]
 
-/-- REQ buffer-non-decreasing: The overcollateralization buffer, defined as the difference
-between Redemption Value and Total Collateral Value, MUST NOT decrease; it MAY increase over
-time due to yield spreads and collateral appreciation. (Model: across every operation that
-burns apxUSD — standard and flexible unlock requests, direct redemptions and RFQ
-redemptions — the buffer is non-decreasing.) -/
+/-- REQ buffer-non-decreasing (corrected 2026-07-08 to match `corpus.md`): outside of a
+catastrophic backstop, the overcollateralization buffer MUST NOT decrease during routine
+redemptions or stress events; it MAY increase over time via yield spreads and collateral
+appreciation. A catastrophic backstop is the sole exception and distributes the entire buffer
+(see `req_catastrophic_backstop` and `SpecDefects.req_catastrophic_backstop_distributes_buffer`).
+(Model: across every routine apxUSD-burning operation — standard and flexible unlock requests,
+direct redemptions and RFQ redemptions — the buffer is non-decreasing. `catastrophicBackstop`
+is correctly *not* covered here, matching the corrected requirement's exception; the earlier
+unconditional wording of this requirement was an over-generalized extraction, see
+`docs/07-spec-defects.md` candidate 1.) -/
 theorem req_buffer_non_decreasing (s s' : State) (op : Op) (caller : Address)
     (h_step : step s op caller = some s')
     (h_redemption : (∃ a, op = Op.redeemApxUSD a) ∨ (∃ a, op = Op.requestUnlock a) ∨

@@ -5,7 +5,7 @@
 | **Subject** | Apyx (apyx.fi) — the apxUSD / apyUSD dividend-backed stablecoin protocol |
 | **Contracts** (Ethereum mainnet, per the ingested documentation) | apxUSD [`0x98A8…4665`](https://etherscan.io/address/0x98A878b1Cd98131B271883B390f68D2c90674665) · apyUSD [`0x38EE…8a6A`](https://etherscan.io/address/0x38EEb52F0771140d10c4E9A9a72349A329Fe8a6A) · UnlockToken [`0x9377…BF4e6`](https://etherscan.io/address/0x93775E2dFa4e716c361A1f53F212c7AE031BF4e6) |
 | **Method** | RFC 2119 specification → Lean 4 state-machine model → machine-checked theorems |
-| **Result** | 162 theorems proved, 0 `sorry`, kernel-verified (`lake build`, Lean 4.31.0) |
+| **Result** | 170 theorems proved, 0 `sorry`, kernel-verified (`lake build`, Lean 4.31.0). No internal *contradiction* was found in Apyx's specification, but the analysis machine-proved concrete design *weaknesses* — a two-key (admin + RFQ) total-loss path, and the absence of a redemption-price floor/cap and an admin timelock (§4.1, §5). |
 | **Date** | 2026-07-07 |
 
 ---
@@ -14,14 +14,15 @@
 
 Apyx's public protocol documentation was formalized into (a) a normative RFC 2119 specification
 ([`SPEC.md`](SPEC.md)) and (b) an executable Lean 4 model of the protocol's state machine
-([`Apyx.lean`](Apyx.lean)). Against that model we proved **162 theorems**, each re-checked from
-source by the Lean kernel, in three groups:
+([`Apyx.lean`](Apyx.lean)). Against that model we proved **170 theorems**, each re-checked from
+source by the Lean kernel, in four groups:
 
 | Group | Question answered | Count | File |
 |---|---|---|---|
 | **Requirement conformance** | Does the design behave as the documentation specifies? | 82 | [`Apyx.lean`](Apyx.lean) |
 | **Key-compromise blast radius** | If a privileged operator key is stolen, how much can be lost? | 56 | [`BlastRadius.lean`](BlastRadius.lean) |
-| **Design safety** | Can an ordinary user drain the protocol using only legitimate calls? | 24 | [`Safety.lean`](Safety.lean) |
+| **Design safety** | Can an ordinary user drain the protocol using only legitimate calls? | 30 | [`Safety.lean`](Safety.lean) |
+| **Spec-defect / gap search** | Is the requirement set consistent, and are the economic parameters bounded? | 2 | [`SpecDefects.lean`](SpecDefects.lean) — §9 |
 
 Headline findings for Apyx:
 
@@ -31,6 +32,10 @@ Headline findings for Apyx:
   RFQ counterparty), because the model has no lower bound on the redemption price (§4.2, §5).
 - **The vesting logic is correct.** Formalizing it prompted a close reading of `LinearVestV0.sol`, which
   confirmed the deployed two-accumulator vesting design does not forfeit accrued yield (§4.3).
+- **No contradiction in Apyx's own documentation.** A consistency search flagged an apparent conflict
+  between two *extracted* requirements, but tracing it to the source docs showed the source is consistent —
+  the conflict was an artifact of our automated extraction over-generalizing one requirement (§9). No change
+  to Apyx's spec is warranted; the fix is in our tooling.
 - **Design recommendations** (a redemption-price floor, a withdrawal rate limit, and an admin timelock)
   are backed by proof: §5 shows exactly what each would guarantee.
 
@@ -201,7 +206,7 @@ payout is exactly `amount × redemptionValue / ray` with no cap on `redemptionVa
 (`redeem_payout_formula`, `redeem_payout_has_no_cap`) — so the loss is unbounded. This directly motivates
 the recommendations in §5.
 
-### 4.2 Design safety — honest-actor attacks (24 theorems, [`Safety.lean`](Safety.lean))
+### 4.2 Design safety — honest-actor attacks (30 theorems, [`Safety.lean`](Safety.lean))
 
 This group assumes every actor is honest and asks whether the *design itself* lets an ordinary attacker
 extract value using only legitimate operations.
@@ -216,6 +221,10 @@ extract value using only legitimate operations.
 | No free extraction | A caller cannot end richer than they started (single-step, fixed reference rate) | `caller_net_nonpositive`, and the `caller_value_*` family |
 | No early yield drain | Vested yield cannot be pulled forward faster than its linear schedule | `vest_no_early_drain` |
 | Vesting conservation | Both crediting new yield and reconfiguring the vesting period preserve already-accrued yield | `creditYield_preserves_accrued_vest`, `setVestPeriod_preserves_accrued_vest` |
+| No peg-spread round trip | The arbitrage mint (needs price > $1) and arbitrage redeem (needs price < $1) require opposite price regimes, so no single state enables both | `no_same_state_arbitrage_round_trip` |
+| Redemption request is backed | A redemption request burns exactly the requested apxUSD and leaves the caller one tracked position — the obligation exactly equals the burn (no free claim) | `requestUnlock_backs_claim_by_burn` |
+| No free extraction (trace) | Over arbitrary traces of non-share operations, no address's fixed-rate holdings can increase — no free money through the redemption / RFQ / request channels at any length (the share-op + live-rate closure is left open, see §6.2) | `caller_net_nonpositive_trace` |
+| Share-price monotonicity | A new deposit never dilutes the exchange rate, and crediting yield preserves it (raising it only as yield vests over time) — the ERC-4626 dilution invariant | `exchange_rate_monotone_deposit`, `exchange_rate_monotone_creditYield`, `req_exchange_rate_non_decreasing` |
 
 ### 4.3 The vesting cross-check (a positive finding)
 
@@ -283,9 +292,14 @@ Two clauses need structure the abstract model does not carry; encoding a fiction
 than an explicit gap:
 
 - **`catastrophic-backstop`, second clause** — "distribute the entire reserve pro-rata to remaining
-  holders." The first clause (setting the redemption basis to total collateral value) **is** proved
-  (`req_catastrophic_backstop`); a genuine pro-rata split requires a `Σ_holder reserve · balance/totalSupply`
-  over the holder set, but balances are aggregate `Address → Nat` maps with no summation structure — the same
+  holders." The first clause (setting the per-unit redemption value to `totalCollateralValue / totalSupply`,
+  matching the deployed `ApxUSDRateOracle`) **is** proved (`req_catastrophic_backstop`), as is the
+  *per-address* pro-rata credit itself — every holder `a` is shown to be credited exactly
+  `usdcReserve · apxUSDBal(a) / totalSupply` with the reserve and the buffer both driven to zero
+  (`req_catastrophic_backstop` clauses (3)–(4), and the buffer-to-zero effect restated in `SpecDefects`).
+  What remains unformalized is only the *aggregate conservation* of that split — that `Σ_holder` of the
+  credits exactly equals the drained reserve — which needs a `Σ` over the holder set the aggregate
+  `Address → Nat` ledger has no summation structure for; the same
   limitation that makes `solvency_preserved` take well-formedness as a hypothesis.
 - **`caller_net_nonpositive`, trace-level closure** — the value-weighted no-free-money property is proved
   single-step at a fixed reference rate; extending it to arbitrary traces under a *moving* exchange rate is a
@@ -297,10 +311,35 @@ than an explicit gap:
 - **`rebalance-overcollateralization`** — the model tracks only aggregate collateral value, not basket
   composition, and has no active rebalancing operation (only the passive invariant is modeled).
 
-### 6.4 Outside any state-machine model (bytecode-audit territory)
-Reentrancy, cross-protocol flash-loan composition, implementation-level input validation, gas, storage
-layout, and upgrade safety cannot be expressed in this atomic transition model. These are the subject of an
-implementation-level audit (recommendation §5.7).
+### 6.4 What the design layer cannot check — hand-off to implementation-level tools
+
+This report verifies an **abstract, atomic, hand-built** model. Everything below is invisible to it *by
+construction* and must be checked against the **deployed Solidity** with static analysis, SMT/symbolic
+execution, and invariant fuzzing. This is the honest boundary — the design-level proofs and this list are
+complementary, not redundant. (Tool classes: **Static** = Slither/Aderyn/semgrep; **SMT** = Certora Prover,
+Halmos, hevm; **Fuzz** = Echidna, Medusa, Foundry invariant; **Config** = role-graph/delay/storage review.)
+
+| # | Item the design model cannot cover | Why the Lean layer can't see it | Check with |
+|---|---|---|---|
+| 1 | **Reentrancy** (single-fn, cross-fn, and **read-only** — a view returning mid-update state) | `step` is atomic; there is no notion of an external call re-entering mid-transition | Static + SMT (reentrancy rules) + Fuzz |
+| 2 | **Cross-protocol / flash-loan composition** (e.g. manipulating an external pool the protocol reads) | The model has one protocol, one closed `Op`; no external mutable state | SMT with attacker harness + economic sim |
+| 3 | **Bytecode ⊨ model** — the model is a *hand-built interpretation* and can diverge from the contract (as the vesting and catastrophic-per-unit cases here showed) | Proofs are about the Lean model, not `ApxUSD`/`ApyUSD`/`RedemptionPoolV0`/`LinearVestV0` bytecode | **SMT (Certora/Halmos) on the actual contracts** — the primary complement |
+| 4 | **Fixed-point rounding & decimals** — the Lean `rounding_favors_protocol` is over abstract `Nat`; the Solidity `mulDiv`/round directions and USDC(6)↔apxUSD/apyUSD(18) scaling must match | Model uses ideal `Nat` division; no `uint256`/decimals semantics | SMT + Static |
+| 5 | **Overflow / unchecked / division-by-zero** — Lean `x/0 = 0` masks a Solidity revert; `unchecked{}` blocks | Nat arithmetic never overflows or reverts | Static + SMT |
+| 6 | **ERC-20/4626 ledger identity** `Σ balances = totalSupply` — the model *assumes* it (`solvency_preserved`/`req_overcollateralization_limit` take `WellFormed` as a hypothesis) | Balances are bare `Address → Nat` with no summation structure | SMT invariant on the deployed token/vault |
+| 7 | **ERC-4626 inflation defense in the real vault** — the Lean proves donation-immunity of the *abstract* model; the Solidity must actually use virtual-shares/offset (or a seed deposit) so `totalAssets` isn't donatable | Model has no raw-transfer sink; the real `balanceOf`-based `totalAssets` might | SMT (share-price manipulation rule) + Fuzz |
+| 8 | **Vesting timestamp detail** — `LinearVestV0` separates `lastDepositTimestamp`/`lastTransferTimestamp`; the model collapses to a single `vestStart` (documented simplification), so a pull can shift the vesting end | Model has one clock anchor | SMT/Fuzz on `LinearVestV0` |
+| 9 | **Aggregate conservation of the pro-rata split** (catastrophic-backstop 2nd clause) | The *per-address* credit `reserve·balance/totalSupply` is proved (`req_catastrophic_backstop`); only `Σ_holder` of the credits = drained reserve is left, needing a `Σ` the aggregate ledger can't express (§6.2) | Implementation audit + SMT |
+| 10 | **Access-control configuration** — the OZ `AccessManager` role graph and the **actual per-function delays** (the 0-second-timelock risk Yearn flagged; the model proves `base_model_has_no_timelock`), plus `MinterV0` rate-limit params | Model abstracts roles to `caller = admin/oracle/…`; it does not carry the deployed authority wiring or delay values | **Config review** + Static |
+| 11 | **Signature handling** in `MinterV0` — EIP-712 order signing and ERC-1271 contract signatures: replay, malleability, nonce/expiry, domain separator | The model has no signatures; mint authorization is abstracted away | Static + SMT (signature-replay rules) |
+| 12 | **Upgradeability** — the UUPS oracles (`ApxUSDRateOracle`, `ApyUSDRateOracle`): `_authorizeUpgrade` gating, initializer protection, and **ERC-7201 storage-layout** stability across upgrades | Model has no proxies, no storage layout, no upgrade op | Static (upgradeability) + OZ upgrades plugin + storage-layout diff |
+| 13 | **Gas / DoS** — e.g. `MinterV0`'s `mintHistory` `DoubleEndedQueue` growth and any unbounded loops | Model has no gas metering or loop cost | Static + gas profiling + Fuzz |
+| 14 | **Cross-chain** — `BridgedApyxToken` / `CCIPBridge` in the repo | Out of the single-chain state machine entirely | Separate bridge audit |
+| 15 | **Off-chain processes** — USD collection & the mint/redeem **spread** (`price-may-include-spreads`, applied off-chain — §6.3), treasury custody, attestations, and the oracle **price-setting process** feeding `setRate` | Not on-chain state | Operational / process audit |
+
+**Priority within this list:** #3 (bytecode⊨model) and #7 (real-vault inflation defense) are the highest-value
+SMT targets — they directly re-check, at the implementation level, the two guarantees this report proves
+abstractly. #10 (delays/roles) directly determines whether the §5 timelock recommendation is already met.
 
 ---
 
@@ -335,9 +374,60 @@ axioms of Lean's logic; none is an unproved assumption. Compile status is record
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine |
 | [`Apyx.lean`](Apyx.lean) | The formal model (`State`, `Op`, `step`) and the 82 requirement proofs |
 | [`BlastRadius.lean`](BlastRadius.lean) | The 56 key-compromise blast-radius proofs and the defense wrappers |
-| [`Safety.lean`](Safety.lean) | The 24 design-safety proofs |
+| [`Safety.lean`](Safety.lean) | The 30 design-safety proofs |
+| [`SpecDefects.lean`](SpecDefects.lean) | The spec-consistency and parameter-bound gap-witness proofs (§9) |
 | [`leancheck.json`](leancheck.json) | Build status: requirement theorems, `sorry` count, vacuous count |
 | [`corpus.md`](corpus.md) | The raw ingested source documentation |
+
+---
+
+## 9. Requirement-consistency and parameter-bound gaps
+
+This group turns the lens on the requirement set itself and on the economic parameters.
+
+### 9.1 A machine-checked parameter gap — the redemption price has no floor or cap
+
+The redemption price (`redemptionValue`) has **no enforced floor and no enforced cap** in the design, and it
+is written by the admin (`catastrophicBackstop`; on-chain, the `ApxUSDRateOracle`, gated only by `> 0`). Two
+witnesses prove the consequences:
+
+- **`redemption_has_no_floor`** — there is a reachable state (`redemptionValue = 0`) in which a whitelisted
+  holder's `redeemApxUSD` **succeeds** yet pays **0 USDC** for the apxUSD it burns: a total loss the guards do
+  not prevent.
+- **`BlastRadius.redeem_payout_has_no_cap`** — symmetrically, no upper bound on the payout exists.
+
+Together with the two-key coalition (§4.1), these are the concrete design weaknesses of the model. **Fix:** a
+redemption-price floor/clamp, a withdrawal rate limit, and an admin timelock (§5) — the same three defenses §5
+already quantifies. (This matches the two most common industry loss patterns — unbounded parameters and
+privileged-key/governance gaps; see [`docs/08-defi-vuln-patterns.md`](https://github.com/NyxFoundation/docs2formalspec/blob/main/docs/08-defi-vuln-patterns.md).)
+
+### 9.2 A consistency check on the requirements — an extraction artifact, now fixed
+
+Turning the lens on the extracted requirement set itself: **are the requirements mutually consistent?** The
+check flagged one apparent conflict:
+
+- `buffer-non-decreasing` (as first extracted) required, *unconditionally*, that the buffer **MUST NOT
+  decrease**.
+- `catastrophic-backstop` requires that, on a catastrophic event, the system **distribute the entire buffer**.
+
+A proof confirmed those two *extracted* statements were jointly unsatisfiable. Tracing the requirement back to
+the source documentation (`corpus.md`) then showed the **source is consistent**: it states the buffer is "not
+consumed during **routine redemptions**" and "preserved through **stress events**," and separately that a
+**catastrophic scenario** (a devastating hack or wind-down) distributes the entire buffer — an explicitly
+*separate*, terminal mechanism. Our automated extractor had generalized the *stress-events* sentence into an
+*unconditional* "MUST NOT decrease," dropping the scope. **This was a defect in our tooling, not in Apyx.**
+
+**Resolution (applied).** We corrected `requirements.json` and `SPEC.md` to restore the routine/stress scope
+with the explicit catastrophic exception; the Lean model's `req_buffer_non_decreasing` was already scoped to
+routine operations and now matches. The proof is retained, renamed
+`req_catastrophic_backstop_distributes_buffer`, as the machine-checked statement of the catastrophic
+*exception* — the backstop drives the buffer to zero, which the corrected requirement excludes and
+`catastrophic-backstop` mandates (this also partially closes the §6.2 gap on that requirement's second
+clause). **No change to Apyx's specification or contracts was warranted.**
+
+The methodology, the source-tracing rule this exemplifies (corpus → Solidity), and four further candidate
+checks (all traced to the source and resolved — none a protocol defect) are in
+[`docs/07-spec-defects.md`](https://github.com/NyxFoundation/docs2formalspec/blob/main/docs/07-spec-defects.md).
 
 ---
 

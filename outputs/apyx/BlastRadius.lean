@@ -2253,11 +2253,17 @@ theorem base_model_has_no_timelock :
       step s Op.catastrophicBackstop s.admin = some s' ∧
       s'.redemptionValue ≠ s.redemptionValue ∧
       s'.now = s.now := by
+  -- The document-faithful backstop only fires once the emergency flag is already up, so the
+  -- witness pre-sets it; the timelock finding is about the absence of a delay between request
+  -- and effect, which the flag guard does not add. `totalSupply_apxUSD := ray` keeps the
+  -- redemption-value arithmetic to `1 * ray / ray = 1 ≠ 0` (robust, no `10^27` `decide`).
+  have hray : 0 < ray := Nat.pow_pos (by decide)
   refine ⟨{ (default : State) with
               emergencyFlag := true
               totalCollateralValue := 1
-              totalSupply_apxUSD := 1 }, _, rfl, ?_, rfl⟩
-  decide
+              totalSupply_apxUSD := ray }, _, rfl, ?_, rfl⟩
+  show (1 : Nat) * ray / ray ≠ (0 : Nat)
+  rw [Nat.one_mul, Nat.div_self hray]; decide
 
 /-! ## T8 Half 2 — a timelock wrapper DOES give the escape guarantee (DESIGN theorem)
 
@@ -2523,10 +2529,13 @@ theorem timelock_wrapper_is_live :
     ∃ (tl : TLState) (τ : List TLOp),
       countTicks τ = tl.delay ∧
       (execTraceTL tl τ).base.redemptionValue ≠ tl.base.redemptionValue := by
+  -- Document-faithful backstop fires only with the emergency flag already up (see
+  -- `base_model_has_no_timelock`); the witness pre-sets it. `totalSupply_apxUSD := ray`
+  -- keeps the moved price at `1 * ray / ray = 1 ≠ 0`.
   refine ⟨⟨{ (default : State) with
               emergencyFlag := true
               totalCollateralValue := 1
-              totalSupply_apxUSD := 1 }, 0, [], 1⟩,
+              totalSupply_apxUSD := ray }, 0, [], 1⟩,
     [TLOp.queue Op.catastrophicBackstop 0, TLOp.tick, TLOp.execute 0], rfl, ?_⟩
   decide
 
@@ -2658,8 +2667,9 @@ theorem rfq_payout_formula (s : State) (user : Address) (amount : Nat) (caller :
   exact ⟨by simp [burnApxUSD], by simp [burnApxUSD]⟩
 
 /-- Forward direction for `catastrophicBackstop`: with the governance emergency
-flag already up, the admin's call succeeds, publishing the per-token collateral
-price and paying the whole reserve out to holders pro-rata. -/
+flag already up, the admin's call succeeds, publishing the per-unit collateral price
+`redemptionValue := totalCollateralValue * ray / totalSupply_apxUSD` and paying the
+whole reserve out to holders pro-rata. -/
 private theorem step_catastrophicBackstop_forward (s : State)
     (hf : s.emergencyFlag = true) :
     step s Op.catastrophicBackstop s.admin

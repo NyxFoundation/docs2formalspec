@@ -77,7 +77,7 @@
 
 ## 4b. 進捗と証明中に判明した設計上の発見(2026-07-07)
 
-**S1-S7 すべて証明完了**。`outputs/apyx/Safety.lean`(namespace `Apyx`、公開定理24本、sorry 0、全て `propext`/`Quot.sound` のみ、`Apyx.lean`/`BlastRadius.lean` 無傷)。
+**S1-S7 すべて証明完了、S8-S9 追加**。`outputs/apyx/Safety.lean`(namespace `Apyx`、公開定理28本、sorry 0、全て `propext`/`Quot.sound` のみ、`Apyx.lean`/`BlastRadius.lean` 無傷)。
 
 | # | 定理 | 状態 |
 |---|---|---|
@@ -86,8 +86,10 @@
 | S3 | `rounding_favors_protocol` + `withdrawShares_rounds_up` | 完全(3方向) |
 | S4 | `no_dilution` | 完全 |
 | S5 | `donation_free` + `no_inflation_attack` | 完全(生donation経路の構造的不在) |
-| S6 | `caller_net_nonpositive` | 固定参照レート下の単発版(正直にスコープ限定)。**残る開放問題**: live-rate/トレースレベルの閉包(単一`updateExchangeRate`のレート移動量の限界+トレール合成)は別種の難しい算術問題として明示的に未着手 |
-| S7 | `vest_no_early_drain` | 完全(単調性・上限・pull正確性) |
+| S6 | `caller_net_nonpositive` | 固定参照レート下の単発版(正直にスコープ限定)。**トレース閉包は S9 で部分達成**(下記)。**残る開放問題**: share-op(lock/withdraw/redeem)を含む live-rate 閉包(単一`updateExchangeRate`のレート移動量の限界+トレール合成)は別種の難しい算術問題として明示的に未着手 |
+| S7 | `vest_no_early_drain` | 完全(単調性・上限・pull正確性)。線形スケジュール自体は `Apyx.lean` の `req_linear_vest_implementation` で証明済 |
+| S8 | `no_same_state_arbitrage_round_trip` / `requestUnlock_backs_claim_by_burn` | 完全(強化モデルの帰結。arbitrage mint/redeem は逆の価格レジームを要し同一 state で両立不可=peg スプレッド round-trip 不能。requestUnlock は焼却分ちょうどで claim を裏付け=無償 claim 不能) |
+| S9 | `caller_net_nonpositive_trace` + `valueAt_step_le` | S6 のトレース化を **value-preserving op 断片**で達成(share-op / unlock 決済 / gift mint を除く全 op のトレースで、任意固定レート `R` での保有価値は非増加。`redemptionValue ≤ ray` を各 prefix で再供給、`solvency_preserved` と同じ正直形)。redemption/RFQ/request の抽出経路を任意長トレースでカバー。**share-op + live-rate 閉包は S6 の開放問題として残置** |
 
 **証明作業が炙り出した実設計欠陥2件**(いずれも特権ロールの会計問題であって一般攻撃者exploitではない):
 
@@ -125,7 +127,7 @@
 
 ## 6. docs2formalspecへの組み込み
 
-第2の柱と同様、`templates/safety/` に Tier A の性質族(保存則・solvency・丸め方向・非希釈・インフレ耐性)のパラメータ化スキーマを置く(将来)。ボトムアップ入力は**ドメイン別**: DeFi は公開被害集計、合意プロトコルは `ethereum-vuln-dataset`。生成定理は要件由来 / 脅威モデル由来 / **設計不変条件由来** の3種を `review.json` で区別報告。
+第2の柱と同様、Tier A の性質族(保存則・solvency・丸め方向・非希釈・インフレ耐性)のパラメータ化スキーマを **[`templates/invariants/`](../templates/invariants/) に実装済み**(README = 記入ガイド、`Invariants.template.lean` = `‹PLACEHOLDER›` 付き骨格、`outputs/apyx/Safety.lean` = worked reference)。設計方針と業界脆弱性パターンとの対応は [`docs/08-defi-vuln-patterns.md`](08-defi-vuln-patterns.md)。ボトムアップ入力は**ドメイン別**: DeFi は公開被害集計、合意プロトコルは `ethereum-vuln-dataset`。生成定理は要件由来 / 脅威モデル由来 / **設計不変条件由来** / spec-consistency 由来 の4種を `review.json` で区別報告。
 
 ## 参考リンク
 

@@ -1264,4 +1264,202 @@ theorem setVestPeriod_preserves_accrued_vest (s : State) (p : Nat) (caller : Add
   unfold totalAssets
   rw [hvbal, hva]
 
+/-! ## S8 — design-safety consequences of the strengthened model
+
+Two safety properties that the transition-function changes (the below-par arbitrage-redeem
+gate and the self-validating single-pending redemption top-up) now make provable. -/
+
+/-- **`no_same_state_arbitrage_round_trip`** — the arbitrage mint and arbitrage redeem
+pathways require *opposite* price regimes (`ray < apxUSDMarketPrice` for the mint,
+`apxUSDMarketPrice < ray` for the redeem), so **no single state enables both**: in any state,
+at least one of an arbitrage mint and an arbitrage redeem reverts. There is therefore no
+same-state mint→redeem round trip through the two arbitrage pathways by which value could be
+extracted from the peg spread. -/
+theorem no_same_state_arbitrage_round_trip (s : State) (to : Address) (mintAmt : Nat)
+    (mc : Address) (redAmt : Nat) (rc : Address) :
+    step s (Op.mintApxUSD to mintAmt) mc = none ∨ step s (Op.redeemApxUSD redAmt) rc = none := by
+  by_cases h : ray ≤ s.apxUSDMarketPrice
+  · exact Or.inr (by simp [step, h])
+  · exact Or.inl (by simp [step, Nat.le_of_lt (Nat.lt_of_not_le h)])
+
+/-- **`requestUnlock_backs_claim_by_burn`** — a standard redemption request removes **exactly**
+the requested `amount` of apxUSD from the caller (no more is siphoned, no less is charged), and
+in the same step the caller is left holding a single tracked standard unlock position with a
+freshly reset cooldown deadline. The protocol's new redemption obligation is thus fully backed
+by, and exactly equal to, the apxUSD burned — a legitimate-operations "no free claim" property
+that holds whether the request opened a fresh position or topped up an existing one. -/
+theorem requestUnlock_backs_claim_by_burn (s : State) (amount : Nat) (caller : Address)
+    (s' : State) (h_step : step s (Op.requestUnlock amount) caller = some s') :
+    s.apxUSDBal caller = s'.apxUSDBal caller + amount ∧
+    ∃ id amt, s'.unlockRequestId caller = some id ∧
+      s'.unlockRequests id = some (caller, amt, s.now + cooldownPeriod) := by
+  obtain ⟨-, hle, hs'⟩ := inv_requestUnlock s amount caller s' h_step
+  refine ⟨?_, by rw [hs']; exact requestUnlockStep_caller_position s caller amount⟩
+  have hbal : s'.apxUSDBal caller = s.apxUSDBal caller - amount := by
+    rw [hs', requestUnlockStep_apxUSDBal]; simp [burnApxUSD]
+  omega
+
+/-! ## S9 — trace-level no-free-money for the value-preserving operation fragment
+
+This lifts the single-step `caller_net_nonpositive` (S6) to arbitrary-length traces, for the
+fragment of operations on which a *fixed* reference-rate valuation is sound. Excluded are the
+share-moving operations (`lockApxUSD`/`withdraw`/`redeem`, which move the stored exchange rate,
+so the fixed rate ceases to be the operative one), the unlock settlements
+(`claimUnlock`/`flexibleClaimUnlock`, which realize an unlock position the flat `valueAt` ledger
+does not carry), and the gift arbitrage mint (`mintApxUSD`, which credits a third party). Over
+any trace of the remaining operations — under the standing no-premium-redemption side condition
+`redemptionValue ≤ ray`, re-supplied at each visited state exactly as `solvency_preserved` does —
+no address's holdings, valued at *any* fixed rate `R`, can increase: there is no free-money
+extraction through the redemption / RFQ / unlock-request channels, at any length or interleaving.
+
+The remaining share-op + *live*-rate closure (valuing at the moving exchange rate, where a share
+redemption after accrued yield legitimately realizes pool appreciation) is the distinct,
+genuinely hard arithmetic problem left explicitly open in `docs/06-safety-properties.md` §4b. -/
+
+/-- Operations on which the flat fixed-rate `valueAt` ledger is a sound value measure: neither
+share-moving (`lockApxUSD`/`withdraw`/`redeem`), nor an unlock settlement
+(`claimUnlock`/`flexibleClaimUnlock`), nor a third-party gift mint (`mintApxUSD`), nor the
+catastrophic backstop (`catastrophicBackstop`), which pays the entire USDC reserve — buffer
+included — out to holders pro-rata and so legitimately *increases* holders' fixed-rate value. -/
+def ValuePreservingOp (op : Op) : Prop :=
+  (∀ to n, op ≠ Op.mintApxUSD to n) ∧ (∀ n, op ≠ Op.lockApxUSD n) ∧
+  (∀ n r, op ≠ Op.withdraw n r) ∧ (∀ sh r, op ≠ Op.redeem sh r) ∧
+  (∀ id, op ≠ Op.claimUnlock id) ∧ (∀ id, op ≠ Op.flexibleClaimUnlock id) ∧
+  (op ≠ Op.catastrophicBackstop)
+
+/-- Single step of S9: a value-preserving operation never increases any address's holdings
+valued at a fixed rate `R` (given the no-premium-redemption side condition). -/
+theorem valueAt_step_le (R : Nat) (s : State) (op : Op) (caller a : Address) (s' : State)
+    (h_step : step s op caller = some s') (h_op : ValuePreservingOp op)
+    (h_rv : s.redemptionValue ≤ ray) :
+    valueAt R s' a ≤ valueAt R s a := by
+  obtain ⟨hm, hl, hw, hr, hc, hf, hcb⟩ := h_op
+  cases op
+  case mintApxUSD to n => exact absurd rfl (hm to n)
+  case lockApxUSD n => exact absurd rfl (hl n)
+  case withdraw n r => exact absurd rfl (hw n r)
+  case redeem sh r => exact absurd rfl (hr sh r)
+  case claimUnlock id => exact absurd rfl (hc id)
+  case flexibleClaimUnlock id => exact absurd rfl (hf id)
+  case catastrophicBackstop => exact absurd rfl hcb
+  case depositUSDC amount =>
+    obtain ⟨-, -, -, hle, hs'⟩ := inv_depositUSDC s amount caller s' h_step
+    subst hs'
+    unfold valueAt
+    by_cases hac : a = caller <;>
+      simp [emitEvent, mintApxUSD, hac] <;> omega
+  case redeemApxUSD amount =>
+    obtain ⟨-, -, hle, -, -, hs'⟩ := inv_redeemApxUSD s amount caller s' h_step
+    subst hs'
+    have hb := redemptionValue_div_ray_le amount s.redemptionValue h_rv
+    unfold valueAt
+    by_cases hac : a = caller <;>
+      simp [emitEvent, burnApxUSD, hac] <;> omega
+  case requestUnlock amount =>
+    obtain ⟨-, hle, hs'⟩ := inv_requestUnlock s amount caller s' h_step
+    subst hs'
+    unfold valueAt
+    have hx : (requestUnlockStep s caller amount).apxUSDBal a ≤ s.apxUSDBal a := by
+      rw [requestUnlockStep_apxUSDBal]; simp [burnApxUSD]; split <;> omega
+    simp only [requestUnlockStep_apyUSDBal, requestUnlockStep_usdcBal]
+    omega
+  case flexibleRequestUnlock amount =>
+    obtain ⟨-, hle, hs'⟩ := inv_flexibleRequestUnlock s amount caller s' h_step
+    subst hs'
+    unfold valueAt
+    by_cases hac : a = caller <;>
+      simp [createFlexibleUnlock, burnApxUSD, hac] <;> omega
+  case executeRFQRedemption user amount =>
+    obtain ⟨-, -, -, hbal, -, hs'⟩ := inv_executeRFQRedemption s user amount caller s' h_step
+    subst hs'
+    have hb := redemptionValue_div_ray_le amount s.redemptionValue h_rv
+    unfold valueAt
+    by_cases hau : a = user <;>
+      simp [burnApxUSD, hau] <;> omega
+  all_goals
+    simp only [step] at h_step
+    split at h_step <;>
+      first
+        | (cases Option.some.inj h_step; simp [valueAt])
+        | exact absurd h_step (by simp)
+
+/-- **S9 `caller_net_nonpositive_trace`** — the trace-level generalization of
+`caller_net_nonpositive`: for any fixed reference rate `R` and any trace built only from
+value-preserving operations (§`ValuePreservingOp`), with the no-premium-redemption side
+condition `redemptionValue ≤ ray` holding at every visited prefix state, no address's holdings
+valued at `R` increase across the whole trace. -/
+theorem caller_net_nonpositive_trace (R : Nat) (s : State) (σ : List (Op × Address)) (a : Address)
+    (h_ops : ∀ p ∈ σ, ValuePreservingOp p.1)
+    (h_rv : ∀ n, (execTrace s (σ.take n)).redemptionValue ≤ ray) :
+    valueAt R (execTrace s σ) a ≤ valueAt R s a := by
+  induction σ generalizing s with
+  | nil => simp [execTrace]
+  | cons p σ ih =>
+    obtain ⟨op, c⟩ := p
+    have hop := h_ops (op, c) List.mem_cons_self
+    have hrv0 : s.redemptionValue ≤ ray := by simpa [execTrace] using h_rv 0
+    have htailops : ∀ q ∈ σ, ValuePreservingOp q.1 :=
+      fun q hq => h_ops q (List.mem_cons_of_mem _ hq)
+    simp only [execTrace]
+    cases hstep : step s op c with
+    | none =>
+      exact ih s htailops (by intro n; simpa [execTrace, hstep] using h_rv (n + 1))
+    | some s1 =>
+      have htail := ih s1 htailops (by intro n; simpa [execTrace, hstep] using h_rv (n + 1))
+      exact Nat.le_trans htail (valueAt_step_le R s op c a s1 hstep hop hrv0)
+
+/-! ## I7 — exchange-rate (share price) monotonicity (docs/08 pattern B/I; templates/invariants I7)
+
+The stored `exchangeRate` is a monotone accumulator: it moves only at the vault's own operations,
+and the two operations that move it meaningfully never lower it. A new deposit cannot dilute it
+(`exchange_rate_monotone_deposit`), and crediting yield preserves it in the same step while raising
+it over time (`exchange_rate_monotone_creditYield` + `req_exchange_rate_non_decreasing`). This is the
+share-price-monotonicity invariant whose violation is the ERC4626 inflation/dilution class. -/
+
+/-- **I7 (deposit).** A `lockApxUSD` by any caller never lowers the stored exchange rate, provided
+the rate does not already overstate backing (`hbacked` — automatic when it is the pre-state's true
+`computeExchangeRate`) and there is at least one existing share (`hTS`). Exposes the rate-level
+monotonicity that `no_dilution` uses internally. -/
+theorem exchange_rate_monotone_deposit (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.lockApxUSD amount) caller = some s')
+    (hTS : 0 < s.totalSupply_apyUSD)
+    (hbacked : s.exchangeRate * s.totalSupply_apyUSD ≤ totalAssets s * ray) :
+    s.exchangeRate ≤ s'.exchangeRate := by
+  obtain ⟨-, -, hs'⟩ := inv_lockApxUSD s amount caller s' h_step
+  have hnow : s'.now = s.now := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  have hva : vestedAmount s' s'.now = vestedAmount s s.now := by
+    rw [hs']
+    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD, vestedAmount, newlyVestedAmount]
+  have hTA : totalAssets s' = totalAssets s + amount := by
+    have hvbal : s'.vaultApxUSDBal = s.vaultApxUSDBal + amount := by
+      rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+    unfold totalAssets; rw [hvbal, hva]; omega
+  have hTS' : s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount s.exchangeRate := by
+    rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD, lockShares]
+  have hcomp : s'.exchangeRate = computeExchangeRate s' := by
+    rw [hs']
+    simp [emitEvent, updateExchangeRate, computeExchangeRate, totalAssets, vestedAmount,
+      newlyVestedAmount, mintApyUSD, burnApxUSD]
+  have hrate : s'.exchangeRate
+      = (totalAssets s + amount) * ray / (s.totalSupply_apyUSD + lockShares amount s.exchangeRate) := by
+    rw [hcomp]; unfold computeExchangeRate
+    rw [if_neg (by rw [hTS']; omega), hTA, hTS']
+  rw [hrate]
+  exact rate_non_decreasing_of_deposit (totalAssets s) s.totalSupply_apyUSD amount
+    s.exchangeRate hTS hbacked
+
+/-- **I7 (yield credit).** `creditYield` preserves the per-share `computeExchangeRate` in the same
+step — the accrue-first design keeps `totalAssets` (at the unchanged `now`) and the apyUSD supply
+fixed — so the credit never lowers the rate; the credited amount raises it only as it subsequently
+vests (monotone in time, `Apyx.req_exchange_rate_non_decreasing`). Requires `0 < vestPeriod`. -/
+theorem exchange_rate_monotone_creditYield (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.creditYield amount) caller = some s') (hvp : 0 < s.vestPeriod) :
+    computeExchangeRate s' = computeExchangeRate s := by
+  obtain ⟨-, hTA⟩ := creditYield_preserves_accrued_vest s amount caller s' h_step hvp
+  obtain ⟨-, hs'⟩ := step_creditYield_exact s amount caller s' h_step
+  have hsupply : s'.totalSupply_apyUSD = s.totalSupply_apyUSD := by rw [hs']
+  unfold computeExchangeRate
+  rw [hTA, hsupply]
+
 end Apyx

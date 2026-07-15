@@ -1,919 +1,919 @@
 [
- {
-  "id": "deposit-mint-apxusd",
-  "category": "state",
-  "statement": "The protocol MUST mint apxUSD to a user when the user deposits USDC.",
-  "rationale": "Users obtain apxUSD by depositing USDC.",
-  "source_quote": "Individuals who interact with the protocol by depositing USDC to acquire apxUSD.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
-  ]
- },
- {
-  "id": "mint-price",
-  "category": "economic",
-  "statement": "The protocol MUST price newly minted apxUSD at $1 per unit.",
-  "rationale": "New issuance is explicitly priced at $1.",
-  "source_quote": "New issuance is priced at $1;",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md",
-   "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
-  ]
- },
- {
-  "id": "redemption-value",
-  "category": "economic",
-  "statement": "The protocol MUST allow redemption of apxUSD at the current Redemption Value.",
-  "rationale": "All redemption activity occurs at Redemption Value.",
-  "source_quote": "All redemption activity occurs at Redemption Value.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
-  ]
- },
- {
-  "id": "offchain-allocation",
-  "category": "state",
-  "statement": "The Offchain Treasury MUST allocate incoming capital to acquire a basket of preferred assets and short‑term treasury bonds.",
-  "rationale": "The Offchain Treasury is described as allocating incoming capital to acquire such assets.",
-  "source_quote": "The Offchain Treasury allocates incoming capital to acquire a basket of preferred assets (\"Prefs\") and short-term treasury bonds.",
-  "formalizable": false,
-  "sources": [
-   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
-  ]
- },
- {
-  "id": "custody-attestation",
-  "category": "state",
-  "statement": "The Offchain Treasury MUST provide regular third‑party accounting attestations and transparent reporting on custody and collateral composition.",
-  "rationale": "Apyx provides regular third‑party attestations and transparent reporting.",
-  "source_quote": "Apyx provides regular third‑party accounting attestations and transparent reporting on custody and collateral composition so users can independently verify the backing.",
-  "formalizable": false,
-  "sources": [
-   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
-  ]
- },
- {
-  "id": "no-rehypothecation",
-  "category": "access-control",
-  "statement": "The protocol MUST NOT rehypothecate, lend, or otherwise utilize deposited apxUSD for any purpose.",
-  "rationale": "The protocol is explicitly designed not to rehypothecate or lend deposited apxUSD.",
-  "source_quote": "The protocol does not rehypothecate, lend, or otherwise utilize deposited apxUSD for any purpose.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md",
-   "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
-  ]
- },
- {
-  "id": "yield-distribution-period",
-  "category": "temporal",
-  "statement": "The Onchain Vault MUST distribute received yield to apyUSD holders over a 20‑day period.",
-  "rationale": "Yield is streamed to holders over a 20‑day window.",
-  "source_quote": "The vault distributes this yield to apyUSD holders in a stream over a 20 day period.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
-  ]
- },
- {
-  "id": "lock-apxusd",
-  "category": "state",
-  "statement": "The protocol MUST allow a user to lock apxUSD in the vault and receive apyUSD.",
-  "rationale": "Users can lock apxUSD to receive apyUSD.",
-  "source_quote": "Users can lock apxUSD in the vault to receive apyUSD.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
-  ]
- },
- {
-  "id": "apyusd-value-increase",
-  "category": "arithmetic",
-  "statement": "The redeemable value of apyUSD MUST increase over time as yield is distributed to the vault.",
-  "rationale": "apyUSD accrues yield, increasing its redeemable value over time.",
-  "source_quote": "apyUSD represents a locked position that accrues the yield sent to the vault, increasing in redeemable value over time.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
-  ]
- },
- {
-  "id": "price-may-include-spreads",
-  "category": "economic",
-  "statement": "The protocol MAY reflect spreads and offchain execution expenses in the price during minting and redemption.",
-  "rationale": "Spreads and execution expenses may be reflected in the price.",
-  "source_quote": "Any spreads and offchain execution expenses incurred during minting and redemption may be reflected in the price.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
-  ]
- },
- {
-  "id": "rebalance-overcollateralization",
-  "category": "state",
-  "statement": "The system SHALL rebalance the collateral basket so that apxUSD remains over‑collateralized.",
-  "rationale": "The document says the basket rebalances to keep apxUSD overcollateralized.",
-  "source_quote": "The basket rebalances subject to ... coverage requirements that keep apxUSD overcollateralized.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apxusd-overview.md"
-  ]
- },
- {
-  "id": "redeem-liquidate-usdc",
-  "category": "state",
-  "statement": "The system SHALL liquidate preferred‑share collateral to USDC in order to settle any redemption request.",
-  "rationale": "Redemptions are settled by liquidating preferred shares to USDC.",
-  "source_quote": "In redemption scenarios, the protocol liquidates preferred shares to USDC to settle redemption obligations;",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apxusd-overview.md"
-  ]
- },
- {
-  "id": "redeem-no-share-transfer",
-  "category": "state",
-  "statement": "The system MUST NOT transfer preferred shares directly to a participant who redeems apxUSD.",
-  "rationale": "Holders do not receive preferred shares directly on redemption.",
-  "source_quote": "holders do not receive preferred shares directly.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apxusd-overview.md"
-  ]
- },
- {
-  "id": "redemption-settlement-value",
-  "category": "arithmetic",
-  "statement": "Redemptions SHALL be settled at the Redemption Value, which tracks the underlying basket.",
-  "rationale": "Redemptions occur at Redemption Value, which tracks the underlying basket.",
-  "source_quote": "Redemptions occur at Redemption Value, which tracks the underlying basket.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apxusd-overview.md"
-  ]
- },
- {
-  "id": "liquidity-buffer-size",
-  "category": "economic",
-  "statement": "The system SHALL maintain a liquidity buffer sized against the largest historical TVL drawdowns observed in comparable stablecoins.",
-  "rationale": "The protocol maintains a liquidity buffer sized against the largest historical TVL drawdowns.",
-  "source_quote": "To ensure stability, the protocol maintains a liquidity buffer sized against the largest historical TVL drawdowns observed in comparable stablecoins.",
-  "formalizable": false,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apxusd-overview.md"
-  ]
- },
- {
-  "id": "mint-access-whitelist",
-  "category": "access-control",
-  "statement": "Only participants who are eligible, located in permitted jurisdictions, and whitelisted SHALL be allowed to mint apxUSD.",
-  "rationale": "Minting is limited to eligible, whitelisted participants in permitted jurisdictions.",
-  "source_quote": "Eligible participants in permitted jurisdictions who are whitelisted, such as institutional market makers, may mint ... apxUSD.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apxusd-overview.md"
-  ]
- },
- {
-  "id": "redeem-access-whitelist",
-  "category": "access-control",
-  "statement": "Only participants who are eligible, located in permitted jurisdictions, and whitelisted SHALL be allowed to redeem apxUSD.",
-  "rationale": "Redemption is limited to eligible, whitelisted participants in permitted jurisdictions.",
-  "source_quote": "Eligible participants in permitted jurisdictions who are whitelisted, such as institutional market makers, may ... redeem apxUSD.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apxusd-overview.md"
-  ]
- },
- {
-  "id": "issuance-price-one",
-  "category": "arithmetic",
-  "statement": "New apxUSD issuance SHALL be priced at exactly $1 per token.",
-  "rationale": "New apxUSD issuance is always priced at $1.",
-  "source_quote": "New apxUSD issuance is always priced at $1, giving the secondary market a consistent anchor.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apxusd-overview.md"
-  ]
- },
- {
-  "id": "buffer-growth-stress",
-  "category": "economic",
-  "statement": "The over‑collateralization buffer SHALL grow during stress events rather than be drained by them.",
-  "rationale": "The buffer grows through stress events rather than being drained.",
-  "source_quote": "The buffer grows through stress events rather than being drained by them",
-  "formalizable": false,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apxusd-overview.md"
-  ]
- },
- {
-  "id": "deposit-permissionless",
-  "category": "access-control",
-  "statement": "The vault MUST allow any address to deposit apxUSD and receive apyUSD without requiring KYB/KYC.",
-  "rationale": "The document states deposits are permissionless and no KYC is required.",
-  "source_quote": "Users deposit apxUSD into a permissionless vault and receive apyUSD in return.\nAccess: Permissionless; no KYB/KYC requirement",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
-  ]
- },
- {
-  "id": "token-no-rebase",
-  "category": "state",
-  "statement": "The apyUSD token MUST NOT rebase its balances; balances may change only via transfers, minting, or burning.",
-  "rationale": "The token balances are explicitly described as non‑rebasing.",
-  "source_quote": "Token balances do not rebase.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
-  ]
- },
- {
-  "id": "exchange-rate-non-decreasing",
-  "category": "arithmetic",
-  "statement": "The exchange rate between apyUSD and apxUSD MUST be non‑decreasing over time.",
-  "rationale": "Yield accrues through a gradually increasing exchange rate.",
-  "source_quote": "Yield accrues through a gradually increasing exchange rate, meaning each apyUSD can be redeemed for more apxUSD over time.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
-  ]
- },
- {
-  "id": "redemption-exchange-rate-multiplier",
-  "category": "arithmetic",
-  "statement": "When a user redeems apyUSD, the system MUST transfer an amount of apxUSD equal to the number of apyUSD redeemed multiplied by the current exchange rate, which MUST be greater than or equal to 1.",
-  "rationale": "Redemption formula is defined with exchangeRate ≥ 1.",
-  "source_quote": "Redemption: 1 apyUSD → apxUSD × exchangeRate (t ≥ 1)",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
-  ]
- },
- {
-  "id": "jurisdiction-restriction-frontend",
-  "category": "access-control",
-  "statement": "The frontend MUST prevent users located in restricted jurisdictions from accessing the Apyx application.",
-  "rationale": "Participation is restricted for users in certain jurisdictions.",
-  "source_quote": "Participation is restricted for users in certain jurisdictions. Users located in such jurisdictions will be prevented from accessing the Apyx frontend.",
-  "formalizable": false,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
-  ]
- },
- {
-  "id": "redemption-async-process",
-  "category": "state",
-  "statement": "Redemption requests MUST follow the three‑step asynchronous process of request, cooldown, and claim.",
-  "rationale": "Redemptions follow an asynchronous unlocking model (ERC‑7540) and are not executed immediately.",
-  "source_quote": "Redemptions follow an asynchronous unlocking model (ERC-7540) and are not executed immediately.\nThe process consists of three steps: request, cooldown (approximately 20 days), and claim.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
-  ]
- },
- {
-  "id": "redemption-cooldown-period",
-  "category": "temporal",
-  "statement": "After a redemption request is submitted, the system MUST enforce a cooldown period of approximately 20 days before a claim can be executed.",
-  "rationale": "The cooldown period is described as approximately 20 days.",
-  "source_quote": "The process consists of three steps: request, cooldown (approximately 20 days), and claim.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
-  ]
- },
- {
-  "id": "single-pending-redemption-per-user",
-  "category": "state",
-  "statement": "Each user MUST have at most one pending redemption request; if the user adds assets to an existing request, the cooldown timer MUST reset to the time of the update.",
-  "rationale": "The document limits users to a single pending request and defines reset behavior.",
-  "source_quote": "Each user may have only one pending redemption request at a time. Adding assets to an existing request resets the cooldown period from the time of the update.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
-  ]
- },
- {
-  "id": "cooldown-no-yield",
-  "category": "arithmetic",
-  "statement": "During a redemption cooldown, the exchange rate for the locked apyUSD MUST remain fixed and the user MUST not accrue additional yield on those tokens.",
-  "rationale": "Yield is paused and the exchange rate is fixed while in cooldown.",
-  "source_quote": "During the cooldown period, users will not receive yield on their apyUSD, with the apxUSD/apyUSD exchange rate being fixed.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
-  ]
- },
- {
-  "id": "flexible-redemption-claim-minimum",
-  "category": "temporal",
-  "statement": "A flexible redemption claim MUST be executable only after a minimum of 3 days have elapsed since the request.",
-  "rationale": "Redemptions become claimable after 3 days.",
-  "source_quote": "Redemptions become claimable after 3 days, with an early redemption fee that declines linearly over time from 3.5% down to just 0.1%.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
-  ]
- },
- {
-  "id": "flexible-redemption-early-fee",
-  "category": "economic",
-  "statement": "The early redemption fee applied to a flexible redemption claim MUST start at 3.5 % and decline linearly over time to a minimum of 0.1 %.",
-  "rationale": "Fee schedule is described as linearly decreasing from 3.5 % to 0.1 %.",
-  "source_quote": "Redemptions become claimable after 3 days, with an early redemption fee that declines linearly over time from 3.5% down to just 0.1%.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
-  ]
- },
- {
-  "id": "flexible-redemption-multiple-requests",
-  "category": "state",
-  "statement": "The system MUST allow a user to have multiple concurrent flexible redemption unlock requests.",
-  "rationale": "The mechanism allows queuing multiple unlock requests simultaneously.",
-  "source_quote": "Queue multiple unlock requests simultaneously",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
-  ]
- },
- {
-  "id": "overcollateralization-limit",
-  "category": "arithmetic",
-  "statement": "The system MUST ensure that the total amount of apxUSD minted never exceeds the market value of the collateral minus the required overcollateralization margin.",
-  "rationale": "The document says minting is constrained by collateral value to keep collateral above liabilities by a defined margin.",
-  "source_quote": "The total apxUSD minted is constrained by the market value of the collateral, ensuring collateral value exceeds outstanding liabilities by a defined margin.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/peg-stability-model.md"
-  ]
- },
- {
-  "id": "buffer-preservation",
-  "category": "state",
-  "statement": "The system MUST preserve the overcollateralization buffer during routine redemption operations; the buffer MUST NOT be consumed.",
-  "rationale": "The buffer is explicitly described as not being consumed during routine redemptions.",
-  "source_quote": "the overcollateralization buffer is **not** consumed during routine redemptions.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/peg-stability-model.md"
-  ]
- },
- {
-  "id": "mint-redeem-at-redemption-value",
-  "category": "arithmetic",
-  "statement": "All minting and redemption transactions MUST be executed at the Redemption Value, which reflects the underlying basket of preferred shares and cash.",
-  "rationale": "Mint and redeem activity is said to occur at Redemption Value.",
-  "source_quote": "All mint and redeem activity occurs at **Redemption Value**, which tracks the underlying basket of preferred shares and cash.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/peg-stability-model.md"
-  ]
- },
- {
-  "id": "buffer-non-decreasing",
-  "category": "state",
-  "statement": "The overcollateralization buffer, defined as the difference between Redemption Value and Total Collateral Value, MUST NOT decrease; it MAY increase over time due to yield spreads and collateral appreciation.",
-  "rationale": "The buffer is described as preserved and able to grow, implying it must not shrink.",
-  "source_quote": "The buffer—the gap between Redemption Value and **Total Collateral Value**—is preserved through stress events and grows over time via yield spreads and collateral appreciation.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/peg-stability-model.md"
-  ]
- },
- {
-  "id": "arbitrage-mint-access",
-  "category": "access-control",
-  "statement": "Only eligible whitelist participants SHALL be permitted to invoke the minting pathway for arbitrage when apxUSD trades above $1.00.",
-  "rationale": "Arbitrage minting is limited to eligible whitelist participants when the price is in premium.",
-  "source_quote": "*When apxUSD Trades Above $1.00 (Premium):* Eligible participants may use the protocol’s minting pathway to mint apxUSD under predefined terms...",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/peg-stability-model.md"
-  ]
- },
- {
-  "id": "arbitrage-redeem-access",
-  "category": "access-control",
-  "statement": "Only eligible whitelist participants SHALL be permitted to redeem apxUSD for dollar‑equivalent value when apxUSD trades below $1.00.",
-  "rationale": "Arbitrage redemption is limited to eligible whitelist participants when the price is in discount.",
-  "source_quote": "*When apxUSD Trades Below $1.00 (Discount):* Eligible participants may acquire apxUSD at a discount in secondary markets and redeem it through the protocol for dollar-equivalent value.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/peg-stability-model.md"
-  ]
- },
- {
-  "id": "yield-distributor-credit",
-  "category": "state",
-  "statement": "The YieldDistributor MUST credit converted apxUSD proceeds to the apyUSD vault.",
-  "rationale": "The document states that proceeds are converted into apxUSD and credited to the vault via the YieldDistributor.",
-  "source_quote": "These proceeds are converted into apxUSD and credited to the apyUSD vault via the `YieldDistributor`.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
-  ]
- },
- {
-  "id": "linear-vest-implementation",
-  "category": "state",
-  "statement": "The LinearVestV0 contract MUST implement a linear vesting mechanism for yield credited to the apyUSD vault.",
-  "rationale": "The distribution mechanism description says yield uses a linear vesting mechanism implemented by LinearVestV0.",
-  "source_quote": "Yield credited to the apyUSD vault utilizes a linear vesting mechanism implemented by the `LinearVestV0` contract.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
-  ]
- },
- {
-  "id": "credit-preserves-accrued-vest",
-  "category": "arithmetic",
-  "statement": "When new yield is deposited or the vesting period is changed, the LinearVestV0 contract MUST accrue the already-vested-but-not-yet-transferred amount into a separate fully-vested accumulator BEFORE resetting the vesting clock, so that previously accrued yield is preserved (not forfeited) across the reset.",
-  "rationale": "depositYield/setVestingPeriod reset the vesting period; without first capturing the newly-vested portion, accrued yield would be re-thrown into the unvested pool and its realization postponed. The contract preserves it via `fullyVestedAmount += newlyVestedAmount()` prior to the timestamp reset.",
-  "source_quote": "Add new amount to fully vested and unvested amount / fullyVestedAmount += newlyVestedAmount(); vestingAmount = unvestedAmount() + amount;",
-  "formalizable": true,
-  "sources": [
-   "https://github.com/apyx-labs/evm-contracts/blob/main/src/LinearVestV0.sol"
-  ]
- },
- {
-  "id": "continuous-stream",
-  "category": "temporal",
-  "statement": "Yield MUST be streamed continuously over a configurable period rather than as a lump‑sum distribution.",
-  "rationale": "The document explains that yield is streamed continuously over a configurable period (e.g., 20 days).",
-  "source_quote": "Instead of a single lump-sum distribution, yield is streamed continuously over a configurable period (e.g., 20 days).",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
-  ]
- },
- {
-  "id": "monthly-yield-rate-set",
-  "category": "temporal",
-  "statement": "Each month, the system MUST set the yield rate for the following month based on the prior month’s collateral‑base yield.",
-  "rationale": "The text specifies that each month the yield rate is set for the next month using the previous month’s generated yield.",
-  "source_quote": "Each month, the yield rate is set for the following month, based on the yield generated by the collateral base the prior month.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
-  ]
- },
- {
-  "id": "yield-rate-dollar-terms",
-  "category": "arithmetic",
-  "statement": "The yield rate MUST be expressed in dollar terms for the month.",
-  "rationale": "The document says the yield rate is set in dollar terms (e.g., $1M).",
-  "source_quote": "The yield rate is set in dollar terms, e.g. $1M of yield will be paid this month.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
-  ]
- },
- {
-  "id": "pay-to-non-cooldown",
-  "category": "state",
-  "statement": "Yield MUST be paid to all apyUSD tokens that are not currently undergoing cooldown.",
-  "rationale": "It is stated that yield is paid across all apyUSD not currently undergoing cooldown.",
-  "source_quote": "That yield is paid across all apyUSD not currently undergoing cooldown...",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
-  ]
- },
- {
-  "id": "new-locked-receives-yield",
-  "category": "economic",
-  "statement": "When new apyUSD is locked, it MUST immediately begin receiving yield, which reduces the overall percentage yield for existing holders.",
-  "rationale": "The description notes that newly locked apyUSD instantly begins receiving yield, lowering the % yield for everyone else.",
-  "source_quote": "new apyUSD that is locked instantly begins receiving yield, reducing the overall % yield for everyone else.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
-  ]
- },
- {
-  "id": "cooldown-removal",
-  "category": "economic",
-  "statement": "When apyUSD enters the cooldown phase, it MUST be removed from the yield pool, causing remaining apyUSD to receive a higher percentage yield.",
-  "rationale": "The text explains that apyUSD entering cooldown is removed from the pool, increasing the % yield for the rest.",
-  "source_quote": "any apyUSD that enters the cooldown phase is removed from the pool set to receive yield, meaning the remaining apyUSD receive a higher % yield.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
-  ]
- },
- {
-  "id": "configurable-vesting-period",
-  "category": "temporal",
-  "statement": "The vesting period for linear yield distribution MUST be configurable.",
-  "rationale": "The document mentions a configurable period (e.g., 20 days) for the streaming of yield.",
-  "source_quote": "yield is streamed continuously over a configurable period (e.g., 20 days).",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
-  ]
- },
- {
-  "id": "redemption-value-uniform",
-  "category": "state",
-  "statement": "The system MUST apply the same Redemption Value to all participants regardless of market conditions.",
-  "rationale": "The document states the value applies identically across calm and stressed conditions and to all participants.",
-  "source_quote": "It applies identically across calm and stressed conditions, and to all participants.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
-  ]
- },
- {
-  "id": "buffer-not-consumed",
-  "category": "state",
-  "statement": "The system MUST NOT reduce the overcollateralization buffer as a result of routine redemption operations.",
-  "rationale": "The buffer is described as not being consumed during routine redemptions.",
-  "source_quote": "The overcollateralization buffer is not consumed during routine redemptions.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
-  ]
- },
- {
-  "id": "catastrophic-backstop",
-  "category": "state",
-  "statement": "Upon detection of a catastrophic scenario, the system MUST set Redemption Value equal to Total Collateral Value and MUST distribute the entire reserve, including the buffer, pro‑rata to remaining holders.",
-  "rationale": "The document defines the final backstop behavior in catastrophic events.",
-  "source_quote": "In a catastrophic scenario—a devastating hack, wind-down, or any event ending the protocol's future viability—Total Collateral Value becomes the redemption value, and the entire reserve, buffer included, is distributed pro-rata to remaining holders.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
-  ]
- },
- {
-  "id": "governance-deploy-buffer",
-  "category": "access-control",
-  "statement": "The system MUST restrict voting on buffer deployment to holders of the governance token.",
-  "rationale": "Only governance token holders are said to be able to vote on deploying the buffer.",
-  "source_quote": "Governance token holders may also vote to deploy a portion of the overcollateralization buffer in intermediate-risk scenarios to support Redemption Value.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
-  ]
- },
- {
-  "id": "rfq-redemption-allowed",
-  "category": "access-control",
-  "statement": "The system MUST allow users to submit redemption requests through the RFQ process and MUST permit only approved counterparties to execute those requests.",
-  "rationale": "The RFQ redemption system is described as allowing user submissions and execution by approved counterparties.",
-  "source_quote": "In addition to the protocol's primary-market redemption pathway, Apyx offers a Request for Quote (RFQ) redemption system. Users may submit redemption requests through a structured RFQ process, allowing approved counterparties to provide competitive execution against the underlying reserve.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
-  ]
- },
- {
-  "id": "deposit-immediate",
-  "category": "temporal",
-  "statement": "The apyUSD vault MUST complete deposit operations synchronously and deliver apyUSD shares to the receiver without any delay.",
-  "rationale": "Locking is described as synchronous and immediate, and the deposit flow shows shares minted instantly.",
-  "source_quote": "Locking is synchronous and immediate, providing instant access to yield.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/locking.md"
-  ]
- },
- {
-  "id": "mint-immediate",
-  "category": "temporal",
-  "statement": "The apyUSD vault MUST complete mint operations synchronously and deliver apyUSD shares to the receiver without any delay.",
-  "rationale": "Minting is described as synchronous and immediate, and the mint flow shows shares minted instantly.",
-  "source_quote": "Locking is synchronous and immediate, providing instant access to yield.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/locking.md"
-  ]
- },
- {
-  "id": "synchronous-withdraw-return-token",
-  "category": "state",
-  "statement": "The apyUSD vault MUST execute withdrawals and redeems synchronously and MUST return apxUSD_unlock tokens immediately.",
-  "rationale": "The vault is described as synchronous and returns the unlock tokens on execution.",
-  "source_quote": "apyUSD is a synchronous ERC-4626 vault — withdrawals and redeems execute immediately and return apxUSD_unlock tokens.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "unlock-cooldown",
-  "category": "temporal",
-  "statement": "The apxUSD_unlock token MAY be redeemed for apxUSD only after a cooldown period has elapsed.",
-  "rationale": "Redemption is allowed only after a cooldown period.",
-  "source_quote": "can be redeemed for apxUSD after a cooldown period.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "depositforminshares-slippage",
-  "category": "failure",
-  "statement": "depositForMinShares(uint256 assets, uint256 minShares, address receiver) MUST revert if the number of shares that would be minted is less than minShares.",
-  "rationale": "The method is defined to revert when less than the minimum shares would be minted.",
-  "source_quote": "`depositForMinShares(uint256 assets, uint256 minShares, address receiver)`: Deposits exact assets for shares or reverts if less than min shares will be minted",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/locking.md"
-  ]
- },
- {
-  "id": "mintformaxassets-slippage",
-  "category": "failure",
-  "statement": "mintForMaxAssets(uint256 shares, uint256 maxAssets, address receiver) MUST revert if the amount of assets required to mint the requested shares exceeds maxAssets.",
-  "rationale": "The method is defined to revert when more than the maximum assets would be deposited.",
-  "source_quote": "`mintForMaxAssets(uint256 shares, uint256 maxAssets, address receiver)`: Mint exact shares for assets or reverts if more than max assets will be deposited",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/locking.md"
-  ]
- },
- {
-  "id": "totalAssets-includes-vault-balance-and-vested",
-  "category": "arithmetic",
-  "statement": "The vault's totalAssets() function MUST include both the vault's apxUSD balance and the vestedAmount() reported by the LinearVestV0 contract.",
-  "rationale": "The documentation lists both components as part of totalAssets().",
-  "source_quote": "The apyUSD vault's totalAssets() function includes both: * The vault's apxUSD balance (assets held directly in the vault) * The vestedAmount() available in the LinearVestV0 contract",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/locking.md",
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "withdrawal-pulls-vested",
-  "category": "state",
-  "statement": "When processing a withdrawal, the apyUSD vault MUST pull all vested yield from the LinearVestV0 contract before completing the withdrawal.",
-  "rationale": "The vault automatically pulls vested yield to ensure sufficient assets for the withdrawal.",
-  "source_quote": "When a withdrawal is requested, the vault automatically pulls all vested yield from the LinearVestV0 contract before processing the withdrawal, ensuring it has sufficient assets to fund the withdrawal.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/locking.md"
-  ]
- },
- {
-  "id": "global-pause-blocks-deposit",
-  "category": "access-control",
-  "statement": "If the global pause is active, any deposit or mint transaction MUST revert.",
-  "rationale": "The global pause is described as preventing all token transfers, including deposits and mints.",
-  "source_quote": "Global Pause: The apyUSD vault can be paused, preventing all token transfers including deposits and mints",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/locking.md"
-  ]
- },
- {
-  "id": "denylist-blocks-deposit",
-  "category": "access-control",
-  "statement": "If the caller or the receiver address is present in the deny list, deposit and mint operations MUST revert.",
-  "rationale": "The deny list blocks deposits and mints and causes an immediate revert.",
-  "source_quote": "Address Blocking: AddressList contract checks addresses at execution time ... Blocks: Deposits and mints ... Denylisted addresses are rejected immediately (revert)",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/locking.md"
-  ]
- },
- {
-  "id": "deposit-emits-event",
-  "category": "state",
-  "statement": "The deposit(assets, receiver) function MUST emit a Deposit event with parameters (sender, receiver, owner, assets, shares) upon successful execution.",
-  "rationale": "The sequence diagram shows a Deposit event emitted after a successful deposit.",
-  "source_quote": "vault -->> offchain: emits Deposit(alice, alice, alice, 1000, 970)",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/locking.md"
-  ]
- },
- {
-  "id": "mint-emits-event",
-  "category": "state",
-  "statement": "The mint(shares, receiver) function MUST emit a Deposit event with parameters (sender, receiver, owner, assets, shares) upon successful execution.",
-  "rationale": "The mint success diagram also shows a Deposit event emitted.",
-  "source_quote": "vault -->> offchain: emits Deposit(alice, alice, alice, 1000, 970)",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/locking.md"
-  ]
- },
- {
-  "id": "erc4626-compliance",
-  "category": "state",
-  "statement": "The apyUSD vault contract MUST implement the ERC‑4626 tokenized vault interface.",
-  "rationale": "The vault is explicitly described as ERC‑4626 compliant.",
-  "source_quote": "apyUSD is an ERC-4626 compliant tokenized vault with synchronous deposits.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/locking.md"
-  ]
- },
- {
-  "id": "unlock-token-redeemable-1to1-after-20d",
-  "category": "economic",
-  "statement": "apxUSD_unlock tokens MUST be redeemable 1:1 for apxUSD after a 20‑day cooldown period.",
-  "rationale": "The token is defined to be redeemable 1:1 after a 20‑day cooldown.",
-  "source_quote": "apxUSD_unlock is redeemable 1:1 for apxUSD after a 20 day cooldown period",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "unlock-token-nontransferable",
-  "category": "access-control",
-  "statement": "apxUSD_unlock tokens MUST NOT be transferable.",
-  "rationale": "The token is explicitly stated to be non‑transferrable.",
-  "source_quote": "apxUSD_unlock ... is non‑transferrable.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "unlock-token-no-yield",
-  "category": "economic",
-  "statement": "apxUSD_unlock tokens MUST NOT earn yield.",
-  "rationale": "The documentation says the token does not earn yield.",
-  "source_quote": "does not earn yield",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "unlock-receipt-nft-mint",
-  "category": "state",
-  "statement": "When a user initiates a new unlock, the system MUST mint an on‑chain Unlock Receipt NFT representing the pending claim.",
-  "rationale": "The process of initiating an unlock includes receiving an NFT.",
-  "source_quote": "When initiating a new unlock, users receive an onchain Unlock Receipt NFT representing their pending claim.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md",
-   "https://docs.apyx.fi/product-overview/apyusd-overview.md"
-  ]
- },
- {
-  "id": "unlock-claimable-after-3d",
-  "category": "temporal",
-  "statement": "Unlocks MUST become claimable after three days.",
-  "rationale": "The claimability window is defined as three days.",
-  "source_quote": "Unlocks become claimable after 3 days",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "early-unlock-fee-linear-decline",
-  "category": "economic",
-  "statement": "The early unlock fee MUST decline linearly over time from 3.5 % down to 0.1 %.",
-  "rationale": "The fee schedule is described as a linear decline between those percentages.",
-  "source_quote": "with an early unlock fee that declines linearly over time from 3.5% down to just 0.1%",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "unlock-cannot-be-cancelled",
-  "category": "access-control",
-  "statement": "The system MUST NOT allow an unlocking request to be cancelled once it has been initiated.",
-  "rationale": "Cancellation is explicitly prohibited.",
-  "source_quote": "You cannot cancel unlocking once it has been initiated",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "unlock-conversion-after-cooldown",
-  "category": "temporal",
-  "statement": "Conversion of apxUSD_unlock to apxUSD MUST only be possible after the cooldown period has elapsed.",
-  "rationale": "Conversion is gated by the cooldown period.",
-  "source_quote": "will only be able to convert apxUSD_unlock to apxUSD after the cooldown period.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "multiple-unlocks-reset-cooldown",
-  "category": "temporal",
-  "statement": "If a user initiates multiple unlocks, the system MUST reset the cooldown period for the total locked amount.",
-  "rationale": "Multiple unlocks are said to reset the cooldown for the combined amount.",
-  "source_quote": "Multiple unlocks reset the cooldown period.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "withdrawForMaxShares-revert-if-exceeds-maxShares",
-  "category": "failure",
-  "statement": "withdrawForMaxShares(uint256 assets, uint256 maxShares, address receiver) MUST revert if the number of apyUSD shares required to withdraw the assets exceeds maxShares.",
-  "rationale": "The method is defined to revert when more than maxShares would be burned.",
-  "source_quote": "`withdrawForMaxShares(uint256 assets, uint256 maxShares, address receiver)`: Withdraws exact assets or reverts if more than maxShares will be burned",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "redeemForMinAssets-revert-if-below-minAssets",
-  "category": "failure",
-  "statement": "redeemForMinAssets(uint256 shares, uint256 minAssets, address receiver) MUST revert if the amount of apxUSD assets to be received is less than minAssets.",
-  "rationale": "The method is defined to revert when less than minAssets would be received.",
-  "source_quote": "`redeemForMinAssets(uint256 shares, uint256 minAssets, address receiver)`: Redeems exact shares or reverts if less than min assets will be received",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "vault-pulls-vested-yield-before-withdraw",
-  "category": "state",
-  "statement": "When a withdrawal is requested, the vault MUST automatically pull all vested yield from the LinearVestV0 contract before processing the withdrawal.",
-  "rationale": "The vault is described to pull vested yield prior to withdrawal processing.",
-  "source_quote": "When a withdrawal is requested, the vault automatically pulls all vested yield from the vesting contract before processing the withdrawal",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "vault-burns-apyUSD-shares-immediately",
-  "category": "state",
-  "statement": "The vault MUST burn the appropriate amount of apyUSD shares immediately upon a withdraw or redeem call.",
-  "rationale": "Shares are burned synchronously with the operation.",
-  "source_quote": "apyUSD shares are burned immediately",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "vault-deposits-apxUSD-into-UnlockToken",
-  "category": "state",
-  "statement": "The vault MUST deposit the corresponding apxUSD amount into the UnlockToken contract during a withdraw or redeem operation.",
-  "rationale": "The vault deposits assets into UnlockToken as part of the flow.",
-  "source_quote": "The apxUSD assets are deposited into the UnlockToken contract by the vault",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "unlockToken-mints-apxUSD_unlock-immediately",
-  "category": "state",
-  "statement": "The UnlockToken contract MUST mint apxUSD_unlock tokens to the user immediately after the deposit -- where \"the deposit\" is the vault depositing the corresponding apxUSD into the UnlockToken contract (as part of a withdraw/redeem/unlock-request operation), not the user's initial USDC/apxUSD deposit into the vault.",
-  "rationale": "Minting occurs instantly after the vault deposits assets.",
-  "source_quote": "User immediately receives apxUSD_unlock tokens (UnlockToken shares)",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "unlockToken-redeem-after-cooldown",
-  "category": "state",
-  "statement": "The UnlockToken contract MUST allow a user to call redeem() after the cooldown period to receive the underlying apxUSD.",
-  "rationale": "Redemption is permitted only after the cooldown.",
-  "source_quote": "After the cooldown period, the user calls `UnlockToken.redeem()` to receive their apxUSD",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "singleton-unlockToken-instance",
-  "category": "state",
-  "statement": "There MUST be exactly one instance of UnlockToken and it MUST be used exclusively by the apyUSD vault.",
-  "rationale": "The documentation states a single instance used only by the vault.",
-  "source_quote": "There is only one instance of UnlockToken and it is used exclusively by the apyUSD vault.",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- },
- {
-  "id": "vault-operator-of-UnlockToken",
-  "category": "access-control",
-  "statement": "The apyUSD vault MUST be configured as the operator of the UnlockToken contract, allowing it to initiate redeem requests on behalf of users immediately.",
-  "rationale": "The vault is described as the operator enabling immediate redeem requests.",
-  "source_quote": "The apyUSD vault is configured as the operator for UnlockToken, allowing it to initiate the redeem request on behalf of the user immediately",
-  "formalizable": true,
-  "sources": [
-   "https://docs.apyx.fi/technical-overview/unlocking.md"
-  ]
- }
+  {
+    "id": "deposit-mint-apxusd",
+    "category": "state",
+    "statement": "The protocol MUST mint apxUSD to a user when the user deposits USDC.",
+    "rationale": "Users obtain apxUSD by depositing USDC.",
+    "source_quote": "Individuals who interact with the protocol by depositing USDC to acquire apxUSD.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
+    ]
+  },
+  {
+    "id": "mint-price",
+    "category": "economic",
+    "statement": "The protocol MUST price newly minted apxUSD at $1 per unit.",
+    "rationale": "New issuance is explicitly priced at $1.",
+    "source_quote": "New issuance is priced at $1;",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/apyx-overview/how-apyx-works.md",
+      "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
+    ]
+  },
+  {
+    "id": "redemption-value",
+    "category": "economic",
+    "statement": "The protocol MUST allow redemption of apxUSD at the current Redemption Value.",
+    "rationale": "All redemption activity occurs at Redemption Value.",
+    "source_quote": "All redemption activity occurs at Redemption Value.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
+    ]
+  },
+  {
+    "id": "offchain-allocation",
+    "category": "state",
+    "statement": "The Offchain Treasury MUST allocate incoming capital to acquire a basket of preferred assets and short‑term treasury bonds.",
+    "rationale": "The Offchain Treasury is described as allocating incoming capital to acquire such assets.",
+    "source_quote": "The Offchain Treasury allocates incoming capital to acquire a basket of preferred assets (\"Prefs\") and short-term treasury bonds.",
+    "formalizable": false,
+    "sources": [
+      "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
+    ]
+  },
+  {
+    "id": "custody-attestation",
+    "category": "state",
+    "statement": "The Offchain Treasury MUST provide regular third‑party accounting attestations and transparent reporting on custody and collateral composition.",
+    "rationale": "Apyx provides regular third‑party attestations and transparent reporting.",
+    "source_quote": "Apyx provides regular third‑party accounting attestations and transparent reporting on custody and collateral composition so users can independently verify the backing.",
+    "formalizable": false,
+    "sources": [
+      "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
+    ]
+  },
+  {
+    "id": "no-rehypothecation",
+    "category": "access-control",
+    "statement": "The protocol MUST NOT rehypothecate, lend, or otherwise utilize deposited apxUSD for any purpose.",
+    "rationale": "The protocol is explicitly designed not to rehypothecate or lend deposited apxUSD.",
+    "source_quote": "The protocol does not rehypothecate, lend, or otherwise utilize deposited apxUSD for any purpose.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/apyx-overview/how-apyx-works.md",
+      "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
+    ]
+  },
+  {
+    "id": "yield-distribution-period",
+    "category": "temporal",
+    "statement": "The Onchain Vault MUST distribute received yield to apyUSD holders over a 20‑day period.",
+    "rationale": "Yield is streamed to holders over a 20‑day window.",
+    "source_quote": "The vault distributes this yield to apyUSD holders in a stream over a 20 day period.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
+    ]
+  },
+  {
+    "id": "lock-apxusd",
+    "category": "state",
+    "statement": "The protocol MUST allow a user to lock apxUSD in the vault and receive apyUSD.",
+    "rationale": "Users can lock apxUSD to receive apyUSD.",
+    "source_quote": "Users can lock apxUSD in the vault to receive apyUSD.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
+    ]
+  },
+  {
+    "id": "apyusd-value-increase",
+    "category": "arithmetic",
+    "statement": "The redeemable value of apyUSD MUST increase over time as yield is distributed to the vault.",
+    "rationale": "apyUSD accrues yield, increasing its redeemable value over time.",
+    "source_quote": "apyUSD represents a locked position that accrues the yield sent to the vault, increasing in redeemable value over time.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
+    ]
+  },
+  {
+    "id": "price-may-include-spreads",
+    "category": "economic",
+    "statement": "The protocol MAY reflect spreads and offchain execution expenses in the price during minting and redemption.",
+    "rationale": "On-chain, src/MinterV0.sol mints exactly order.amount apxUSD with NO spread; any spreads / offchain execution expenses are applied OFF-CHAIN at USD collection time, outside the on-chain state machine. So this MAY clause is off-chain (unformalizable on-chain) and does not conflict with the on-chain 'issuance priced at $1' guarantee (docs/07 candidate 2).",
+    "source_quote": "Any spreads and offchain execution expenses incurred during minting and redemption may be reflected in the price.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/apyx-overview/how-apyx-works.md"
+    ]
+  },
+  {
+    "id": "rebalance-overcollateralization",
+    "category": "state",
+    "statement": "The system SHALL rebalance the collateral basket so that apxUSD remains over‑collateralized.",
+    "rationale": "The document says the basket rebalances to keep apxUSD overcollateralized.",
+    "source_quote": "The basket rebalances subject to ... coverage requirements that keep apxUSD overcollateralized.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apxusd-overview.md"
+    ]
+  },
+  {
+    "id": "redeem-liquidate-usdc",
+    "category": "state",
+    "statement": "The system SHALL liquidate preferred‑share collateral to USDC in order to settle any redemption request.",
+    "rationale": "Redemptions are settled by liquidating preferred shares to USDC.",
+    "source_quote": "In redemption scenarios, the protocol liquidates preferred shares to USDC to settle redemption obligations;",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apxusd-overview.md"
+    ]
+  },
+  {
+    "id": "redeem-no-share-transfer",
+    "category": "state",
+    "statement": "The system MUST NOT transfer preferred shares directly to a participant who redeems apxUSD.",
+    "rationale": "Holders do not receive preferred shares directly on redemption.",
+    "source_quote": "holders do not receive preferred shares directly.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apxusd-overview.md"
+    ]
+  },
+  {
+    "id": "redemption-settlement-value",
+    "category": "arithmetic",
+    "statement": "Redemptions SHALL be settled at the Redemption Value, which tracks the underlying basket.",
+    "rationale": "Redemptions occur at Redemption Value, which tracks the underlying basket.",
+    "source_quote": "Redemptions occur at Redemption Value, which tracks the underlying basket.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apxusd-overview.md"
+    ]
+  },
+  {
+    "id": "liquidity-buffer-size",
+    "category": "economic",
+    "statement": "The system SHALL maintain a liquidity buffer sized against the largest historical TVL drawdowns observed in comparable stablecoins.",
+    "rationale": "The protocol maintains a liquidity buffer sized against the largest historical TVL drawdowns.",
+    "source_quote": "To ensure stability, the protocol maintains a liquidity buffer sized against the largest historical TVL drawdowns observed in comparable stablecoins.",
+    "formalizable": false,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apxusd-overview.md"
+    ]
+  },
+  {
+    "id": "mint-access-whitelist",
+    "category": "access-control",
+    "statement": "Only participants who are eligible, located in permitted jurisdictions, and whitelisted SHALL be allowed to mint apxUSD.",
+    "rationale": "Minting is limited to eligible, whitelisted participants in permitted jurisdictions.",
+    "source_quote": "Eligible participants in permitted jurisdictions who are whitelisted, such as institutional market makers, may mint ... apxUSD.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apxusd-overview.md"
+    ]
+  },
+  {
+    "id": "redeem-access-whitelist",
+    "category": "access-control",
+    "statement": "Only participants who are eligible, located in permitted jurisdictions, and whitelisted SHALL be allowed to redeem apxUSD.",
+    "rationale": "Redemption is limited to eligible, whitelisted participants in permitted jurisdictions.",
+    "source_quote": "Eligible participants in permitted jurisdictions who are whitelisted, such as institutional market makers, may ... redeem apxUSD.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apxusd-overview.md"
+    ]
+  },
+  {
+    "id": "issuance-price-one",
+    "category": "arithmetic",
+    "statement": "New apxUSD issuance SHALL be priced at exactly $1 per token.",
+    "rationale": "New apxUSD issuance is always priced at $1.",
+    "source_quote": "New apxUSD issuance is always priced at $1, giving the secondary market a consistent anchor.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apxusd-overview.md"
+    ]
+  },
+  {
+    "id": "buffer-growth-stress",
+    "category": "economic",
+    "statement": "The over‑collateralization buffer SHALL grow during stress events rather than be drained by them.",
+    "rationale": "The buffer grows through stress events rather than being drained.",
+    "source_quote": "The buffer grows through stress events rather than being drained by them",
+    "formalizable": false,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apxusd-overview.md"
+    ]
+  },
+  {
+    "id": "deposit-permissionless",
+    "category": "access-control",
+    "statement": "The vault MUST allow any address to deposit apxUSD and receive apyUSD without requiring KYB/KYC.",
+    "rationale": "The document states deposits are permissionless and no KYC is required.",
+    "source_quote": "Users deposit apxUSD into a permissionless vault and receive apyUSD in return.\nAccess: Permissionless; no KYB/KYC requirement",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+    ]
+  },
+  {
+    "id": "token-no-rebase",
+    "category": "state",
+    "statement": "The apyUSD token MUST NOT rebase its balances; balances may change only via transfers, minting, or burning.",
+    "rationale": "The token balances are explicitly described as non‑rebasing.",
+    "source_quote": "Token balances do not rebase.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+    ]
+  },
+  {
+    "id": "exchange-rate-non-decreasing",
+    "category": "arithmetic",
+    "statement": "The exchange rate between apyUSD and apxUSD MUST be non‑decreasing over time.",
+    "rationale": "The apyUSD/apxUSD exchange rate (src/oracles/ApyUSDRateOracle.sol reads the ERC-4626 vault's convertToAssets, i.e. apxUSD-per-apyUSD) is apxUSD-denominated and insulated from apxUSD-collateral stress: a collateral loss reduces apxUSD's USD redemption value, not the apxUSD count backing apyUSD. Non-decreasing (yield-driven) is therefore faithful (docs/07 candidate 5).",
+    "source_quote": "Yield accrues through a gradually increasing exchange rate, meaning each apyUSD can be redeemed for more apxUSD over time.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+    ]
+  },
+  {
+    "id": "redemption-exchange-rate-multiplier",
+    "category": "arithmetic",
+    "statement": "When a user redeems apyUSD, the system MUST transfer an amount of apxUSD equal to the number of apyUSD redeemed multiplied by the current exchange rate, which MUST be greater than or equal to 1.",
+    "rationale": "Redemption formula is defined with exchangeRate ≥ 1.",
+    "source_quote": "Redemption: 1 apyUSD → apxUSD × exchangeRate (t ≥ 1)",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+    ]
+  },
+  {
+    "id": "jurisdiction-restriction-frontend",
+    "category": "access-control",
+    "statement": "The frontend MUST prevent users located in restricted jurisdictions from accessing the Apyx application.",
+    "rationale": "Participation is restricted for users in certain jurisdictions.",
+    "source_quote": "Participation is restricted for users in certain jurisdictions. Users located in such jurisdictions will be prevented from accessing the Apyx frontend.",
+    "formalizable": false,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+    ]
+  },
+  {
+    "id": "redemption-async-process",
+    "category": "state",
+    "statement": "Redemption requests MUST follow the three‑step asynchronous process of request, cooldown, and claim.",
+    "rationale": "Redemptions follow an asynchronous unlocking model (ERC‑7540) and are not executed immediately.",
+    "source_quote": "Redemptions follow an asynchronous unlocking model (ERC-7540) and are not executed immediately.\nThe process consists of three steps: request, cooldown (approximately 20 days), and claim.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+    ]
+  },
+  {
+    "id": "redemption-cooldown-period",
+    "category": "temporal",
+    "statement": "After a redemption request is submitted, the system MUST enforce a cooldown period of approximately 20 days before a claim can be executed.",
+    "rationale": "The cooldown period is described as approximately 20 days.",
+    "source_quote": "The process consists of three steps: request, cooldown (approximately 20 days), and claim.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+    ]
+  },
+  {
+    "id": "single-pending-redemption-per-user",
+    "category": "state",
+    "statement": "Each user MUST have at most one pending redemption request; if the user adds assets to an existing request, the cooldown timer MUST reset to the time of the update.",
+    "rationale": "The document limits users to a single pending request and defines reset behavior.",
+    "source_quote": "Each user may have only one pending redemption request at a time. Adding assets to an existing request resets the cooldown period from the time of the update.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+    ]
+  },
+  {
+    "id": "cooldown-no-yield",
+    "category": "arithmetic",
+    "statement": "During a redemption cooldown, the exchange rate for the locked apyUSD MUST remain fixed and the user MUST not accrue additional yield on those tokens.",
+    "rationale": "Yield is paused and the exchange rate is fixed while in cooldown.",
+    "source_quote": "During the cooldown period, users will not receive yield on their apyUSD, with the apxUSD/apyUSD exchange rate being fixed.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+    ]
+  },
+  {
+    "id": "flexible-redemption-claim-minimum",
+    "category": "temporal",
+    "statement": "A flexible redemption claim MUST be executable only after a minimum of 3 days have elapsed since the request.",
+    "rationale": "Redemptions become claimable after 3 days.",
+    "source_quote": "Redemptions become claimable after 3 days, with an early redemption fee that declines linearly over time from 3.5% down to just 0.1%.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+    ]
+  },
+  {
+    "id": "flexible-redemption-early-fee",
+    "category": "economic",
+    "statement": "The early redemption fee applied to a flexible redemption claim MUST start at 3.5 % and decline linearly over time to a minimum of 0.1 %.",
+    "rationale": "Fee schedule is described as linearly decreasing from 3.5 % to 0.1 %.",
+    "source_quote": "Redemptions become claimable after 3 days, with an early redemption fee that declines linearly over time from 3.5% down to just 0.1%.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+    ]
+  },
+  {
+    "id": "flexible-redemption-multiple-requests",
+    "category": "state",
+    "statement": "The system MUST allow a user to have multiple concurrent flexible redemption unlock requests.",
+    "rationale": "The mechanism allows queuing multiple unlock requests simultaneously.",
+    "source_quote": "Queue multiple unlock requests simultaneously",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+    ]
+  },
+  {
+    "id": "overcollateralization-limit",
+    "category": "arithmetic",
+    "statement": "The system MUST ensure that the total amount of apxUSD minted never exceeds the market value of the collateral minus the required overcollateralization margin.",
+    "rationale": "The document says minting is constrained by collateral value to keep collateral above liabilities by a defined margin.",
+    "source_quote": "The total apxUSD minted is constrained by the market value of the collateral, ensuring collateral value exceeds outstanding liabilities by a defined margin.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/peg-stability-model.md"
+    ]
+  },
+  {
+    "id": "buffer-preservation",
+    "category": "state",
+    "statement": "The system MUST preserve the overcollateralization buffer during routine redemption operations; the buffer MUST NOT be consumed.",
+    "rationale": "The buffer is explicitly described as not being consumed during routine redemptions.",
+    "source_quote": "the overcollateralization buffer is **not** consumed during routine redemptions.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/peg-stability-model.md"
+    ]
+  },
+  {
+    "id": "mint-redeem-at-redemption-value",
+    "category": "arithmetic",
+    "statement": "All minting and redemption transactions MUST be executed at the Redemption Value, which reflects the underlying basket of preferred shares and cash.",
+    "rationale": "Mint and redeem activity is said to occur at Redemption Value.",
+    "source_quote": "All mint and redeem activity occurs at **Redemption Value**, which tracks the underlying basket of preferred shares and cash.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/peg-stability-model.md"
+    ]
+  },
+  {
+    "id": "buffer-non-decreasing",
+    "category": "state",
+    "statement": "Outside of a catastrophic backstop, the overcollateralization buffer — the gap between Total Collateral Value and Redemption Value — MUST NOT decrease: it MUST NOT be consumed during routine redemptions and MUST be preserved (and MAY grow) through stress events, and it MAY increase over time via yield spreads and collateral appreciation. A catastrophic backstop is the sole exception and deliberately distributes the entire buffer (see catastrophic-backstop).",
+    "rationale": "Corpus scopes buffer preservation to routine redemptions and stress events, and treats the catastrophic backstop as a separate terminal mechanism that distributes the buffer; the earlier unconditional wording was an over-generalized extraction (see docs/07-spec-defects.md candidate 1).",
+    "source_quote": "the overcollateralization buffer is **not** consumed during routine redemptions. ... The buffer—the gap between Redemption Value and **Total Collateral Value**—is preserved through stress events and grows over time via yield spreads and collateral appreciation.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/peg-stability-model.md"
+    ]
+  },
+  {
+    "id": "arbitrage-mint-access",
+    "category": "access-control",
+    "statement": "Only eligible whitelist participants SHALL be permitted to invoke the minting pathway for arbitrage when apxUSD trades above $1.00.",
+    "rationale": "Arbitrage minting is limited to eligible whitelist participants when the price is in premium.",
+    "source_quote": "*When apxUSD Trades Above $1.00 (Premium):* Eligible participants may use the protocol’s minting pathway to mint apxUSD under predefined terms...",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/peg-stability-model.md"
+    ]
+  },
+  {
+    "id": "arbitrage-redeem-access",
+    "category": "access-control",
+    "statement": "Only eligible whitelist participants SHALL be permitted to redeem apxUSD for dollar‑equivalent value when apxUSD trades below $1.00.",
+    "rationale": "Arbitrage redemption is limited to eligible whitelist participants when the price is in discount.",
+    "source_quote": "*When apxUSD Trades Below $1.00 (Discount):* Eligible participants may acquire apxUSD at a discount in secondary markets and redeem it through the protocol for dollar-equivalent value.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/peg-stability-model.md"
+    ]
+  },
+  {
+    "id": "yield-distributor-credit",
+    "category": "state",
+    "statement": "The YieldDistributor MUST credit converted apxUSD proceeds to the apyUSD vault.",
+    "rationale": "The document states that proceeds are converted into apxUSD and credited to the vault via the YieldDistributor.",
+    "source_quote": "These proceeds are converted into apxUSD and credited to the apyUSD vault via the `YieldDistributor`.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
+    ]
+  },
+  {
+    "id": "linear-vest-implementation",
+    "category": "state",
+    "statement": "The LinearVestV0 contract MUST implement a linear vesting mechanism for yield credited to the apyUSD vault.",
+    "rationale": "The distribution mechanism description says yield uses a linear vesting mechanism implemented by LinearVestV0.",
+    "source_quote": "Yield credited to the apyUSD vault utilizes a linear vesting mechanism implemented by the `LinearVestV0` contract.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
+    ]
+  },
+  {
+    "id": "credit-preserves-accrued-vest",
+    "category": "arithmetic",
+    "statement": "When new yield is deposited or the vesting period is changed, the LinearVestV0 contract MUST accrue the already-vested-but-not-yet-transferred amount into a separate fully-vested accumulator BEFORE resetting the vesting clock, so that previously accrued yield is preserved (not forfeited) across the reset.",
+    "rationale": "depositYield/setVestingPeriod reset the vesting period; without first capturing the newly-vested portion, accrued yield would be re-thrown into the unvested pool and its realization postponed. The contract preserves it via `fullyVestedAmount += newlyVestedAmount()` prior to the timestamp reset.",
+    "source_quote": "Add new amount to fully vested and unvested amount / fullyVestedAmount += newlyVestedAmount(); vestingAmount = unvestedAmount() + amount;",
+    "formalizable": true,
+    "sources": [
+      "https://github.com/apyx-labs/evm-contracts/blob/main/src/LinearVestV0.sol"
+    ]
+  },
+  {
+    "id": "continuous-stream",
+    "category": "temporal",
+    "statement": "Yield MUST be streamed continuously over a configurable period rather than as a lump‑sum distribution.",
+    "rationale": "The document explains that yield is streamed continuously over a configurable period (e.g., 20 days).",
+    "source_quote": "Instead of a single lump-sum distribution, yield is streamed continuously over a configurable period (e.g., 20 days).",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
+    ]
+  },
+  {
+    "id": "monthly-yield-rate-set",
+    "category": "temporal",
+    "statement": "Each month, the system MUST set the yield rate for the following month based on the prior month’s collateral‑base yield.",
+    "rationale": "The text specifies that each month the yield rate is set for the next month using the previous month’s generated yield.",
+    "source_quote": "Each month, the yield rate is set for the following month, based on the yield generated by the collateral base the prior month.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
+    ]
+  },
+  {
+    "id": "yield-rate-dollar-terms",
+    "category": "arithmetic",
+    "statement": "The yield rate MUST be expressed in dollar terms for the month.",
+    "rationale": "The document says the yield rate is set in dollar terms (e.g., $1M).",
+    "source_quote": "The yield rate is set in dollar terms, e.g. $1M of yield will be paid this month.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
+    ]
+  },
+  {
+    "id": "pay-to-non-cooldown",
+    "category": "state",
+    "statement": "Yield MUST be paid to all apyUSD tokens that are not currently undergoing cooldown.",
+    "rationale": "It is stated that yield is paid across all apyUSD not currently undergoing cooldown.",
+    "source_quote": "That yield is paid across all apyUSD not currently undergoing cooldown...",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
+    ]
+  },
+  {
+    "id": "new-locked-receives-yield",
+    "category": "economic",
+    "statement": "When new apyUSD is locked, it MUST immediately begin receiving yield, which reduces the overall percentage yield for existing holders.",
+    "rationale": "The description notes that newly locked apyUSD instantly begins receiving yield, lowering the % yield for everyone else.",
+    "source_quote": "new apyUSD that is locked instantly begins receiving yield, reducing the overall % yield for everyone else.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
+    ]
+  },
+  {
+    "id": "cooldown-removal",
+    "category": "economic",
+    "statement": "When apyUSD enters the cooldown phase, it MUST be removed from the yield pool, causing remaining apyUSD to receive a higher percentage yield.",
+    "rationale": "The text explains that apyUSD entering cooldown is removed from the pool, increasing the % yield for the rest.",
+    "source_quote": "any apyUSD that enters the cooldown phase is removed from the pool set to receive yield, meaning the remaining apyUSD receive a higher % yield.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
+    ]
+  },
+  {
+    "id": "configurable-vesting-period",
+    "category": "temporal",
+    "statement": "The vesting period for linear yield distribution MUST be configurable.",
+    "rationale": "The document mentions a configurable period (e.g., 20 days) for the streaming of yield.",
+    "source_quote": "yield is streamed continuously over a configurable period (e.g., 20 days).",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/apyusd-yield-distribution.md"
+    ]
+  },
+  {
+    "id": "redemption-value-uniform",
+    "category": "state",
+    "statement": "The system MUST apply the same Redemption Value to all participants regardless of market conditions.",
+    "rationale": "The document states the value applies identically across calm and stressed conditions and to all participants.",
+    "source_quote": "It applies identically across calm and stressed conditions, and to all participants.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
+    ]
+  },
+  {
+    "id": "buffer-not-consumed",
+    "category": "state",
+    "statement": "The system MUST NOT reduce the overcollateralization buffer as a result of routine redemption operations.",
+    "rationale": "The buffer is described as not being consumed during routine redemptions.",
+    "source_quote": "The overcollateralization buffer is not consumed during routine redemptions.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
+    ]
+  },
+  {
+    "id": "catastrophic-backstop",
+    "category": "state",
+    "statement": "Upon detection of a catastrophic scenario, the system MUST set the per-apxUSD Redemption Value to Total Collateral Value divided by the total apxUSD supply, so that redeeming the entire supply distributes the full reserve (buffer included) pro-rata to holders. Redemption Value is a per-unit apxUSD→USDC price (the deployed ApxUSDRateOracle rate, 1e18 precision), not an aggregate.",
+    "rationale": "Cross-check with src/oracles/ApxUSDRateOracle.sol (2026-07-08): `rate` is a per-unit apxUSD→USDC price with a `newRate > 0` guard. The corpus phrase 'Total Collateral Value becomes the redemption value' therefore means the per-unit rate = TCV / totalSupply, not TCV itself; the model was corrected accordingly (docs/07 candidate 3). The catastrophic scenario is gated on the governance emergency flag already being set (model.md guard column, raised by handleStressEvent), so the model's `catastrophicBackstop` fires only when `emergencyFlag == true` and then reprices, credits each holder `usdcReserve·apxUSDBal(a)/totalSupply` pro-rata, zeroes the reserve, and drives the buffer to 0 (req_catastrophic_backstop).",
+    "source_quote": "In a catastrophic scenario—a devastating hack, wind-down, or any event ending the protocol's future viability—Total Collateral Value becomes the redemption value, and the entire reserve, buffer included, is distributed pro-rata to remaining holders.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
+    ]
+  },
+  {
+    "id": "governance-deploy-buffer",
+    "category": "access-control",
+    "statement": "The system MUST restrict voting on buffer deployment to holders of the governance token.",
+    "rationale": "Only governance token holders are said to be able to vote on deploying the buffer.",
+    "source_quote": "Governance token holders may also vote to deploy a portion of the overcollateralization buffer in intermediate-risk scenarios to support Redemption Value.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
+    ]
+  },
+  {
+    "id": "rfq-redemption-allowed",
+    "category": "access-control",
+    "statement": "The system MUST allow users to submit redemption requests through the RFQ process and MUST permit only approved counterparties to execute those requests.",
+    "rationale": "The RFQ redemption system is described as allowing user submissions and execution by approved counterparties.",
+    "source_quote": "In addition to the protocol's primary-market redemption pathway, Apyx offers a Request for Quote (RFQ) redemption system. Users may submit redemption requests through a structured RFQ process, allowing approved counterparties to provide competitive execution against the underlying reserve.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/solution-overview/capitalization-framework.md"
+    ]
+  },
+  {
+    "id": "deposit-immediate",
+    "category": "temporal",
+    "statement": "The apyUSD vault MUST complete deposit operations synchronously and deliver apyUSD shares to the receiver without any delay.",
+    "rationale": "Locking is described as synchronous and immediate, and the deposit flow shows shares minted instantly.",
+    "source_quote": "Locking is synchronous and immediate, providing instant access to yield.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/locking.md"
+    ]
+  },
+  {
+    "id": "mint-immediate",
+    "category": "temporal",
+    "statement": "The apyUSD vault MUST complete mint operations synchronously and deliver apyUSD shares to the receiver without any delay.",
+    "rationale": "Minting is described as synchronous and immediate, and the mint flow shows shares minted instantly.",
+    "source_quote": "Locking is synchronous and immediate, providing instant access to yield.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/locking.md"
+    ]
+  },
+  {
+    "id": "synchronous-withdraw-return-token",
+    "category": "state",
+    "statement": "The apyUSD vault MUST execute withdrawals and redeems synchronously and MUST return apxUSD_unlock tokens immediately.",
+    "rationale": "The vault is described as synchronous and returns the unlock tokens on execution.",
+    "source_quote": "apyUSD is a synchronous ERC-4626 vault — withdrawals and redeems execute immediately and return apxUSD_unlock tokens.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "unlock-cooldown",
+    "category": "temporal",
+    "statement": "The apxUSD_unlock token MAY be redeemed for apxUSD only after a cooldown period has elapsed.",
+    "rationale": "Redemption is allowed only after a cooldown period.",
+    "source_quote": "can be redeemed for apxUSD after a cooldown period.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "depositforminshares-slippage",
+    "category": "failure",
+    "statement": "depositForMinShares(uint256 assets, uint256 minShares, address receiver) MUST revert if the number of shares that would be minted is less than minShares.",
+    "rationale": "The method is defined to revert when less than the minimum shares would be minted.",
+    "source_quote": "`depositForMinShares(uint256 assets, uint256 minShares, address receiver)`: Deposits exact assets for shares or reverts if less than min shares will be minted",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/locking.md"
+    ]
+  },
+  {
+    "id": "mintformaxassets-slippage",
+    "category": "failure",
+    "statement": "mintForMaxAssets(uint256 shares, uint256 maxAssets, address receiver) MUST revert if the amount of assets required to mint the requested shares exceeds maxAssets.",
+    "rationale": "The method is defined to revert when more than the maximum assets would be deposited.",
+    "source_quote": "`mintForMaxAssets(uint256 shares, uint256 maxAssets, address receiver)`: Mint exact shares for assets or reverts if more than max assets will be deposited",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/locking.md"
+    ]
+  },
+  {
+    "id": "totalAssets-includes-vault-balance-and-vested",
+    "category": "arithmetic",
+    "statement": "The vault's totalAssets() function MUST include both the vault's apxUSD balance and the vestedAmount() reported by the LinearVestV0 contract.",
+    "rationale": "The documentation lists both components as part of totalAssets().",
+    "source_quote": "The apyUSD vault's totalAssets() function includes both: * The vault's apxUSD balance (assets held directly in the vault) * The vestedAmount() available in the LinearVestV0 contract",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/locking.md",
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "withdrawal-pulls-vested",
+    "category": "state",
+    "statement": "When processing a withdrawal, the apyUSD vault MUST pull all vested yield from the LinearVestV0 contract before completing the withdrawal.",
+    "rationale": "The vault automatically pulls vested yield to ensure sufficient assets for the withdrawal.",
+    "source_quote": "When a withdrawal is requested, the vault automatically pulls all vested yield from the LinearVestV0 contract before processing the withdrawal, ensuring it has sufficient assets to fund the withdrawal.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/locking.md"
+    ]
+  },
+  {
+    "id": "global-pause-blocks-deposit",
+    "category": "access-control",
+    "statement": "If the global pause is active, any deposit or mint transaction MUST revert.",
+    "rationale": "The global pause is described as preventing all token transfers, including deposits and mints.",
+    "source_quote": "Global Pause: The apyUSD vault can be paused, preventing all token transfers including deposits and mints",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/locking.md"
+    ]
+  },
+  {
+    "id": "denylist-blocks-deposit",
+    "category": "access-control",
+    "statement": "If the caller or the receiver address is present in the deny list, deposit and mint operations MUST revert.",
+    "rationale": "The deny list blocks deposits and mints and causes an immediate revert.",
+    "source_quote": "Address Blocking: AddressList contract checks addresses at execution time ... Blocks: Deposits and mints ... Denylisted addresses are rejected immediately (revert)",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/locking.md"
+    ]
+  },
+  {
+    "id": "deposit-emits-event",
+    "category": "state",
+    "statement": "The deposit(assets, receiver) function MUST emit a Deposit event with parameters (sender, receiver, owner, assets, shares) upon successful execution.",
+    "rationale": "The sequence diagram shows a Deposit event emitted after a successful deposit.",
+    "source_quote": "vault -->> offchain: emits Deposit(alice, alice, alice, 1000, 970)",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/locking.md"
+    ]
+  },
+  {
+    "id": "mint-emits-event",
+    "category": "state",
+    "statement": "The mint(shares, receiver) function MUST emit a Deposit event with parameters (sender, receiver, owner, assets, shares) upon successful execution.",
+    "rationale": "The mint success diagram also shows a Deposit event emitted.",
+    "source_quote": "vault -->> offchain: emits Deposit(alice, alice, alice, 1000, 970)",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/locking.md"
+    ]
+  },
+  {
+    "id": "erc4626-compliance",
+    "category": "state",
+    "statement": "The apyUSD vault contract MUST implement the ERC‑4626 tokenized vault interface.",
+    "rationale": "The vault is explicitly described as ERC‑4626 compliant.",
+    "source_quote": "apyUSD is an ERC-4626 compliant tokenized vault with synchronous deposits.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/locking.md"
+    ]
+  },
+  {
+    "id": "unlock-token-redeemable-1to1-after-20d",
+    "category": "economic",
+    "statement": "apxUSD_unlock tokens MUST be redeemable 1:1 for apxUSD after a 20‑day cooldown period.",
+    "rationale": "The token is defined to be redeemable 1:1 after a 20‑day cooldown.",
+    "source_quote": "apxUSD_unlock is redeemable 1:1 for apxUSD after a 20 day cooldown period",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "unlock-token-nontransferable",
+    "category": "access-control",
+    "statement": "apxUSD_unlock tokens MUST NOT be transferable.",
+    "rationale": "The token is explicitly stated to be non‑transferrable.",
+    "source_quote": "apxUSD_unlock ... is non‑transferrable.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "unlock-token-no-yield",
+    "category": "economic",
+    "statement": "apxUSD_unlock tokens MUST NOT earn yield.",
+    "rationale": "The documentation says the token does not earn yield.",
+    "source_quote": "does not earn yield",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "unlock-receipt-nft-mint",
+    "category": "state",
+    "statement": "When a user initiates a new unlock, the system MUST mint an on‑chain Unlock Receipt NFT representing the pending claim.",
+    "rationale": "The process of initiating an unlock includes receiving an NFT.",
+    "source_quote": "When initiating a new unlock, users receive an onchain Unlock Receipt NFT representing their pending claim.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md",
+      "https://docs.apyx.fi/product-overview/apyusd-overview.md"
+    ]
+  },
+  {
+    "id": "unlock-claimable-after-3d",
+    "category": "temporal",
+    "statement": "Unlocks MUST become claimable after three days.",
+    "rationale": "The claimability window is defined as three days.",
+    "source_quote": "Unlocks become claimable after 3 days",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "early-unlock-fee-linear-decline",
+    "category": "economic",
+    "statement": "The early unlock fee MUST decline linearly over time from 3.5 % down to 0.1 %.",
+    "rationale": "The fee schedule is described as a linear decline between those percentages.",
+    "source_quote": "with an early unlock fee that declines linearly over time from 3.5% down to just 0.1%",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "unlock-cannot-be-cancelled",
+    "category": "access-control",
+    "statement": "The system MUST NOT allow an unlocking request to be cancelled once it has been initiated.",
+    "rationale": "Cancellation is explicitly prohibited.",
+    "source_quote": "You cannot cancel unlocking once it has been initiated",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "unlock-conversion-after-cooldown",
+    "category": "temporal",
+    "statement": "Conversion of apxUSD_unlock to apxUSD MUST only be possible after the cooldown period has elapsed.",
+    "rationale": "Conversion is gated by the cooldown period.",
+    "source_quote": "will only be able to convert apxUSD_unlock to apxUSD after the cooldown period.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "multiple-unlocks-reset-cooldown",
+    "category": "temporal",
+    "statement": "If a user initiates multiple unlocks, the system MUST reset the cooldown period for the total locked amount.",
+    "rationale": "Multiple unlocks are said to reset the cooldown for the combined amount.",
+    "source_quote": "Multiple unlocks reset the cooldown period.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "withdrawForMaxShares-revert-if-exceeds-maxShares",
+    "category": "failure",
+    "statement": "withdrawForMaxShares(uint256 assets, uint256 maxShares, address receiver) MUST revert if the number of apyUSD shares required to withdraw the assets exceeds maxShares.",
+    "rationale": "The method is defined to revert when more than maxShares would be burned.",
+    "source_quote": "`withdrawForMaxShares(uint256 assets, uint256 maxShares, address receiver)`: Withdraws exact assets or reverts if more than maxShares will be burned",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "redeemForMinAssets-revert-if-below-minAssets",
+    "category": "failure",
+    "statement": "redeemForMinAssets(uint256 shares, uint256 minAssets, address receiver) MUST revert if the amount of apxUSD assets to be received is less than minAssets.",
+    "rationale": "The method is defined to revert when less than minAssets would be received.",
+    "source_quote": "`redeemForMinAssets(uint256 shares, uint256 minAssets, address receiver)`: Redeems exact shares or reverts if less than min assets will be received",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "vault-pulls-vested-yield-before-withdraw",
+    "category": "state",
+    "statement": "When a withdrawal is requested, the vault MUST automatically pull all vested yield from the LinearVestV0 contract before processing the withdrawal.",
+    "rationale": "The vault is described to pull vested yield prior to withdrawal processing.",
+    "source_quote": "When a withdrawal is requested, the vault automatically pulls all vested yield from the vesting contract before processing the withdrawal",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "vault-burns-apyUSD-shares-immediately",
+    "category": "state",
+    "statement": "The vault MUST burn the appropriate amount of apyUSD shares immediately upon a withdraw or redeem call.",
+    "rationale": "Shares are burned synchronously with the operation.",
+    "source_quote": "apyUSD shares are burned immediately",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "vault-deposits-apxUSD-into-UnlockToken",
+    "category": "state",
+    "statement": "The vault MUST deposit the corresponding apxUSD amount into the UnlockToken contract during a withdraw or redeem operation.",
+    "rationale": "The vault deposits assets into UnlockToken as part of the flow.",
+    "source_quote": "The apxUSD assets are deposited into the UnlockToken contract by the vault",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "unlockToken-mints-apxUSD_unlock-immediately",
+    "category": "state",
+    "statement": "The UnlockToken contract MUST mint apxUSD_unlock tokens to the user immediately after the deposit -- where \"the deposit\" is the vault depositing the corresponding apxUSD into the UnlockToken contract (as part of a withdraw/redeem/unlock-request operation), not the user's initial USDC/apxUSD deposit into the vault.",
+    "rationale": "Minting occurs instantly after the vault deposits assets.",
+    "source_quote": "User immediately receives apxUSD_unlock tokens (UnlockToken shares)",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "unlockToken-redeem-after-cooldown",
+    "category": "state",
+    "statement": "The UnlockToken contract MUST allow a user to call redeem() after the cooldown period to receive the underlying apxUSD.",
+    "rationale": "Redemption is permitted only after the cooldown.",
+    "source_quote": "After the cooldown period, the user calls `UnlockToken.redeem()` to receive their apxUSD",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "singleton-unlockToken-instance",
+    "category": "state",
+    "statement": "There MUST be exactly one instance of UnlockToken and it MUST be used exclusively by the apyUSD vault.",
+    "rationale": "The documentation states a single instance used only by the vault.",
+    "source_quote": "There is only one instance of UnlockToken and it is used exclusively by the apyUSD vault.",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  },
+  {
+    "id": "vault-operator-of-UnlockToken",
+    "category": "access-control",
+    "statement": "The apyUSD vault MUST be configured as the operator of the UnlockToken contract, allowing it to initiate redeem requests on behalf of users immediately.",
+    "rationale": "The vault is described as the operator enabling immediate redeem requests.",
+    "source_quote": "The apyUSD vault is configured as the operator for UnlockToken, allowing it to initiate the redeem request on behalf of the user immediately",
+    "formalizable": true,
+    "sources": [
+      "https://docs.apyx.fi/technical-overview/unlocking.md"
+    ]
+  }
 ]
