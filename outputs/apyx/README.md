@@ -314,6 +314,7 @@ curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf 
 # restart your shell, or: source ~/.elan/env
 
 # 2. Build — elan reads lean-toolchain (Lean 4.31.0) and fetches it automatically
+cd lean
 lake build
 ```
 
@@ -332,9 +333,9 @@ axioms of Lean's logic; none is an unproved assumption. Compile status is record
 | [`SPEC.md`](SPEC.md) | The normative RFC 2119 specification (human-readable) |
 | [`requirements.json`](requirements.json) | The 82 extracted requirements in structured form |
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine |
-| [`D2fsSpecs/Apyx.lean`](D2fsSpecs/Apyx.lean) | The formal model (`State`, `Op`, `step`) and the 82 requirement proofs |
-| [`D2fsSpecs/BlastRadius.lean`](D2fsSpecs/BlastRadius.lean) | The 56 key-compromise blast-radius proofs and the defense wrappers |
-| [`D2fsSpecs/Safety.lean`](D2fsSpecs/Safety.lean) | The 24 design-safety proofs |
+| [`Apyx.lean`](Apyx.lean) | The formal model (`State`, `Op`, `step`) and the 82 requirement proofs |
+| [`BlastRadius.lean`](BlastRadius.lean) | The 56 key-compromise blast-radius proofs and the defense wrappers |
+| [`Safety.lean`](Safety.lean) | The 24 design-safety proofs |
 | [`leancheck.json`](leancheck.json) | Build status: requirement theorems, `sorry` count, vacuous count |
 | [`corpus.md`](corpus.md) | The raw ingested source documentation |
 

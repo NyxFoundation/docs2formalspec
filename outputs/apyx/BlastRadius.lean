@@ -1,6 +1,4 @@
 import D2fsSpecs.Apyx
-import LeanAtlas.Metadata.Attribute.Meta
-import LeanAtlas.Metadata.Attribute.Confidence
 
 /-!
 # Blast-radius theorems: damage upper bounds under privileged-key compromise
@@ -1430,9 +1428,6 @@ and that no approved RFQ counterparty executes an RFQ redemption *against `u`*
 Claim: none of `u`'s four recorded holdings can decrease — apxUSD, apyUSD vault
 shares, external USDC, and governance tokens (the last is bitwise unchanged). The
 team being fully phished cannot move your balances. -/
-@[formalMeta "Non-custodial guarantee"
-  "Even with every operator key stolen at once, a user who signs nothing and is never RFQ-targeted cannot lose any of their four holdings across any operation trace — the machine-checked form of \"we cannot move your funds even if we wanted to\"."
-  mainTheorem]
 theorem user_assets_immune_to_total_key_compromise
     (s : State) (σ : List (Op × Address)) (u : Address)
     (h_u : ∀ p ∈ σ, p.2 ≠ u)
@@ -1688,9 +1683,6 @@ Claim: each of `a`'s three transferable balances is non-decreasing across the
 entire trace, hence so is the derived ledger `netHoldings` — proved by lifting the
 single-step non-custodial lemmas through the trace via
 `user_assets_immune_to_total_key_compromise`. -/
-@[confidence high, formalMeta "No-theft ledger conservation"
-  "A passive bystander — an address that signs nothing and is never the target of an RFQ redemption — has a transferable ledger (apxUSD + apyUSD shares + USDC) that is non-decreasing across any operation trace, even with every operator key compromised: the ledger form of the non-custodial guarantee."
-  mainTheorem]
 theorem no_theft_ledger (s : State) (σ : List (Op × Address)) (a : Address)
     (h_never_signs : ∀ p ∈ σ, p.2 ≠ a)
     (h_never_rfq_target : ∀ p ∈ σ, ∀ amount, p.1 ≠ Op.executeRFQRedemption a amount) :
@@ -2823,9 +2815,6 @@ model: for a user with an in-flight RFQ request, fund security against a
 compromised admin rests entirely on the RFQ counterparty set and on the missing
 rate-limit / price-floor (T7/T8) — the request is settled at whatever price holds
 at execution time, with no floor and no consent-at-price step. -/
-@[confidence high, formalMeta "Total-loss coalition witness"
-  "The structural total-loss path, machine-checked on the document-faithful model: with the emergency flag up and collateral and reserve already at 0, a compromised admin crashes redemptionValue to 0 via catastrophicBackstop (its pro-rata compensation leg pays 0 — nothing remains), and an approved RFQ counterparty settles the victim's own pending 100-token RFQ request at the crashed price for 0 USDC — two colluding roles suffice to wipe out a pending request."
-  mainTheorem]
 theorem admin_rfq_coalition_drains :
     ∃ (s s1 s2 : State) (victim counterparty amount : Nat),
       0 < amount ∧

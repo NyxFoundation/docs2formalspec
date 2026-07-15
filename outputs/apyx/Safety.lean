@@ -1,5 +1,4 @@
 import D2fsSpecs.BlastRadius
-import LeanAtlas.Metadata.Attribute.Confidence
 
 /-!
 # In-scope safety: protocol-design soundness against an ordinary (honest-roles) attacker
@@ -505,9 +504,6 @@ This is the trace-level contrapositive of the single-step
 `apxUSD_credit_is_backed` (`BlastRadius.lean`): since every apxUSD credit is
 backed by a USDC payment or by settlement of the recipient's own previously
 funded unlock position, an address with no funding source can never be credited. -/
-@[confidence high, formalMeta "No free value"
-  "No operation sequence of any length — including operations signed by the address itself — lets an address that starts penniless and receives no third-party gift end up holding a single unit of apxUSD: value cannot be created from nothing."
-  mainTheorem]
 theorem no_free_value_trace (s : State) (σ : List (Op × Address)) (a : Address)
     (h0 : Penniless a s)
     (h_no_gift : ∀ p ∈ σ, (∀ n, p.1 ≠ Op.mintApxUSD a n) ∧
@@ -583,9 +579,6 @@ given that ledger well-formedness holds at every point visited along the way and
 trace never calls `claimUnlock`/`flexibleClaimUnlock`/`handleStressEvent`/
 `catastrophicBackstop` (the last being the documented wind-down that distributes the
 whole reserve to holders). -/
-@[formalMeta "Solvency preservation"
-  "Aggregate overcollateralization (apxUSD supply + buffer ≤ collateral + USDC reserve) is preserved across arbitrary operation traces, given ledger well-formedness at every step and excluding the four documented margin-consuming operations (unlock claims, stress events, and the wind-down backstop)."
-  mainTheorem, confidence high]
 theorem solvency_preserved (s : State) (σ : List (Op × Address))
     (h_solvent : Solvent s)
     (h_wf : ∀ n, WellFormed (execTrace s (σ.take n)))
