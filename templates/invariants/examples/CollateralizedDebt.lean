@@ -17,6 +17,8 @@ and a regression test for the template.
 | **I16** per-position health on every path | `all_healthy_preserved` (book-wide, exhaustive over `Op`), `redeem_preserves_health` |
 | — its supporting lemmas | `healthy_add_coll`, `healthy_sub_debt`, `price_ratio_stable`, `mem_updatePos`, `mem_dropPos`, `mem_insertPos` |
 | **I17** liquidation is risk-reducing | `liquidate_requires_unhealthy`, `liquidation_seizure_bounded` |
+| **I17c** liquidation has to be worth doing | `liquidation_unprofitable_witness` (**gap-witness**) |
+| **I22** bad debt is accounted, never dropped | `liquidation_accounts_shortfall`, `bad_debt_only_from_liquidation`, `unprofitable_liquidation_books_bad_debt` |
 | **I18** priority-order integrity | `sorted_preserved` (book-wide, exhaustive over `Op`), `redeem_hits_head_only`, `insertPos_sorted` |
 | — its supporting lemmas | `sorted_head_le`, `sorted_tail`, `sorted_cons_of_bound`, `sorted_dropPos`, `sorted_updatePos`, `sorted_updateConst`, `sorted_map`, `mem_updateConst`, `lookupPos_mem` |
 | **I19** accrual monotone | `index_monotone`, `accrual_never_lowers_debt` |
@@ -45,6 +47,15 @@ a different op from scrambling the book. `sorted_preserved` carries `Sorted` acr
 exhaustively, so an op that reordered the queue, or inserted at the wrong end, would fail to compile.
 The same distinction as I16's book-wide statement, and it costs the same kind of work: a head-bound
 lemma and one preservation lemma per list operation the model uses.
+
+**What a safety-only invariant set still misses.** Every theorem above can hold while the protocol
+loses money, because safety says which operations are *forbidden* and says nothing about which ones
+anybody will *perform*. A liquidator who recovers less than the debt is out of pocket, so the
+position is left alone and its shortfall grows with each accrual — `liquidation_unprofitable_witness`
+exhibits exactly that state, reachable and permitted. And the shortfall has to land somewhere:
+dropping the position from the book without booking it (which is what the first version of this file
+did) is a silent write-off that no other invariant here would have caught. I22 makes the accounting
+explicit and proves no other op can create bad debt.
 
 **I21 is worth lifting even on its own.** Pattern G in `docs/08` says: where an economically
 sensitive parameter has no enforced bound, witness the reachable bad state. The dual is available
@@ -105,6 +116,9 @@ structure State where
   nextId    : Nat
   /-- Collateral paid out of the book, per address (to liquidators and redeemers). -/
   collOut   : Address → Nat
+  /-- Debt a liquidation could not recover from the position's collateral. Without this field the
+      shortfall would simply vanish when the position is dropped — see `I22` below. -/
+  badDebt   : Nat
 deriving Inhabited
 
 inductive Op
@@ -162,6 +176,9 @@ def insertPos (p : Position) : List Position → List Position
 def seizure (s : State) (p : Position) : Nat :=
   min p.coll (p.debt * (one + s.penalty) / one * one / s.price)
 
+/-- The seized collateral valued in debt units — what the liquidator actually recovers. -/
+def seizureValue (s : State) (p : Position) : Nat := seizure s p * s.price / one
+
 /-- Debt cleared by buying `amount` of collateral at the current price. Rounded **up**: the
     redeemer never gets collateral cheaper than the book's own valuation. -/
 def redemptionDebt (s : State) (amount : Nat) : Nat := ceilDiv (amount * s.price) one
@@ -216,7 +233,10 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
       if p.debt * s.minRatio ≤ p.coll * s.price then none
       else some { s with
         positions := dropPos s.positions id
-        collOut   := fun a => if a = caller then s.collOut a + seizure s p else s.collOut a }
+        collOut   := fun a => if a = caller then s.collOut a + seizure s p else s.collOut a
+        -- the position leaves the book; whatever its collateral could not cover has to land
+        -- somewhere, or the protocol has quietly written off debt it still owes against
+        badDebt   := s.badDebt + (p.debt - seizureValue s p) }
   | Op.redeem amount =>
     match s.positions with
     | []      => none
@@ -507,6 +527,38 @@ theorem liquidate_requires_unhealthy (s : State) (id : Nat) (c : Address) (s' : 
 theorem liquidation_seizure_bounded (s : State) (p : Position) : seizure s p ≤ p.coll :=
   Nat.min_le_left _ _
 
+/-! ## I22 — bad debt is accounted, never dropped
+
+The failure that actually ends CDP protocols is not a liquidation that should have been forbidden;
+it is a liquidation that was permitted, went ahead, and left a shortfall nobody wrote down. A model
+that removes the position and stops looks correct on every other invariant while losing money. -/
+
+/-- **I22 (a).** Liquidating a position books exactly the debt its collateral could not cover.
+    Nothing is silently written off. -/
+theorem liquidation_accounts_shortfall (s : State) (id : Nat) (c : Address) (s' : State)
+    (p : Position) (hl : lookupPos s.positions id = some p)
+    (h : step s (Op.liquidate id) c = some s') :
+    s'.badDebt = s.badDebt + (p.debt - seizureValue s p) := by
+  simp only [step, hl] at h
+  split at h
+  · exact absurd h (by simp)
+  · injection h with e; subst e; simp only
+
+/-- **I22 (b).** No other operation can create bad debt — exhaustive over the closed `Op`, so a
+    future op that quietly absorbed a shortfall would break this proof rather than ship. -/
+theorem bad_debt_only_from_liquidation (s : State) (op : Op) (c : Address) (s' : State)
+    (h : step s op c = some s') (hnl : ∀ id, op ≠ Op.liquidate id) : s'.badDebt = s.badDebt := by
+  cases op with
+  | liquidate id => exact absurd rfl (hnl id)
+  | _ =>
+    simp only [step] at h
+    repeat' split at h
+    all_goals (try simp at h)
+    all_goals first
+      | rfl
+      | (subst h; rfl)
+      | (injection h with e; subst e; rfl)
+
 /-! ## I18 — priority-order integrity -/
 
 /-- **I18 (a).** Redemption consumes the head of the priority order and nothing else: the tail is
@@ -765,6 +817,7 @@ def stressed : State where
   positions := [{ id := 0, owner := 1, coll := 100, debt := 90, rate := 500 }]
   nextId    := 1
   collOut   := fun _ => 0
+  badDebt   := 0
 
 /-- The same book at a ratio that leaves the position healthy — something to redeem against. -/
 def solvent : State := { stressed with minRatio := 10000 }
@@ -783,6 +836,34 @@ theorem liquidation_is_reachable :
 theorem healthy_position_cannot_be_liquidated :
     step { stressed with minRatio := 10000 } (Op.liquidate 0) 7 = none := by
   simp [step, stressed, lookupPos, one]
+
+/-! ## I17 (c) — liquidation has to be worth doing
+
+`liquidate_requires_unhealthy` says an unhealthy position *may* be cleared. It does not say anyone
+*will* clear it: a liquidator who recovers less than the debt is out of pocket, so in a real market
+the position is simply left alone and the shortfall grows with every accrual. Permission without
+incentive is how bad debt accumulates, and it is invisible to every safety-only invariant. -/
+
+/-- A position whose collateral has fallen well below its debt. -/
+def deeplyUnderwater : State :=
+  { stressed with positions := [{ id := 0, owner := 1, coll := 50, debt := 90, rate := 500 }] }
+
+/-- **I17 (c) — gap-witness.** A reachable state where liquidation is permitted (the position is
+    unhealthy) but recovers strictly less than the debt, so no rational liquidator performs it and
+    the position persists. Report it with the fix: a liquidation reserve, a backstop bidder, or a
+    penalty floor that keeps the seizure worth more than the debt across the intended price range. -/
+theorem liquidation_unprofitable_witness :
+    ∃ p, lookupPos deeplyUnderwater.positions 0 = some p ∧
+      ¬ Healthy deeplyUnderwater p ∧
+      seizureValue deeplyUnderwater p < p.debt := by
+  refine ⟨{ id := 0, owner := 1, coll := 50, debt := 90, rate := 500 }, ?_, ?_, ?_⟩ <;>
+    simp [deeplyUnderwater, stressed, lookupPos, Healthy, seizureValue, seizure, one]
+
+/-- …and the shortfall it would leave is booked rather than lost: clearing it anyway raises
+    `badDebt` by exactly the uncovered amount. -/
+theorem unprofitable_liquidation_books_bad_debt :
+    (execTrace deeplyUnderwater [(Op.liquidate 0, 7)]).badDebt = 40 := by
+  simp [execTrace, step, deeplyUnderwater, stressed, lookupPos, dropPos, seizureValue, seizure, one]
 
 /-- **Anti-vacuity for I16 itself.** `all_healthy_preserved` carries three hypotheses; if no state
     satisfied all of them alongside a successful step, the theorem would be about an empty premise

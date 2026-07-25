@@ -89,13 +89,15 @@ It has **no counterparty ledger** — the debt token is not modelled, so a liqui
 a redeemer's payment are not represented, only their effect on the position book and the collateral
 leaving it. Every theorem here is a statement about the book, and no conservation claim is made.
 
-33 theorems:
+37 theorems:
 
 | Invariant | Theorems | Form |
 |---|---|---|
 | **I16** health on every path | `all_healthy_preserved` (book-wide, exhaustive over `Op`), `redeem_preserves_health` | proved |
 | — supporting | `healthy_add_coll`, `healthy_sub_debt`, `price_ratio_stable`, `mem_updatePos`, `mem_dropPos`, `mem_insertPos` | proved |
 | **I17** liquidation reduces risk | `liquidate_requires_unhealthy`, `liquidation_seizure_bounded` | proved |
+| **I17c** liquidation is worth doing | `liquidation_unprofitable_witness` | **gap-witness** |
+| **I22** bad debt accounted | `liquidation_accounts_shortfall`, `bad_debt_only_from_liquidation`, `unprofitable_liquidation_books_bad_debt` | proved + witness |
 | **I18** priority-order integrity | `sorted_preserved` (book-wide, exhaustive over `Op`), `redeem_hits_head_only`, `insertPos_sorted` | proved |
 | — supporting | `sorted_head_le`, `sorted_tail`, `sorted_cons_of_bound`, `sorted_dropPos`, `sorted_updatePos`, `sorted_updateConst`, `sorted_map`, `mem_updateConst`, `lookupPos_mem` | proved |
 | **I19** accrual monotone | `index_monotone`, `accrual_never_lowers_debt` | proved |
@@ -103,7 +105,7 @@ leaving it. Every theorem here is a statement about the book, and no conservatio
 | **I21** immutable parameter | `min_ratio_immutable`, `penalty_immutable` | proved |
 | anti-vacuity | `all_healthy_preserved_is_applicable`, `liquidation_is_reachable`, `redemption_is_reachable`, `healthy_position_cannot_be_liquidated` | witnesses + control |
 
-## The four transferable lessons
+## The five transferable lessons
 
 1. **State the health invariant book-wide, not per touched position.** A guard lemma proves the op
    you looked at is safe; the Euler defect is always in the op you did not look at.
@@ -130,7 +132,16 @@ leaving it. Every theorem here is a statement about the book, and no conservatio
    which is what makes "the advertised order is enforced" a claim about the protocol. Same shape as
    lesson 1, same cost: a head-bound lemma plus one preservation lemma per list operation.
 
-4. **Prove immutability, do not assert it.** `min_ratio_immutable` is one tactic block and turns a
+4. **Safety invariants do not notice a protocol losing money.** Everything else in this file can
+   hold while bad debt piles up, because safety says which operations are forbidden and nothing
+   about which ones anyone will perform. Two gaps a DeFi reviewer finds immediately and no
+   safety-only invariant catches: a liquidation that recovers less than the debt is never performed
+   (`liquidation_unprofitable_witness` — permitted, reachable, and economically irrational), and a
+   position dropped from the book takes its uncovered debt with it unless something books the
+   shortfall (I22). The first version of this file did exactly that silent write-off and every
+   theorem still passed.
+
+5. **Prove immutability, do not assert it.** `min_ratio_immutable` is one tactic block and turns a
    deployment comment into a theorem that a later-added setter would break. This is the dual of the
    pattern-G gap-witness and it is the cheapest useful theorem in the whole template.
 
