@@ -195,6 +195,31 @@ liquidation move debt out of the book without a matching counterparty ledger in 
 conservation claim stated here would be about a half-drawn system. A faithful I20 needs the other
 side modelled. Do not cite it as covered.
 
+## この61定理の `confidence` 上の位置づけ
+
+本リポジトリの人手査読は定理を `confidence` で格付けする(`outputs/apyx/human_review_*.md`、
+`outputs/apyx/textbook_admin_rfq_coalition/ch7.md`):
+
+- `confidence perfect` = 実プロトコルについての主張として額面通り信頼してよい
+- `confidence high` = モデル内の主張としては信頼できる。ただし原典との対応に注記が要る
+
+**ここにある定理はこのスケールに乗らない。** スケールが測っているのは「モデルの主張と原典の対応」で
+あり、架空プロトコルには対応すべき原典が存在しないからである。`high` に届かないのではなく、
+**格付けの対象外**という意味で:
+
+| | 位置づけ |
+|---|---|
+| 本ファイル群の61定理 | **schema-level**。「不変条件のスキーマが整合していること」の証拠であって、
+いかなるプロトコルについての証拠でもない。`lake build` 緑・`sorry` 0・公理 `propext`/`Quot.sound` のみ
+は**モデル内の主張として**信頼できることを意味するにすぎない |
+| 実プロトコルにインスタンス化した場合 | 出発点は `confidence high`。`perfect` に上げるには
+docs/09 **Phase 5 の source-tracing gate** を通す必要がある — corpus と Solidity に遡り、
+定理が原典のどの記述に対応するかを確定させる作業である |
+
+したがって**査読者がここで検証すべきは「Apyx について正しいか」ではなく**、
+(a) スキーマが自己整合か、(b) witness が落ちる形になっているか、(c) 空虚な仮説を持つ定理が
+残っていないか、の3点である。(b)(c) は各ファイルの反空虚性ガードと対照節が担当している。
+
 ---
 
 # Read against the external primitives

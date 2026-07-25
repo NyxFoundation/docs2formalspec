@@ -26,6 +26,15 @@ Ingest(docs + Solidity) → Extract/Specify → Model → 柱1 → ★Source-tra
 1. ドキュメントを ingest → `corpus.md`(現行 pipeline)。
 2. **実装ソースを clone**(`gh repo clone <org>/<repo>` を scratchpad へ)。これが ground truth。主要コントラクトを棚卸し(トークン、vault、minter、redemption、oracles、roles/AccessManager、vesting、bridge)。
 3. Step 0 の**モデルプロファイル**を埋める(`templates/blast-radius/README.md` と `templates/invariants/README.md` の Step-0 表): value フィールド、role アドレス、role-gated ops、debit sites、reserve outflow、price/param writers、accounted-mint ops、raw-transfer 有無、conversion 丸め方向、境界付き/無しパラメータ。→ 以降の全柱の設計図。
+4. **Step 0b / Step 0c(アーキタイプ判定)を続けて埋める**(`templates/invariants/README.md`)。柱3 で
+   コア不変条件だけで足りるか、族を1つ以上追加するかが**ここで機械的に決まる**:
+   - **Step 0b(5問)**: 償還が1トランザクションで完結するか。時計 / 二相 op / in-flight 状態 /
+     符号付き価値 / 有界共有キュー のいずれかが Yes なら **Tier 1.5**(docs/06 §7)。
+   - **Step 0c(4問)**: 支払能力が口座単位か。個別ポジション / 約束された順序 / accrual /
+     「不変」と宣言されたパラメータ のいずれかが Yes なら **Tier 1-C**(docs/06 §8)。
+   - どちらも No なら追加は不要 — Apyx がこのケースで、コア4 + I7 で尽きる。
+   この判定は docs/10 の候補選定と直結する:「どのプロトコルを検証するか」の次に来る
+   「**そのプロトコルにどの柱が要るか**」の答えが Step 0b/0c である。
 
 ## Phase 2 — Extract & Specify
 
@@ -66,6 +75,22 @@ Ingest(docs + Solidity) → Extract/Specify → Model → 柱1 → ★Source-tra
 - **G gap-witness**: 境界の無い経済パラメータは「悪状態の到達可能性を witness 付きで証明」= **確定した脆弱性**(例 `redemption_has_no_floor` / `redeem_payout_has_no_cap`)。
 → `Safety.lean`(+ 必要なら `SpecDefects.lean` に gap-witness)。被覆マトリクスは docs/08 §B.4。
 
+**Step 0b/0c が Yes を返した族を追加する**(コア不変条件だけでは攻撃面の大半に触れられないアーキタイプ):
+- **Tier 1.5 — 非同期・多拠点・符号付き価値**(docs/06 §7、docs/08 §A.6):
+  I10 決済タイミング中立 / I11 キュー生存性 / I12 in-flight 保存 / I13 拠点間保存 /
+  I14 乖離上界 / I15 符号付き支払能力。**時計(`Op.tick`)の導入が前提**。
+  参照: [`templates/invariants/examples/AsyncQueueVault.lean`](../templates/invariants/examples/AsyncQueueVault.lean)。
+- **Tier 1-C — 口座単位の支払能力**(docs/06 §8、docs/08 §A.7):
+  I16 全経路の健全性 / I17 清算はリスクを減らす / I18 優先順序の保全 / I19 accrual 単調 /
+  I20 損失プール保存 / I21 不変パラメータの証明 / I22 不良債権の計上。
+  参照: [`templates/invariants/examples/CollateralizedDebt.lean`](../templates/invariants/examples/CollateralizedDebt.lean)。
+- **I21 だけは族を採らなくても入れる価値がある**: 「不変」と宣言したパラメータに変更経路が
+  無いことを `cases op` 1回で証明する。パターン G(境界不在の witness)の双対で、既存の柱3に
+  そのまま追加でき、将来こっそり setter が生えればビルドが落ちる。
+- **本 Phase の保証は価格入力に条件付き**である(オラクルはパターン A = Tier 3 の管轄)。
+  `oracle_move_enables_full_seizure` がその境界を witness として示している。Phase 9 の
+  README にこの条件付きを明記すること。
+
 ## Phase 8 — 柱4: spec-consistency(docs/07)
 
 要件集合そのものの健全性を検査(挙動モデル化の**前**に効く上流工程):
@@ -91,11 +116,12 @@ Ingest(docs + Solidity) → Extract/Specify → Model → 柱1 → ★Source-tra
 
 ## 次プロトコル適用チェックリスト(要約)
 
-- [ ] Phase 1: docs ingest + **Solidity clone** + Step-0 プロファイル。
+- [ ] Phase 1: docs ingest + **Solidity clone** + Step-0 プロファイル + **Step 0b/0c(アーキタイプ判定)**。
 - [ ] Phase 2–4: requirements(source_quote 必須)→ SPEC → model → 柱1(`lake build` 緑)。
 - [ ] **Phase 5: source-tracing gate**(候補を corpus→Solidity で三分、抽出欠陥は spec 修正、相互改善)。
 - [ ] Phase 6: `templates/blast-radius/` をインスタンス化 → 柱2。
-- [ ] Phase 7: `templates/invariants/` をインスタンス化 → コア4 + I7 + gap-witness → 柱3。
+- [ ] Phase 7: `templates/invariants/` をインスタンス化 → コア4 + I7 + gap-witness(+ **I21**)→ 柱3。
+- [ ] Phase 7b: Step 0b/0c が Yes なら **Tier 1.5 / Tier 1-C** を追加。オラクル条件付きを README に明記。
 - [ ] Phase 8: spec-consistency(充足性/realizability/vacuity/coverage)→ 柱4。
 - [ ] Phase 9: review.json(4由来)+ README(finding + §6.4 実装 hand-off)。
 - [ ] 各フェーズ後: 4ドキュメント整合 + build 緑を確認。
