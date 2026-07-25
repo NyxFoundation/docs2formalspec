@@ -32,7 +32,13 @@ Ingest(docs + Solidity) → Extract/Specify → Model → 柱1 → ★Source-tra
      符号付き価値 / 有界共有キュー のいずれかが Yes なら **Tier 1.5**(docs/06 §7)。
    - **Step 0c(4問)**: 支払能力が口座単位か。個別ポジション / 約束された順序 / accrual /
      「不変」と宣言されたパラメータ のいずれかが Yes なら **Tier 1-C**(docs/06 §8)。
-   - どちらも No なら追加は不要 — Apyx がこのケースで、コア4 + I7 で尽きる。
+   - どちらも No なら追加は不要。
+   - **Apyx を例に取るときは注意**: Step 0c は No(担保は global で口座単位ポジションが無い)だが、
+     **Step 0b は Yes** — `requestUnlock`→`claimUnlock`(cooldown 付き)と
+     `submitRFQRequest`→`executeRFQRedemption`(実行者が別)の二相を持つ。現行モデルに時計が
+     無いため Tier 1.5 を**述べられない**のであって、非該当なのではない(docs/06 §7.1 の訂正欄)。
+     「モデルに無いから適用外」と「設計に無いから適用外」を混同しないこと — この2つを取り違えると
+     未検査の攻撃面を検査済みと報告することになる。
    この判定は docs/10 の候補選定と直結する:「どのプロトコルを検証するか」の次に来る
    「**そのプロトコルにどの柱が要るか**」の答えが Step 0b/0c である。
 
