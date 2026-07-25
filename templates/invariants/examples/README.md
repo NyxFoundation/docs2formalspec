@@ -48,7 +48,9 @@ looked before review:
   runs a trace where the price halves between filing and settlement and pins the credit at `500`,
   against the `1000` a filing-quote-only rule would have paid.
 
-`settle_is_reachable` guards the rest: every I10/I12 theorem is conditioned on a settlement
+`all_healthy_preserved_is_applicable` is the same guard one level up: an invariant with three
+hypotheses proves nothing if no reachable configuration satisfies all of them at once, so the file
+exhibits one that does. `settle_is_reachable` guards the rest: every I10/I12 theorem is conditioned on a settlement
 succeeding, so without it the whole group could be quietly vacuous. Instantiations should carry the
 same guard for each guarded op they reason about — it is cheap, and it is exactly the failure the
 round-trip judge cannot see.
@@ -87,20 +89,21 @@ It has **no counterparty ledger** — the debt token is not modelled, so a liqui
 a redeemer's payment are not represented, only their effect on the position book and the collateral
 leaving it. Every theorem here is a statement about the book, and no conservation claim is made.
 
-20 theorems:
+33 theorems:
 
 | Invariant | Theorems | Form |
 |---|---|---|
 | **I16** health on every path | `all_healthy_preserved` (book-wide, exhaustive over `Op`), `redeem_preserves_health` | proved |
-| — its supporting lemmas | `healthy_add_coll`, `healthy_sub_debt`, `price_ratio_stable`, `mem_updatePos`, `mem_dropPos`, `mem_insertPos` | proved |
+| — supporting | `healthy_add_coll`, `healthy_sub_debt`, `price_ratio_stable`, `mem_updatePos`, `mem_dropPos`, `mem_insertPos` | proved |
 | **I17** liquidation reduces risk | `liquidate_requires_unhealthy`, `liquidation_seizure_bounded` | proved |
-| **I18** priority-order integrity | `redeem_hits_head_only`, `insertPos_sorted` | proved |
+| **I18** priority-order integrity | `sorted_preserved` (book-wide, exhaustive over `Op`), `redeem_hits_head_only`, `insertPos_sorted` | proved |
+| — supporting | `sorted_head_le`, `sorted_tail`, `sorted_cons_of_bound`, `sorted_dropPos`, `sorted_updatePos`, `sorted_updateConst`, `sorted_map`, `mem_updateConst`, `lookupPos_mem` | proved |
 | **I19** accrual monotone | `index_monotone`, `accrual_never_lowers_debt` | proved |
 | **I4** rounding, load-bearing here | `le_ceilDiv_one_mul` | proved |
 | **I21** immutable parameter | `min_ratio_immutable`, `penalty_immutable` | proved |
-| anti-vacuity | `liquidation_is_reachable`, `redemption_is_reachable`, `healthy_position_cannot_be_liquidated` | witnesses + control |
+| anti-vacuity | `all_healthy_preserved_is_applicable`, `liquidation_is_reachable`, `redemption_is_reachable`, `healthy_position_cannot_be_liquidated` | witnesses + control |
 
-## The three transferable lessons
+## The four transferable lessons
 
 1. **State the health invariant book-wide, not per touched position.** A guard lemma proves the op
    you looked at is safe; the Euler defect is always in the op you did not look at.
@@ -120,7 +123,14 @@ leaving it. Every theorem here is a statement about the book, and no conservatio
    removing backing is safe **only** because the debt reduction rounds up (I4) and the protocol
    over-collateralizes. Round it down and a redeemer walks a healthy position into liquidation.
 
-3. **Prove immutability, do not assert it.** `min_ratio_immutable` is one tactic block and turns a
+3. **A lemma about a list helper is not an invariant of the system.** The first version of I18
+   proved `insertPos_sorted` and stopped — order-preservation of the *insert function*. Nothing in
+   it prevents a different op from scrambling the book, and `Sorted` appeared nowhere else in the
+   file: it was never connected to `step` at all. `sorted_preserved` carries it across every op,
+   which is what makes "the advertised order is enforced" a claim about the protocol. Same shape as
+   lesson 1, same cost: a head-bound lemma plus one preservation lemma per list operation.
+
+4. **Prove immutability, do not assert it.** `min_ratio_immutable` is one tactic block and turns a
    deployment comment into a theorem that a later-added setter would break. This is the dual of the
    pattern-G gap-witness and it is the cheapest useful theorem in the whole template.
 

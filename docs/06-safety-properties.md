@@ -246,7 +246,7 @@ E1–E4 を入れても閉じないもの:
 
 > **ステータス**: S17–S20 / S22 は架空の最小モデル
 > [`templates/invariants/examples/CollateralizedDebt.lean`](../templates/invariants/examples/CollateralizedDebt.lean)
-> で**証明済み**(20定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。S21 は
+> で**証明済み**(33定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。S21 は
 > **スキーマのみ**。§7 と同じく、**実プロトコルの worked reference は無い**。
 
 ### 8.1 対象 — 口座単位の支払能力が本体になる設計
@@ -270,7 +270,7 @@ Apyx は集約台帳でポジション単位の担保比率を持たないため
 |---|---|---|---|---|
 | **S17** | `all_healthy_preserved` | 負債増加・担保減少の**全 op** の後で、書帳の**どのポジションも**健全。リスク源(価格・accrual)は名指しで除外 | 定理(**全 op 網羅**) | 証明済 |
 | **S18** | `liquidate_requires_unhealthy` + `liquidation_seizure_bounded` | 健全なポジションは清算できず、押収額は担保額を超えない | 定理 | 証明済 |
-| **S19** | `redeem_hits_head_only` + `insertPos_sorted` | 約束した優先順序に割り込めず、飛ばされない。新規ポジションは正しい位置に入る | 定理 | 証明済 |
+| **S19** | `sorted_preserved` + `redeem_hits_head_only` | 約束した優先順序が**全 op で保存**され、償還は先頭しか触らない | 定理(**全 op 網羅**) | 証明済 |
 | **S17b** | `redeem_preserves_health` | 償還は担保を抜くので健全性は自明でない。**債務減少を切り上げる(I4)** かつ **過剰担保** の2条件でのみ保たれる | 定理 | 証明済 |
 | **S20** | `index_monotone` + `accrual_never_lowers_debt` | accrual index は非減少で、健全性を悪化方向にしか動かさない | 定理 | 証明済 |
 | **S21** | `loss_pool_conserves` | 社会化損失プールの積和会計が価値を創出しない | 定理 | **スキーマのみ** |
@@ -280,6 +280,11 @@ Apyx は集約台帳でポジション単位の担保比率を持たないため
 `cases op` の全枝が通らないとビルドが落ちる形にすれば**構造的に起こりえない**。除外する op
 (価格更新・accrual)を**名指しで宣言する**のが正直形で、これは S2 が `WellFormed` 仮説を
 トレール各点で再供給するのと同じ作法である。
+
+**S19 は「補助関数の補題」と「系の不変条件」の違いを示す**。初版は `insertPos_sorted`(挿入関数が
+順序を保つ)だけを証明して止まっており、`Sorted` は `step` と一度も接続されていなかった — つまり
+走行中に順序が崩れても何も検出しない状態だった。S17 を書帳全体で述べたのと同じ理由で、
+順序も**全 op で保存されること**を証明する必要がある。
 
 **S17b は「除外しなかった op」の価値を示す**。償還は担保を減らすので、返済や担保追加と違って
 健全性が自明に保たれない。切り上げ丸めを切り捨てに変えるか過剰担保を外すと、償還を繰り返すだけで

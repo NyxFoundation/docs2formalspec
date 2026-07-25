@@ -17,11 +17,12 @@ and a regression test for the template.
 | **I16** per-position health on every path | `all_healthy_preserved` (book-wide, exhaustive over `Op`), `redeem_preserves_health` |
 | — its supporting lemmas | `healthy_add_coll`, `healthy_sub_debt`, `price_ratio_stable`, `mem_updatePos`, `mem_dropPos`, `mem_insertPos` |
 | **I17** liquidation is risk-reducing | `liquidate_requires_unhealthy`, `liquidation_seizure_bounded` |
-| **I18** priority-order integrity | `redeem_hits_head_only`, `insertPos_sorted` |
+| **I18** priority-order integrity | `sorted_preserved` (book-wide, exhaustive over `Op`), `redeem_hits_head_only`, `insertPos_sorted` |
+| — its supporting lemmas | `sorted_head_le`, `sorted_tail`, `sorted_cons_of_bound`, `sorted_dropPos`, `sorted_updatePos`, `sorted_updateConst`, `sorted_map`, `mem_updateConst`, `lookupPos_mem` |
 | **I19** accrual monotone | `index_monotone`, `accrual_never_lowers_debt` |
 | **I4** rounding favours the protocol (load-bearing here) | `le_ceilDiv_one_mul` |
 | **I21** immutable risk parameter (the dual of the pattern-G gap-witness) | `min_ratio_immutable`, `penalty_immutable` |
-| anti-vacuity | `liquidation_is_reachable`, `redemption_is_reachable`, `healthy_position_cannot_be_liquidated` |
+| anti-vacuity | `all_healthy_preserved_is_applicable`, `liquidation_is_reachable`, `redemption_is_reachable`, `healthy_position_cannot_be_liquidated` |
 
 **I16 is the point of the whole file.** The Euler-class flaw is an invariant that holds on every
 path *but one*; `all_healthy_preserved` establishes that **no** position in the book is left
@@ -37,6 +38,13 @@ safe: the debt reduction rounds **up** (I4 — a design choice, baked into `rede
 protocol over-collateralizes (`one ≤ minRatio` — a hypothesis the instantiation must discharge).
 Round the debt down instead, or drop over-collateralization, and a redeemer can walk a healthy
 position into liquidation one redemption at a time.
+
+**An ordering lemma is not an ordering invariant.** `insertPos_sorted` says the *insert helper* is
+order-preserving — which is a fact about a list function, not about the protocol: nothing in it stops
+a different op from scrambling the book. `sorted_preserved` carries `Sorted` across `step`
+exhaustively, so an op that reordered the queue, or inserted at the wrong end, would fail to compile.
+The same distinction as I16's book-wide statement, and it costs the same kind of work: a head-bound
+lemma and one preservation lemma per list operation the model uses.
 
 **I21 is worth lifting even on its own.** Pattern G in `docs/08` says: where an economically
 sensitive parameter has no enforced bound, witness the reachable bad state. The dual is available
@@ -539,6 +547,213 @@ theorem insertPos_sorted (p : Position) : ∀ l : List Position, Sorted l → So
         refine ⟨hqr, ?_⟩
         simpa [insertPos, hpr] using htail
 
+/-! ### I18 (c) — the ordering is a system invariant, not a fact about `insertPos`
+
+`insertPos_sorted` says the insert *helper* is order-preserving. That is not the property an audit
+needs: nothing in it prevents a *different* op from scrambling the book. The invariant has to be
+carried across `step`, exhaustively, exactly as I16 is. -/
+
+theorem sorted_tail {p : Position} : ∀ {l : List Position}, Sorted (p :: l) → Sorted l
+  | [],     _ => trivial
+  | _ :: _, h => h.2
+
+/-- The head of a sorted book bounds every element behind it — the fact that makes "dropping an
+    element keeps it sorted" work without a transitivity fight at each call site. -/
+theorem sorted_head_le : ∀ {p : Position} {l : List Position}, Sorted (p :: l) →
+    ∀ q ∈ l, p.rate ≤ q.rate
+  | _, [],      _, _, hq => absurd hq (by simp)
+  | _, r :: rs, h, q, hq => by
+    rcases List.mem_cons.mp hq with he | hm
+    · exact he ▸ h.1
+    · exact Nat.le_trans h.1 (sorted_head_le h.2 q hm)
+
+theorem sorted_cons_of_bound {p : Position} {l : List Position}
+    (hb : ∀ q ∈ l, p.rate ≤ q.rate) (hl : Sorted l) : Sorted (p :: l) := by
+  cases l with
+  | nil => trivial
+  | cons q qs => exact ⟨hb q List.mem_cons_self, hl⟩
+
+theorem sorted_dropPos : ∀ (l : List Position) (i : Nat), Sorted l → Sorted (dropPos l i)
+  | [],      _, _ => trivial
+  | p :: ps, i, h => by
+    simp only [dropPos]
+    split
+    · exact sorted_tail h
+    · exact sorted_cons_of_bound
+        (fun q hq => sorted_head_le h q (mem_dropPos ps i hq))
+        (sorted_dropPos ps i (sorted_tail h))
+
+theorem sorted_updatePos {f : Position → Position} (hf : ∀ p, (f p).rate = p.rate) :
+    ∀ (l : List Position) (i : Nat), Sorted l → Sorted (updatePos f l i)
+  | [],      _, _ => trivial
+  | p :: ps, i, h => by -- `hf` first here; call sites use `updatePos_sorted` below
+    simp only [updatePos]
+    split
+    · exact sorted_cons_of_bound
+        (fun q hq => by rw [hf]; exact sorted_head_le h q hq) (sorted_tail h)
+    · exact sorted_cons_of_bound
+        (fun q hq => by
+          rcases mem_updatePos ps i hq with hm | ⟨r, hr, he⟩
+          · exact sorted_head_le h q hm
+          · rw [he, hf]; exact sorted_head_le h r hr)
+        (sorted_updatePos hf ps i (sorted_tail h))
+
+theorem sorted_map {f : Position → Position} (hf : ∀ p, (f p).rate = p.rate) :
+    ∀ l : List Position, Sorted l → Sorted (l.map f)
+  | [],      _ => trivial
+  | p :: ps, h => by
+    simp only [List.map_cons]
+    refine sorted_cons_of_bound (fun q hq => ?_) (sorted_map hf ps (sorted_tail h))
+    simp only [List.mem_map] at hq
+    obtain ⟨r, hr, he⟩ := hq
+    rw [hf, ← he, hf]
+    exact sorted_head_le h r hr
+
+theorem lookupPos_mem : ∀ (l : List Position) (i : Nat) (r : Position),
+    lookupPos l i = some r → r ∈ l
+  | [],      _, _, hl => by simp [lookupPos] at hl
+  | p :: ps, i, r, hl => by
+    simp only [lookupPos] at hl
+    split at hl
+    · exact (Option.some.inj hl) ▸ List.mem_cons_self
+    · exact List.mem_cons_of_mem _ (lookupPos_mem ps i r hl)
+
+/-- Constant replacement rewrites exactly the element `lookupPos` returns, so an element of the
+    updated list is either untouched or the replacement itself — and in the latter case a match
+    exists. -/
+theorem mem_updateConst {q p' : Position} :
+    ∀ (l : List Position) (i : Nat), q ∈ updatePos (fun _ => p') l i →
+      q ∈ l ∨ (q = p' ∧ ∃ r, lookupPos l i = some r)
+  | [],      _, hm => by simp [updatePos] at hm
+  | p :: ps, i, hm => by
+    simp only [updatePos] at hm
+    split at hm
+    · rename_i hid
+      rcases List.mem_cons.mp hm with he | h
+      · exact Or.inr ⟨he, p, by simp only [lookupPos, if_pos hid]⟩
+      · exact Or.inl (List.mem_cons_of_mem _ h)
+    · rename_i hid
+      rcases List.mem_cons.mp hm with he | h
+      · exact Or.inl (he ▸ List.mem_cons_self)
+      · rcases mem_updateConst ps i h with h' | ⟨he, r, hr⟩
+        · exact Or.inl (List.mem_cons_of_mem _ h')
+        · exact Or.inr ⟨he, r, by simp only [lookupPos, if_neg hid]; exact hr⟩
+
+/-- Constant replacement (`fun _ => p'`) does not preserve rate pointwise, so the rate-preserving
+    lemma above does not apply — and it does not need to. `updatePos` rewrites only the first `id`
+    match, which is exactly the element `lookupPos` returns, so the side condition has to talk about
+    that one element only. -/
+theorem sorted_updateConst {p' : Position} :
+    ∀ (l : List Position) (i : Nat), Sorted l →
+      (∀ r, lookupPos l i = some r → r.rate = p'.rate) → Sorted (updatePos (fun _ => p') l i)
+  | [],      _, _, _  => trivial
+  | p :: ps, i, h, hr => by
+    simp only [updatePos]
+    split
+    · rename_i hid
+      refine sorted_cons_of_bound (fun q hq => ?_) (sorted_tail h)
+      rw [← hr p (by simp only [lookupPos, if_pos hid])]
+      exact sorted_head_le h q hq
+    · rename_i hid
+      have hr' : ∀ r, lookupPos ps i = some r → r.rate = p'.rate := by
+        intro r hrr
+        exact hr r (by simp only [lookupPos, if_neg hid]; exact hrr)
+      refine sorted_cons_of_bound (fun q hq => ?_) (sorted_updateConst ps i (sorted_tail h) hr')
+      rcases mem_updateConst ps i hq with hm | ⟨he, r, hrr⟩
+      · exact sorted_head_le h q hm
+      · rw [he, ← hr' r hrr]
+        exact sorted_head_le h r (lookupPos_mem ps i r hrr)
+
+/-- Call-site friendly forms: with the side condition last, the expected type fixes `f` before it
+    has to be elaborated. -/
+theorem updatePos_sorted (l : List Position) (i : Nat) (h : Sorted l)
+    {f : Position → Position} (hf : ∀ p, (f p).rate = p.rate) : Sorted (updatePos f l i) :=
+  sorted_updatePos hf l i h
+
+theorem map_sorted (l : List Position) (h : Sorted l)
+    {f : Position → Position} (hf : ∀ p, (f p).rate = p.rate) : Sorted (l.map f) :=
+  sorted_map hf l h
+
+/-- **I18 (c).** Every operation keeps the book in priority order. Exhaustive over the closed `Op`:
+    an op that reordered the queue — or inserted at the wrong end — could not compile. Together with
+    `redeem_hits_head_only` this is what makes "the advertised order is enforced" a claim about the
+    protocol rather than about a list helper. -/
+theorem sorted_preserved (s : State) (op : Op) (c : Address) (s' : State)
+    (h : step s op c = some s') (hs : Sorted s.positions) : Sorted s'.positions := by
+  cases op with
+  | setPrice p =>
+    simp only [step] at h
+    split at h
+    · exact absurd h (by simp)
+    · injection h with e; subst e; exact hs
+  | accrue k =>
+    simp only [step] at h
+    injection h with e; subst e
+    exact map_sorted _ hs (fun _ => rfl)
+  | openPosition coll debt rate =>
+    simp only [step] at h
+    split at h
+    · exact absurd h (by simp)
+    · injection h with e; subst e; exact insertPos_sorted _ _ hs
+  | addCollateral id amount =>
+    simp only [step] at h
+    split at h
+    · exact absurd h (by simp)
+    · injection h with e; subst e; exact updatePos_sorted _ _ hs (fun _ => rfl)
+  | borrow id amount =>
+    simp only [step] at h
+    split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · rename_i p hlk _ _
+          injection h with e; subst e
+          refine sorted_updateConst _ _ hs (fun r hrr => ?_)
+          rw [hlk] at hrr
+          exact (Option.some.inj hrr) ▸ rfl
+  | repay id amount =>
+    simp only [step] at h
+    split at h
+    · exact absurd h (by simp)
+    · injection h with e; subst e; exact updatePos_sorted _ _ hs (fun _ => rfl)
+  | withdrawCollateral id amount =>
+    simp only [step] at h
+    split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · split at h
+          · exact absurd h (by simp)
+          · rename_i p hlk _ _ _
+            injection h with e; subst e
+            refine sorted_updateConst _ _ hs (fun r hrr => ?_)
+            rw [hlk] at hrr
+            exact (Option.some.inj hrr) ▸ rfl
+  | liquidate id =>
+    simp only [step] at h
+    split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · injection h with e; subst e; exact sorted_dropPos _ _ hs
+  | redeem amount =>
+    simp only [step] at h
+    split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · rename_i p ps hq' _ _
+          have hsp : Sorted (p :: ps) := by rw [hq'] at hs; exact hs
+          injection h with e; subst e
+          simp only
+          exact sorted_cons_of_bound (fun q hq => sorted_head_le hsp q hq) (sorted_tail hsp)
+
 /-! ## Anti-vacuity guards -/
 
 /-- A book with one position that the price move has put underwater. -/
@@ -550,6 +765,9 @@ def stressed : State where
   positions := [{ id := 0, owner := 1, coll := 100, debt := 90, rate := 500 }]
   nextId    := 1
   collOut   := fun _ => 0
+
+/-- The same book at a ratio that leaves the position healthy — something to redeem against. -/
+def solvent : State := { stressed with minRatio := 10000 }
 
 /-- **Anti-vacuity (liquidation).** Without this, `liquidate_requires_unhealthy` and
     `liquidation_seizure_bounded` could both hold of an operation that never succeeds. Address `7`
@@ -566,8 +784,22 @@ theorem healthy_position_cannot_be_liquidated :
     step { stressed with minRatio := 10000 } (Op.liquidate 0) 7 = none := by
   simp [step, stressed, lookupPos, one]
 
-/-- The same book at a ratio that leaves the position healthy — something to redeem against. -/
-def solvent : State := { stressed with minRatio := 10000 }
+/-- **Anti-vacuity for I16 itself.** `all_healthy_preserved` carries three hypotheses; if no state
+    satisfied all of them alongside a successful step, the theorem would be about an empty premise
+    set and would prove nothing. It is applicable: `solvent` is over-collateralized, its whole book
+    is healthy, `redeem` is not a risk source, and the step succeeds — which is precisely the
+    configuration the theorem talks about. A guard like this belongs next to every invariant whose
+    hypotheses are not obviously satisfiable. -/
+theorem all_healthy_preserved_is_applicable :
+    ¬ IsRiskSource (Op.redeem 10) ∧ OverCollateralized solvent ∧ AllHealthy solvent ∧
+      (step solvent (Op.redeem 10) 7).isSome := by
+  refine ⟨by simp [IsRiskSource], by simp [OverCollateralized, solvent, stressed, one], ?_, ?_⟩
+  · intro p hp
+    simp only [solvent, stressed] at hp
+    rcases List.mem_cons.mp hp with he | hm
+    · subst he; simp [Healthy, solvent, stressed, one]
+    · simp at hm
+  · simp [step, solvent, stressed, redemptionDebt, ceilDiv, one]
 
 /-- **Anti-vacuity (redemption).** `redeem_preserves_health` and `redeem_hits_head_only` are both
     conditioned on a redemption succeeding. It does — and collateral genuinely leaves the position
