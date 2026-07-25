@@ -127,7 +127,7 @@ Ingest(docs + Solidity) → Extract/Specify → Model → 柱1 → ★Source-tra
 - [ ] **Phase 5: source-tracing gate**(候補を corpus→Solidity で三分、抽出欠陥は spec 修正、相互改善)。
 - [ ] Phase 6: `templates/blast-radius/` をインスタンス化 → 柱2。
 - [ ] Phase 7: `templates/invariants/` をインスタンス化 → コア4 + I7 + gap-witness(+ **I21**)→ 柱3。
-- [ ] Phase 7b: Step 0b/0c が Yes なら **Tier 1.5 / Tier 1-C** を追加。オラクル条件付きを README に明記。
+- [ ] Phase 7(続き): Step 0b/0c が Yes なら **Tier 1.5 / Tier 1-C** を追加。オラクル条件付きを Phase 9 の README に明記。
 - [ ] Phase 8: spec-consistency(充足性/realizability/vacuity/coverage)→ 柱4。
 - [ ] Phase 9: review.json(4由来)+ README(finding + §6.4 実装 hand-off)。
 - [ ] 各フェーズ後: 4ドキュメント整合 + build 緑を確認。
