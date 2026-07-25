@@ -144,12 +144,12 @@
 >
 > | | 状態 |
 > |---|---|
-> | **S10 / S11(witness形) / S11b / S12 / S15** | 架空の最小モデル [`templates/invariants/examples/AsyncQueueVault.lean`](../templates/invariants/examples/AsyncQueueVault.lean) で**証明済み**(15定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。ただし架空モデルは**スキーマが整合していることの証拠**であって、実プロトコルについての証拠では一切ない |
+> | **S10 / S11(witness形) / S11b / S12 / S15** | ERC-7540 型の非同期償還 vault の最小形 [`templates/invariants/examples/AsyncQueueVault.lean`](../templates/invariants/examples/AsyncQueueVault.lean) で**証明済み**(15定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。ただしこれは**架空のプロトコル**であり、**スキーマが整合していることの証拠**であって実プロトコルについての証拠では一切ない |
 > | **S10b / S11(肯定形) / S13 / S14 / S16** | **スキーマのみ**。実証も worked reference も無い |
 >
 > テンプレートは [`templates/invariants/`](../templates/invariants/)(Step 0b と checklist g–k)。
 
-### 7.0 対象 — 償還が非同期な DeFi プロトコル
+### 7.1 対象 — 償還が非同期な DeFi プロトコル
 
 **この節は Apyx には適用されない**。Apyx は入金も償還も原子的に完結する同期型なので、S1–S9 で
 設計安全性は尽きている。S10–S16 は**次に監査する対象が以下のいずれかだったときに追加で証明すべき
@@ -163,7 +163,7 @@
 
 損失アーキタイプとの対応は [`docs/08`](08-defi-vuln-patterns.md) §A.6。
 
-### 7.0b なぜ S1–S9 だけでは足りないか
+### 7.2 なぜ S1–S9 だけでは足りないか
 
 S1–S9 は、明示されてはいないが次の5つのモデル前提の上に成立している:
 
@@ -188,7 +188,7 @@ S1–S9 をこの種のプロトコルにそのまま当てると、**証明は�
 そもそも表現できないため、支払能力の定理が**空虚に真**になる。これは本ツールが `review.json` の
 `vacuous` 判定で常に警戒している失敗様式の、型レベル版である。
 
-### 7.1 必要なモデル拡張(E1–E4)
+### 7.3 必要なモデル拡張(E1–E4)
 
 | # | 拡張 | 内容 | 開く定理 |
 |---|---|---|---|
@@ -201,7 +201,7 @@ E1 には**既に前例がある** — `BlastRadius.lean` の rate-limit ラッ�
 `execTrace2` / `countEpochs`)と timelock ラッパ(`TLOp.tick` / `execTraceTL` / `countTicks`)は
 既に時計付きの遷移系である。コアモデルへ昇格していないだけで、手法とその証明作法は確立済み。
 
-### 7.2 定理リスト
+### 7.4 定理リスト
 
 | # | 定理 | 主張 | 効く DeFi アーキタイプ | 形 | 要る拡張 |
 |---|---|---|---|---|---|
@@ -225,14 +225,14 @@ Security Considerations と本番設計の防御策という**一次文献**で�
 S14 と S11b は S4b の `redeem_payout_has_no_cap`(上界の不在を witness で確定させる型)の
 再利用、S12 は S2 `solvency_preserved` と同じ「仮説をトレール各点で再供給する正直形」である。
 
-### 7.3 副産物: S6 の開放問題
+### 7.5 副産物: S6 の開放問題
 
 S6(`caller_net_nonpositive`)のトレース閉包が §4b で開放問題として残っているのは、
 「レートが動くトレース」を書く手段がモデルに無いことが一因である。E1 の時計を入れると、
 レート移動を `tick` の回数で量化した形(`|R' − R| ≤ maxMovePerTick × ticks`)で初めて
 **定式化が可能になる**。証明が済むという意味ではないが、書けない問題から書ける問題に変わる。
 
-### 7.4 拡張しても残る限界
+### 7.6 拡張しても残る限界
 
 E1–E4 を入れても閉じないもの:
 

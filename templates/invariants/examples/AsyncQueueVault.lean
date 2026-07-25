@@ -17,11 +17,13 @@ What it demonstrates, in order:
 | Invariant | Theorem(s) here |
 |---|---|
 | **I12** in-flight conservation | `inflight_conservation`, `tick_settles_exactly`, `partial_tick_leaves_residue` |
-| **I10** settlement-timing neutrality | `settle_credits_protocol_favourable_side`, `settler_timing_cannot_gain`, `naive_filing_price_overpays_witness` |
+| **I10** settlement-timing neutrality | `settle_credits_protocol_favourable_side`, `settler_timing_cannot_gain`, `settlement_never_overpays_current_value`, `naive_filing_price_overpays_witness`, `settlement_takes_lower_price_after_drop` |
 | **I11b** queue capacity griefing | `queue_capacity_griefing_witness` |
+| **I11** head-of-line starvation | `queue_head_of_line_blocking_witness`, `reserve_non_increasing`, `reserve_non_increasing_trace` |
 | **I15** signed net value | `nat_solvency_is_vacuous`, `insolvency_witness` |
+| anti-vacuity | `settle_is_reachable` |
 
-The three model extensions of `docs/06` §7.1 that this file exercises:
+The three model extensions of `docs/06` §7.3 that this file exercises:
 
 * **E1 clock** — `Op.tick` advances a settlement round. Without it none of I10–I12 is stateable.
 * **E2 two-phase op + settlement hypothesis** — `Op.enqueue` files a `Request` carrying a price
