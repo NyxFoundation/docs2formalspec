@@ -21,6 +21,8 @@ What it demonstrates, in order:
 | **I11b** queue capacity griefing | `queue_capacity_griefing_witness` |
 | **I11** head-of-line starvation | `queue_head_of_line_blocking_witness`, `reserve_non_increasing`, `reserve_non_increasing_trace` |
 | **I15** signed net value | `nat_solvency_is_vacuous`, `insolvency_witness` |
+| **large-holder view** — no settlement deadline | `settlement_has_no_deadline`, `matured_request_can_stay_pending_forever`, `tick_preserves_pending` |
+| **large-holder view** — first-mover advantage | `fifo_pays_the_first_filer` |
 | anti-vacuity | `settle_is_reachable` |
 
 The three model extensions of `docs/06` §7.3 that this file exercises:
@@ -442,6 +444,77 @@ theorem settlement_takes_lower_price_after_drop :
     priceDropRun.paid 1 = 500 ∧ entitle ray 1000 = 1000 := by
   refine ⟨?_, ?_⟩ <;>
     simp [priceDropRun, priceDropState, griefState, execTrace, step, settlePayout, entitle, ray]
+
+/-! ### The large-holder view: two properties the safety invariants never mention
+
+I10 says the payout takes the protocol-favourable side of two prices, and reads as unambiguously
+good. From the redeeming holder's seat it is only good *if settlement happens*. `Op.settle` carries
+a **lower** bound on time — the maturity window — and no upper bound at all: nothing in the model
+ever forces a matured request to be executed. A settler who simply waits therefore holds an option
+with no expiry, and because the payout is the *minimum* of the filing price and the settlement
+price, every round of delay in a falling market is paid for by the holder. The protective rounding
+and the missing deadline are the same design decision seen from two sides.
+
+The second property decides how a holder behaves in a shortfall. The reserve is consumed strictly
+in queue order and is never split, so with insufficient reserve the queue does not haircut everyone
+— it pays the front and starves the back. That is a first-mover advantage, which is the incentive
+structure of a bank run, and it is invisible to every invariant above. -/
+
+theorem tick_preserves_pending (s : State) (d : Nat) (c : Address) (s' : State)
+    (h : step s (Op.tick d) c = some s') : s'.pending = s.pending := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · injection h with e; subst e; simp only
+
+/-- **No settlement deadline.** However many rounds elapse, a filed request can still be sitting
+    there: ticks alone never discharge it, and nothing else compels anyone to. Combined with the
+    `min` payout rule this is an unexpiring option written against the holder — the fix is a
+    deadline after which the request settles at the filing quote, or becomes cancellable. -/
+theorem settlement_has_no_deadline : ∀ (n : Nat) (s : State) (c : Address),
+    (execTrace s (List.replicate n (Op.tick 0, c))).pending = s.pending
+  | 0,     _, _ => rfl
+  | n + 1, s, c => by
+    simp only [List.replicate, execTrace]
+    split
+    · rename_i s' hstep
+      rw [settlement_has_no_deadline n s' c]
+      exact tick_preserves_pending s 0 c s' hstep
+    · exact settlement_has_no_deadline n s c
+
+/-- …and the request it leaves outstanding is a real one. -/
+theorem matured_request_can_stay_pending_forever (n : Nat) :
+    (execTrace occupied (List.replicate n (Op.tick 0, 9))).pending ≠ [] := by
+  rw [settlement_has_no_deadline n occupied 9]
+  simp [occupied, execTrace, step, griefState]
+
+/-- Two holders, identical requests, a reserve that covers exactly one. -/
+def runState : State :=
+  { griefState with
+      capacity := 2
+      reserve  := 5
+      shares   := fun a => if a = 1 then 5 else if a = 2 then 5 else 0 }
+
+def aFirst : State :=
+  execTrace runState [(Op.enqueue 5, 1), (Op.enqueue 5, 2), (Op.tick 0, 9), (Op.tick 0, 9)]
+
+def bFirst : State :=
+  execTrace runState [(Op.enqueue 5, 2), (Op.enqueue 5, 1), (Op.tick 0, 9), (Op.tick 0, 9)]
+
+/-- **First-mover advantage, witnessed.** The two holders file the same size against the same
+    reserve; who is paid in full and who is not paid at all is decided entirely by filing order,
+    and the shortfall is not shared. Swap the order and the outcome swaps with it. Nothing here is
+    a violation of any invariant above — which is the point. A holder reading only the safety
+    proofs would not learn that the rational response to a thin reserve is to run first. The fix is
+    a design choice: pro-rata settlement across matured requests, or an explicit statement that the
+    queue is first-come-first-served so the incentive is at least disclosed. -/
+theorem fifo_pays_the_first_filer :
+    (execTrace aFirst [(Op.settle 0, 9)]).paid 1 = 5 ∧
+    (∀ c : Address, step (execTrace aFirst [(Op.settle 0, 9)]) (Op.settle 1) c = none) ∧
+    (execTrace bFirst [(Op.settle 0, 9)]).paid 2 = 5 ∧
+    (execTrace bFirst [(Op.settle 0, 9)]).paid 1 = 0 := by
+  refine ⟨?_, fun c => ?_, ?_, ?_⟩ <;>
+    simp [aFirst, bFirst, runState, griefState, execTrace, step, settlePayout, entitle, ray]
 
 /-! ## I15 — signed net value, and the `Nat` vacuity trap -/
 

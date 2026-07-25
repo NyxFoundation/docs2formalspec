@@ -144,7 +144,7 @@
 >
 > | | 状態 |
 > |---|---|
-> | **S10 / S11(witness形) / S11b / S12 / S15** | ERC-7540 型の非同期償還 vault の最小形 [`templates/invariants/examples/AsyncQueueVault.lean`](../templates/invariants/examples/AsyncQueueVault.lean) で**証明済み**(15定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。ただしこれは**架空のプロトコル**であり、**スキーマが整合していることの証拠**であって実プロトコルについての証拠では一切ない |
+> | **S10 / S10c / S11(witness形) / S11b / S11c / S12 / S15** | ERC-7540 型の非同期償還 vault の最小形 [`templates/invariants/examples/AsyncQueueVault.lean`](../templates/invariants/examples/AsyncQueueVault.lean) で**証明済み**(19定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。ただしこれは**架空のプロトコル**であり、**スキーマが整合していることの証拠**であって実プロトコルについての証拠では一切ない |
 > | **S10b / S11(肯定形) / S13 / S14 / S16** | **スキーマのみ**。実証も worked reference も無い |
 >
 > テンプレートは [`templates/invariants/`](../templates/invariants/)(Step 0b と checklist g–k)。
@@ -209,11 +209,18 @@ E1 には**既に前例がある** — `BlastRadius.lean` の rate-limit ラッ�
 | **S10b** | `price_source_choice_no_gain` | 複数の価格ソースを読めるとき、どれを読むかの選択が caller に利得を与えない | 多重オラクル | 定理 or witness | P5 の解消(価格を複数フィールド化) |
 | **S11** | `queue_no_starvation` / `queue_head_of_line_blocking_witness` | 正直ユーザーの pending は有限トレースで必ず claim 可能。成り立たないなら**飢餓トレースを witness として証明する**(先頭が決済不能なら後続は支払可能でも凍る) | LST unstaking / 出金キュー | 定理 or **gap-witness** | E1, E4 |
 | **S11b** | `queue_capacity_griefing_witness` | 有界コストの攻撃者トレース後、正直ユーザーの enqueue が全て拒否される状態が到達可能 | pending 上限を持つ入出金 | **gap-witness** | E1, E4 |
+| **S10c** | `settlement_has_no_deadline` | 成熟後の決済を強制する仕組みが無く、**決済者のオプションに期限が無い**。S10 の `min` 規則と合わせると遅延コストは請求者が負担 | **gap-witness** | E1, E2 |
+| **S11c** | `fifo_pays_the_first_filer` | 準備金が不足するとき**按分されず先着順**。同サイズの2件で、支払われるかどうかが申請順だけで決まる=取り付けの誘因 | **gap-witness** | E1, E4 |
 | **S12** | `inflight_conservation` + `tick_settles_exactly` | 未決済分と決済済み分の総和が全 op で保存。時計が進むと未決済分は**ちょうど**決済済みへ移る(`SettlementHonored` 下) | 決済が別ラウンドに落ちる会計 | 定理(仮説付き) | E1, E2 |
 | **S13** | `venue_conservation` + `in_transit_lands` | Σ(拠点A + 拠点B + 移送中)が内部移送 op で保存。移送中資産が恒久滞留しない | 多拠点運用 | 定理 / witness | E2 |
 | **S14** | `drift_bounded` / `drift_unbounded_witness` | 「意図した状態」と「実現した状態」の乖離に上界がある。無ければ**上界の不在を証明する** | 帳簿先行・執行後追いの設計 | 上界定理 or **gap-witness** | E3 |
 | **S15** | `net_value_nonneg` / `insolvency_witness` | 純資産が負になるトレースが存在しない / する | 負債・建て玉を持つ vault | 定理 or **gap-witness** | E3 |
 | **S16** | `round_trip_nonprofitable` | 同一状態での往復操作が手数料分だけ必ず損 | スワップ / 償還の往復 | 定理 | — |
+
+**S10c / S11c は「保有者の座席から見る」と出てくる**。S10–S16 はプロトコルの座席から書かれており、
+大口保有者の行動を決める2つの性質がそこからは見えない。決済に上限時刻が無いこと(S10c)と、
+不足時に按分されないこと(S11c)である。どちらも**どの安全性不変条件にも違反しない**まま成立する。
+安全性の証明だけを読んだ保有者は「準備金が薄いときの合理的な行動は先に走ること」を学べない。
 
 **根拠の種類は一様ではない**。S10(パターン J)と S11(パターン K)は ERC-7540 の
 Security Considerations と本番設計の防御策という**一次文献**で裏が取れている。S14(パターン L)は

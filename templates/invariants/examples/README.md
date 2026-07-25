@@ -16,7 +16,7 @@ analyzed systems. `lake build` builds both, so the schema stays regression-teste
 
 ## What it proves
 
-15 theorems:
+19 theorems:
 
 | Invariant | Theorems | Form |
 |---|---|---|
@@ -28,6 +28,8 @@ analyzed systems. `lake build` builds both, so the schema stays regression-teste
 | **I11** head-of-line starvation | `queue_head_of_line_blocking_witness`, backed by `reserve_non_increasing`, `reserve_non_increasing_trace` | **gap-witness** |
 | **I15** the `Nat` vacuity trap | `nat_solvency_is_vacuous`, `insolvency_witness` | proved + witness |
 | anti-vacuity guard | `settle_is_reachable` | witness |
+| **holder view** — settlement has no deadline | `settlement_has_no_deadline`, `matured_request_can_stay_pending_forever`, `tick_preserves_pending` | **gap-witness** |
+| **holder view** — first-mover advantage | `fifo_pays_the_first_filer` | **gap-witness** |
 
 Status: `lake build` green, 0 `sorry`, axioms `propext` / `Quot.sound` only (`naive_filing_price_overpays_witness`
 and `nat_solvency_is_vacuous` depend on none).
@@ -54,6 +56,26 @@ exhibits one that does. `settle_is_reachable` guards the rest: every I10/I12 the
 succeeding, so without it the whole group could be quietly vacuous. Instantiations should carry the
 same guard for each guarded op they reason about — it is cheap, and it is exactly the failure the
 round-trip judge cannot see.
+
+## What a large holder reads differently
+
+The safety invariants above are written from the protocol's seat, and two properties that decide a
+large holder's behaviour are invisible from there.
+
+**I10 protects the protocol only if settlement happens.** `Op.settle` carries a lower bound on time
+— the maturity window — and no upper bound: nothing ever compels a matured request to be executed.
+A settler who waits therefore holds an option with no expiry, and since the payout is the *minimum*
+of the filing and settlement prices, every round of delay in a falling market is paid for by the
+holder. `settlement_has_no_deadline` proves the delay is unbounded; the protective rounding and the
+missing deadline are one design decision seen from two sides. Fix: a deadline after which the
+request settles at the filing quote, or becomes cancellable.
+
+**The reserve is never split.** `fifo_pays_the_first_filer` exhibits two holders filing identical
+requests against a reserve covering exactly one: the first is paid in full, the second gets nothing,
+and swapping the filing order swaps the outcome. No invariant is violated — which is the point. A
+holder reading only the safety proofs would not learn that the rational response to a thin reserve
+is to run first. Fix: pro-rata settlement across matured requests, or an explicit statement that
+service is first-come-first-served so the incentive is at least disclosed.
 
 ## The two transferable lessons
 
