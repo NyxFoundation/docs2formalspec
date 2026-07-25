@@ -144,7 +144,7 @@
 >
 > | | 状態 |
 > |---|---|
-> | **S10 / S10c / S10d / S11(witness形) / S11b / S11c / S11d / S12 / S15** | ERC-7540 型の非同期償還 vault の最小形 [`templates/invariants/examples/AsyncQueueVault.lean`](../templates/invariants/examples/AsyncQueueVault.lean) で**証明済み**(21定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。ただしこれは**架空のプロトコル**であり、**スキーマが整合していることの証拠**であって実プロトコルについての証拠では一切ない |
+> | **S10 / S10c / S10d / S10e / S11(witness形) / S11b / S11c / S11d / S12 / S15** | ERC-7540 型の非同期償還 vault の最小形 [`templates/invariants/examples/AsyncQueueVault.lean`](../templates/invariants/examples/AsyncQueueVault.lean) で**証明済み**(22定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。ただしこれは**架空のプロトコル**であり、**スキーマが整合していることの証拠**であって実プロトコルについての証拠では一切ない |
 > | **S10b / S11(肯定形) / S13 / S14 / S16** | **スキーマのみ**。実証も worked reference も無い |
 >
 > テンプレートは [`templates/invariants/`](../templates/invariants/)(Step 0b と checklist g–k)。
@@ -212,6 +212,7 @@ E1 には**既に前例がある** — `BlastRadius.lean` の rate-limit ラッ�
 | **S10c** | `settlement_has_no_deadline` | 成熟後の決済を強制する仕組みが無く、**決済者のオプションに期限が無い**。S10 の `min` 規則と合わせると遅延コストは請求者が負担 | **gap-witness** | E1, E2 |
 | **S11c** | `fifo_pays_the_first_filer` | 準備金が不足するとき**按分されず先着順**。同サイズの2件で、支払われるかどうかが申請順だけで決まる=取り付けの誘因 | **gap-witness** | E1, E4 |
 | **S10d** | `cancel_refile_ratchets_the_quote` | `cancel` にも時間制約が無く、申請者は**取消・再申請で申請価格を無償で吊り上げられる**。増えた支払いは準備金=後続者の原資から出る | **gap-witness** | E1, E2, E4 |
+| **S10e** | `enqueue_then_settle_needs_a_round` | 成熟窓が非ゼロなら**申請と決済が同一ラウンドで成立しない**。フラッシュローンで資本を無限にしても往復できない=構造的免疫 | 定理 | E1, E2 |
 | **S11d** | `settle_succeeds_when_head_is_funded` | 資金が足りた成熟済み先頭は必ず決済される。S11 の**肯定側**で、飢餓 witness を「決済は動かない」と誤読させないための対 | 定理 | E1, E4 |
 | **S12** | `inflight_conservation` + `tick_settles_exactly` | 未決済分と決済済み分の総和が全 op で保存。時計が進むと未決済分は**ちょうど**決済済みへ移る(`SettlementHonored` 下) | 決済が別ラウンドに落ちる会計 | 定理(仮説付き) | E1, E2 |
 | **S13** | `venue_conservation` + `in_transit_lands` | Σ(拠点A + 拠点B + 移送中)が内部移送 op で保存。移送中資産が恒久滞留しない | 多拠点運用 | 定理 / witness | E2 |
@@ -262,7 +263,7 @@ E1–E4 を入れても閉じないもの:
 
 > **ステータス**: S17–S20 / S22 は架空の最小モデル
 > [`templates/invariants/examples/CollateralizedDebt.lean`](../templates/invariants/examples/CollateralizedDebt.lean)
-> で**証明済み**(37定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。S21 は
+> で**証明済み**(39定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。S21 は
 > **スキーマのみ**。§7 と同じく、**実プロトコルの worked reference は無い**。
 
 ### 8.1 対象 — 口座単位の支払能力が本体になる設計
@@ -291,6 +292,7 @@ Apyx は集約台帳でポジション単位の担保比率を持たないため
 | **S20** | `index_monotone` + `accrual_never_lowers_debt` | accrual index は非減少で、健全性を悪化方向にしか動かさない | 定理 | 証明済 |
 | **S21** | `loss_pool_conserves` | 社会化損失プールの積和会計が価値を創出しない | 定理 | **スキーマのみ** |
 | **S18b** | `liquidation_unprofitable_witness` | 清算が**許可されるが採算が合わない**状態が到達可能。誰も執行しないのでポジションが残り差額が育つ | **gap-witness** | 証明済 |
+| **S24** | `oracle_move_enables_full_seizure` | 健全なポジションが**1回の価格更新**で全担保押収の対象になる。S17–S23 は全て成立したまま | **gap-witness** | 証明済 |
 | **S23** | `liquidation_accounts_shortfall` + `bad_debt_only_from_liquidation` | 清算で回収できなかった債務が**明示的に計上**される。他のどの op も不良債権を生まない | 定理(**全 op 網羅**) | 証明済 |
 | **S22** | `min_ratio_immutable` | 「不変」と宣言したパラメータに**変更経路が存在しない** | 定理(**全 op 網羅**) | 証明済 |
 
@@ -322,6 +324,28 @@ Tier 1-C に定理が無かった箇所である。
 witness で確定させる)の**双対**で、「不変だと主張している ⇒ 変更経路が無いことを証明する」は
 `cases op` 1回でほぼ無料に書ける。デプロイ時のコメントが定理になり、将来こっそり setter が
 生えればビルドが落ちる。
+
+### 8.2b 外部プリミティブから見たときの位置づけ
+
+**フラッシュローン — 構造で答えが出る**。問うべきは「残高チェックが効くか」ではなく(借入資本は残高
+チェックを無効化する)、「攻撃者が貧しいことに依存している不変条件があるか」である。§7 の非同期
+vault では答えは No で、しかも偶然ではない: 成熟窓が非ゼロなら申請と決済は同一ラウンドで成立せず、
+攻撃者はラウンド境界を支配できない(S10e)。**`delay` は MEV 対策の飾りではなく、この族が無限資本の
+敵に対して述べられる理由そのもの**である。ゼロにすると消える。
+
+**オラクル — 本 Tier の境界そのもの**。S24 は健全なポジションを1回の価格更新で全担保押収の対象に
+する。**S17–S23 は全部成立したまま**であり、それは各定理が「入力を与えられた上での」遷移系の主張で
+あって、価格は入力だからである。これは docs/08 のパターン A(最大の損失カテゴリ)で、Tier 1-C は
+これを扱わない。道具は Tier 3 の**被害上限**であって、オラクルの正しさの証明ではない。
+**I16–I22 を引く監査レポートには、保証が価格入力に条件付きであることを明記すること。**
+
+**VRF・乱数 — どちらの参照実装もカバーしておらず、偽装もしない**。両モデルに乱数入力は無く、
+したがって乱数について述べた定理は一本も無い。名指ししておく理由は、これが上記の発見からの自然な
+次の一歩だからである: S11c(先着総取り)の標準的な修正は**順序の乱数化**であり、順序が乱数になった
+瞬間にプロトコルは新しい不変条件族を抱え込む — **抽選から利益を得る当事者が、結果を予測・干渉・
+引き直しできないこと**。インスタンス化するには乱数を明示的な `Op` 入力にし、コミット点を設け、
+コミットから開示までの間のどの操作も勝者を変えないこと、および外れた caller が引き直しを起こせない
+ことを証明する必要がある。**キューの定理群を乱数キューに適用してはならない。**
 
 ### 8.3 §7 との関係
 

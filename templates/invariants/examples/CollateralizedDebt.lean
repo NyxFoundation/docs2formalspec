@@ -19,6 +19,7 @@ and a regression test for the template.
 | **I17** liquidation is risk-reducing | `liquidate_requires_unhealthy`, `liquidation_seizure_bounded` |
 | **I17c** liquidation has to be worth doing | `liquidation_unprofitable_witness` (**gap-witness**) |
 | **I22** bad debt is accounted, never dropped | `liquidation_accounts_shortfall`, `bad_debt_only_from_liquidation`, `unprofitable_liquidation_books_bad_debt` |
+| **the oracle boundary of this whole tier** | `oracle_move_enables_full_seizure` (**gap-witness**), `price_move_is_unbounded` |
 | **I18** priority-order integrity | `sorted_preserved` (book-wide, exhaustive over `Op`), `redeem_hits_head_only`, `insertPos_sorted` |
 | — its supporting lemmas | `sorted_head_le`, `sorted_tail`, `sorted_cons_of_bound`, `sorted_dropPos`, `sorted_updatePos`, `sorted_updateConst`, `sorted_map`, `mem_updateConst`, `lookupPos_mem` |
 | **I19** accrual monotone | `index_monotone`, `accrual_never_lowers_debt` |
@@ -864,6 +865,46 @@ theorem liquidation_unprofitable_witness :
 theorem unprofitable_liquidation_books_bad_debt :
     (execTrace deeplyUnderwater [(Op.liquidate 0, 7)]).badDebt = 40 := by
   simp [execTrace, step, deeplyUnderwater, stressed, lookupPos, dropPos, seizureValue, seizure, one]
+
+/-! ### The price input is outside every invariant above
+
+`setPrice` is unauthenticated and unbounded here — the maximally adversarial oracle, and the right
+default, because an invariant that only holds for honest prices should say so. What follows is the
+boundary of this whole tier, stated as a witness rather than a caveat: I16 through I22 all continue
+to hold while a healthy position is taken apart, because each of them is a statement about the
+transition system *given* its inputs, and the price is an input.
+
+This is pattern A in `docs/08` — the largest loss category — and Tier 1-C does not address it. The
+tool for it is Tier 3: an oracle damage bound, not an oracle correctness proof. -/
+
+/-- **Oracle gap-witness.** One price move turns a healthy position into a fully seizable one. The
+    liquidator takes **all** of the collateral (the seizure formula caps at the position's balance,
+    and the manipulated price pushes it past that cap), the owner is left with nothing, and the
+    protocol still books bad debt because the seized collateral is valued at the manipulated price.
+
+    Every Tier 1-C theorem holds throughout: the liquidation was permitted because the position
+    genuinely was unhealthy *at the price the contract was told*. Report this as the scope boundary
+    of any audit citing I16–I22 — the guarantees are conditional on the price input, and bounding
+    that is a separate exercise. -/
+theorem oracle_move_enables_full_seizure :
+    let victim : Position := { id := 0, owner := 1, coll := 100, debt := 90, rate := 500 }
+    -- healthy at the honest price
+    Healthy solvent victim ∧
+    -- and after a single price move, liquidation takes the entire collateral
+    (execTrace solvent [(Op.setPrice 5000, 9), (Op.liquidate 0, 7)]).collOut 7 = 100 ∧
+    (execTrace solvent [(Op.setPrice 5000, 9), (Op.liquidate 0, 7)]).positions = [] ∧
+    -- while the protocol books bad debt on top, because the seizure is valued at the moved price
+    (execTrace solvent [(Op.setPrice 5000, 9), (Op.liquidate 0, 7)]).badDebt = 40 := by
+  refine ⟨?_, ?_, ?_, ?_⟩ <;>
+    simp [solvent, stressed, execTrace, step, Healthy, lookupPos, dropPos, seizure, seizureValue,
+          one]
+
+/-- There is also no bound on how far one update may move the price — pattern G applied to the
+    oracle. A design that wants one states a maximum per-update deviation; this one does not, and
+    the absence is what makes the witness above a single step rather than a long grind. -/
+theorem price_move_is_unbounded (p : Nat) (hp : p ≠ 0) (c : Address) :
+    (step solvent (Op.setPrice p) c).isSome := by
+  simp [step, hp]
 
 /-- **Anti-vacuity for I16 itself.** `all_healthy_preserved` carries three hypotheses; if no state
     satisfied all of them alongside a successful step, the theorem would be about an empty premise

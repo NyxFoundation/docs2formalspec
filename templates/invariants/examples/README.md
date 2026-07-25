@@ -16,7 +16,7 @@ analyzed systems. `lake build` builds both, so the schema stays regression-teste
 
 ## What it proves
 
-21 theorems:
+22 theorems:
 
 | Invariant | Theorems | Form |
 |---|---|---|
@@ -32,6 +32,7 @@ analyzed systems. `lake build` builds both, so the schema stays regression-teste
 | **holder view** — first-mover advantage | `fifo_pays_the_first_filer` | **gap-witness** |
 | **holder view** — free re-quoting | `cancel_refile_ratchets_the_quote` | **gap-witness** |
 | **I11** progress (positive half) | `settle_succeeds_when_head_is_funded` | proved |
+| flash-loan immunity | `enqueue_then_settle_needs_a_round` | proved |
 
 Status: `lake build` green, 0 `sorry`, axioms `propext` / `Quot.sound` only (`naive_filing_price_overpays_witness`
 and `nat_solvency_is_vacuous` depend on none).
@@ -125,7 +126,7 @@ It has **no counterparty ledger** — the debt token is not modelled, so a liqui
 a redeemer's payment are not represented, only their effect on the position book and the collateral
 leaving it. Every theorem here is a statement about the book, and no conservation claim is made.
 
-37 theorems:
+39 theorems:
 
 | Invariant | Theorems | Form |
 |---|---|---|
@@ -139,6 +140,7 @@ leaving it. Every theorem here is a statement about the book, and no conservatio
 | **I19** accrual monotone | `index_monotone`, `accrual_never_lowers_debt` | proved |
 | **I4** rounding, load-bearing here | `le_ceilDiv_one_mul` | proved |
 | **I21** immutable parameter | `min_ratio_immutable`, `penalty_immutable` | proved |
+| **oracle boundary** | `oracle_move_enables_full_seizure`, `price_move_is_unbounded` | **gap-witness** |
 | anti-vacuity | `all_healthy_preserved_is_applicable`, `liquidation_is_reachable`, `redemption_is_reachable`, `healthy_position_cannot_be_liquidated` | witnesses + control |
 
 ## The five transferable lessons
@@ -192,3 +194,43 @@ shortfall is a contained one. Concretely: repayment and
 liquidation move debt out of the book without a matching counterparty ledger in this model, so any
 conservation claim stated here would be about a half-drawn system. A faithful I20 needs the other
 side modelled. Do not cite it as covered.
+
+---
+
+# Read against the external primitives
+
+Three lenses an auditor applies after the invariants are written. They land in three different
+places, and the difference is worth internalizing.
+
+**Flash loans — answered structurally.** The question is never "does a balance check hold" (borrowed
+capital defeats balance checks) but "does any invariant depend on the attacker being poor". For the
+async vault the answer is no, and not by accident: entering and exiting cannot happen in the same
+round at all, because settlement needs the clock to advance and the attacker does not control the
+clock. `enqueue_then_settle_needs_a_round` proves it for any non-zero maturity window. Note what
+that makes the `delay` parameter: not an MEV nicety but the load-bearing reason the family is
+stateable against an adversary with unbounded capital. Set it to zero and the property evaporates.
+
+The CDP reference is flash-loan-neutral for a blunter reason — it has no caller balance ledger at
+all, so collateral is conjured by the caller. That is conservative in the right direction (the
+adversary is already unbounded) but it means capital constraints are simply not modelled.
+
+**Oracles — the boundary of the whole tier, witnessed rather than caveated.**
+`oracle_move_enables_full_seizure` takes a healthy position, moves the price once, and has a
+liquidator seize *all* of the collateral while the protocol books bad debt on top. Every Tier 1-C
+theorem holds throughout, because each is a statement about the transition system **given its
+inputs**, and the price is an input. `price_move_is_unbounded` adds that nothing caps a single
+update — pattern G applied to the oracle, which is why the witness is one step rather than a grind.
+
+This is the single most important thing to carry into an audit report that cites I16–I22: the
+guarantees are conditional on the price feed, this tier does not address pattern A, and the tool for
+it is a Tier 3 damage bound — an oracle *damage* theorem, not an oracle *correctness* theorem.
+
+**VRF and randomness — an archetype neither reference covers, and not faked.** Neither model has a
+random input, so no theorem here says anything about one. It is worth naming because it is the
+natural next step from a finding above: the standard fix for the first-mover advantage in
+`fifo_pays_the_first_filer` is to randomize service order, and the moment order becomes random the
+protocol inherits a new invariant family — the party who benefits from the draw must not be able to
+predict it, influence it, or re-roll it. Concretely an instantiation would need the randomness as an
+explicit `Op` input, plus a commit point, and would prove that no operation between commit and
+reveal changes who wins, and that a losing caller cannot cause a re-draw. None of that is stated
+here. Do not read the queue theorems as covering a randomized queue.

@@ -25,6 +25,7 @@ What it demonstrates, in order:
 | **large-holder view** — first-mover advantage | `fifo_pays_the_first_filer` |
 | **large-holder view** — free re-quoting | `cancel_refile_ratchets_the_quote` |
 | **I11** progress (the positive half) | `settle_succeeds_when_head_is_funded` |
+| **flash-loan immunity** (structural) | `enqueue_then_settle_needs_a_round` |
 | anti-vacuity | `settle_is_reachable` |
 
 The three model extensions of `docs/06` §7.3 that this file exercises:
@@ -528,6 +529,39 @@ theorem settle_succeeds_when_head_is_funded (s : State) (r : Request) (rest : Li
   simp only [step, hq]
   rw [if_neg (by simp), if_neg (by omega), if_neg (by omega)]
   simp
+
+/-! ### Why the two-phase shape is flash-loan immune
+
+A flash loan hands an attacker unbounded capital for the duration of one transaction, so the
+question for any protocol is: which of my invariants depends on the attacker being poor? For a
+request/settle design the answer is none of them — but not because of a balance check, which
+borrowed capital defeats. It is because entering and exiting cannot happen in the same round at
+all. The maturity window is doing structural work here, not just MEV mitigation, and that is worth
+proving rather than assuming: it is the reason the whole family is stateable against an adversary
+with infinite capital. -/
+
+/-- **Flash-loan immunity, structurally.** With any non-zero maturity window a request filed into an
+    empty queue cannot be settled before the clock advances — whatever the caller's balance, and
+    whoever calls. An attacker who borrows the shares, files, and tries to exit inside one
+    transaction cannot: the round-trip needs a round boundary they do not control. Set `delay` to
+    zero and this evaporates, which is the honest way to read the parameter. -/
+theorem enqueue_then_settle_needs_a_round (s : State) (amount : Nat) (c : Address) (s' : State)
+    (hd : 0 < s.delay) (hempty : s.pending = [])
+    (h : step s (Op.enqueue amount) c = some s') (id : Nat) (c' : Address) :
+    step s' (Op.settle id) c' = none := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · injection h with e
+        subst e
+        simp only [step, hempty, List.nil_append]
+        split
+        · rfl
+        · rw [if_pos (by omega)]
 
 /-! ### The cancellation side of the same option
 
