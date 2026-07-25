@@ -79,23 +79,28 @@ that its two subtle points are real.
 # `CollateralizedDebt.lean` — the per-account solvency family (Tier 1-C)
 
 A minimal **collateralized debt protocol**: positions with collateral and debt, a liquidation
-threshold, interest accrual, and a redemption mechanism with an advertised priority order. The shape
-shared by CDP stablecoins and borrow/lend markets, where the safety property is **per-account**
-health rather than pooled solvency. Fictional, as above.
+threshold, interest accrual, and a redemption mechanism that buys collateral out of positions in an
+advertised priority order. The shape shared by CDP stablecoins and borrow/lend markets, where the
+safety property is **per-account** health rather than pooled solvency. Fictional, as above.
 
-19 theorems:
+It has **no counterparty ledger** — the debt token is not modelled, so a liquidator's repayment and
+a redeemer's payment are not represented, only their effect on the position book and the collateral
+leaving it. Every theorem here is a statement about the book, and no conservation claim is made.
+
+20 theorems:
 
 | Invariant | Theorems | Form |
 |---|---|---|
-| **I16** health on every path | `all_healthy_preserved` (book-wide, exhaustive over `Op`), `borrow_requires_health`, `withdraw_requires_health` | proved |
-| — its supporting lemmas | `healthy_add_coll`, `healthy_sub_debt`, `price_index_stable`, `mem_updatePos`, `mem_dropPos`, `mem_insertPos` | proved |
+| **I16** health on every path | `all_healthy_preserved` (book-wide, exhaustive over `Op`), `redeem_preserves_health` | proved |
+| — its supporting lemmas | `healthy_add_coll`, `healthy_sub_debt`, `price_ratio_stable`, `mem_updatePos`, `mem_dropPos`, `mem_insertPos` | proved |
 | **I17** liquidation reduces risk | `liquidate_requires_unhealthy`, `liquidation_seizure_bounded` | proved |
 | **I18** priority-order integrity | `redeem_hits_head_only`, `insertPos_sorted` | proved |
-| **I19** accrual monotone | `index_monotone`, `accrual_never_improves_health` | proved |
+| **I19** accrual monotone | `index_monotone`, `accrual_never_lowers_debt` | proved |
+| **I4** rounding, load-bearing here | `le_ceilDiv_one_mul` | proved |
 | **I21** immutable parameter | `min_ratio_immutable`, `penalty_immutable` | proved |
-| anti-vacuity | `liquidation_is_reachable`, `healthy_position_cannot_be_liquidated` | witness + control |
+| anti-vacuity | `liquidation_is_reachable`, `redemption_is_reachable`, `healthy_position_cannot_be_liquidated` | witnesses + control |
 
-## The two transferable lessons
+## The three transferable lessons
 
 1. **State the health invariant book-wide, not per touched position.** A guard lemma proves the op
    you looked at is safe; the Euler defect is always in the op you did not look at.
@@ -104,10 +109,18 @@ health rather than pooled solvency. Fictional, as above.
    list-membership lemmas and two monotonicity lemmas — budget for them, they are mechanical.
 
    Excluding ops is not cheating *if you name them*. `accrue` and `setPrice` are excluded because
-   they are supposed to be able to make a position liquidatable, and
-   `accrual_never_improves_health` proves which direction they move it in.
+   they are supposed to be able to make a position liquidatable, and `accrual_never_lowers_debt`
+   proves which direction they move it in.
 
-2. **Prove immutability, do not assert it.** `min_ratio_immutable` is one tactic block and turns a
+2. **Give every operation its counterparty side, or the invariant is measuring nothing.** The first
+   draft of this file had a redemption that reduced debt and took no collateral — a free write-off.
+   Every theorem still compiled, because none of them was false; they were just about an operation
+   no protocol would ship. Redemption now exchanges collateral for debt, and that turns
+   `redeem_preserves_health` from bookkeeping into the one genuinely interesting case of I16:
+   removing backing is safe **only** because the debt reduction rounds up (I4) and the protocol
+   over-collateralizes. Round it down and a redeemer walks a healthy position into liquidation.
+
+3. **Prove immutability, do not assert it.** `min_ratio_immutable` is one tactic block and turns a
    deployment comment into a theorem that a later-added setter would break. This is the dual of the
    pattern-G gap-witness and it is the cheapest useful theorem in the whole template.
 
