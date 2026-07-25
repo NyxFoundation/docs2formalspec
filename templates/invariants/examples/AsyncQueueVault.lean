@@ -1,11 +1,16 @@
 /-!
 # `AsyncQueueVault` — worked reference for the async / queue / signed-value invariants
 
-A deliberately tiny, **fictional** protocol whose only purpose is to instantiate the Tier-1.5
-invariant family of [`../README.md`](../README.md) (design memo: `docs/06-safety-properties.md`
-§7, pattern taxonomy: `docs/08-defi-vuln-patterns.md` §A.6 / §B.2). It models nothing real; it
-exists so the schema has a compiled, `sorry`-free reference the way `outputs/apyx/Safety.lean`
-serves the Tier-1 family — and so the template has a regression test.
+A deliberately tiny **async redemption vault**: users file a redemption request against a share
+balance, the request matures over settlement rounds, and a settler executes it later at a price
+that may have moved. That is the shape ERC-7540 standardizes, and the shape LST unstaking queues,
+delayed-redemption stablecoins and queued-withdrawal vaults all converge on — the DeFi archetypes
+`docs/08-defi-vuln-patterns.md` §A.6 collects.
+
+The protocol itself is **fictional**: no real deployment is modelled here. What it is evidence for
+is the Tier-1.5 invariant family of [`../README.md`](../README.md) (design memo:
+`docs/06-safety-properties.md` §7) — a compiled, `sorry`-free reference the way
+`outputs/apyx/Safety.lean` serves the Tier-1 family, and a regression test for the template.
 
 What it demonstrates, in order:
 

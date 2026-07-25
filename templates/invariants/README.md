@@ -71,7 +71,13 @@ README is the fill-in guide; `outputs/apyx/Safety.lean` is the worked reference 
 The last two rows decide which invariants are *provably true* (accounted-mint-only ⇒ I5 holds) and which
 become **gap-witnesses** (an unbounded param ⇒ prove a bad state is reachable, §Step 2f).
 
-### Step 0b — is this app synchronous? (five questions that gate I10–I15)
+### Step 0b — does redemption settle in one transaction? (five questions that gate I10–I15)
+
+Skip this entirely for a protocol where deposit and redemption both complete atomically — Tier 1 is
+the whole job there, and I10–I15 buy nothing. Run it when the target is an **async vault / RWA fund
+(ERC-7540), an LST or LRT unstaking queue, a queued-withdrawal vault, a delayed-redemption
+stablecoin, a multi-venue (e.g. delta-neutral) book, or anything whose net position can go
+negative** — see `docs/08` §A.6 for the archetype-to-pattern map.
 
 Answer these from `Op`/`State` before writing a line of Lean. A single **yes** means the Tier-1
 invariants alone will pass while leaving most of the attack surface unexamined.

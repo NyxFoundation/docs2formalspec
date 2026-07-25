@@ -1,9 +1,14 @@
 # Worked reference for the Tier-1.5 invariants
 
-[`AsyncQueueVault.lean`](AsyncQueueVault.lean) is a **fictional** minimal protocol — a queued,
-two-phase redemption vault — written for one purpose: to give the async / queue / signed-value
-invariants of [`../README.md`](../README.md) (Step 0b, checklist items g–k) a compiled reference the
-way `outputs/apyx/Safety.lean` serves the Tier-1 family.
+[`AsyncQueueVault.lean`](AsyncQueueVault.lean) is a minimal **async redemption vault**: file a
+request against a share balance, wait out a maturity window, have a settler execute it at a price
+that may have moved. That is the ERC-7540 shape, and the shape LST unstaking queues,
+delayed-redemption stablecoins and queued-withdrawal vaults converge on — the DeFi archetypes
+`docs/08` §A.6 collects.
+
+The protocol is **fictional** — no real deployment is modelled. Its job is to give the async /
+queue / signed-value invariants of [`../README.md`](../README.md) (Step 0b, checklist items g–k) a
+compiled reference the way `outputs/apyx/Safety.lean` serves the Tier-1 family.
 
 It compiles as its own lake library, `TemplateExamples` (`lean/TemplateExamples/AsyncQueueVault.lean`
 is a symlink to it), kept out of `D2fsSpecs` so that `lake build D2fsSpecs` still compiles exactly the

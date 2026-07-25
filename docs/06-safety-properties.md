@@ -149,7 +149,21 @@
 >
 > テンプレートは [`templates/invariants/`](../templates/invariants/)(Step 0b と checklist g–k)。
 
-### 7.0 なぜ S1–S9 だけでは足りないか
+### 7.0 対象 — 償還が非同期な DeFi プロトコル
+
+**この節は Apyx には適用されない**。Apyx は入金も償還も原子的に完結する同期型なので、S1–S9 で
+設計安全性は尽きている。S10–S16 は**次に監査する対象が以下のいずれかだったときに追加で証明すべき
+定理群**であり、そうでなければ 1本も足す必要はない(判定は Step 0b の5問で機械的に済む —
+[`templates/invariants/`](../templates/invariants/))。
+
+- 非同期 vault / RWA ファンド(ERC-7540 型の request → claim)
+- LST / LRT の unstaking キュー、出金キュー付き vault、遅延償還ステーブル
+- 複数の会計拠点にまたがり移送に遅延がある運用(デルタニュートラル等)
+- 負債・建て玉を持ち、純資産が負になりうる設計
+
+損失アーキタイプとの対応は [`docs/08`](08-defi-vuln-patterns.md) §A.6。
+
+### 7.0b なぜ S1–S9 だけでは足りないか
 
 S1–S9 は、明示されてはいないが次の5つのモデル前提の上に成立している:
 
@@ -189,17 +203,17 @@ E1 には**既に前例がある** — `BlastRadius.lean` の rate-limit ラッ�
 
 ### 7.2 定理リスト
 
-| # | 定理 | 主張 | 形 | 要る拡張 |
-|---|---|---|---|---|
-| **S10** | `settlement_price_no_timing_gain` | request と settle の間に価格が動いても、**決済タイミングの選択**が実行者に利得を与えない(払出は request 時と settle 時のプロトコル有利側で評価) | 定理(S3 丸めの価格版) | E1, E2 |
-| **S10b** | `price_source_choice_no_gain` | 複数の価格ソースを読めるとき、どれを読むかの選択が caller に利得を与えない | 定理 or witness | P5 の解消(価格を複数フィールド化) |
-| **S11** | `queue_no_starvation` / `queue_head_of_line_blocking_witness` | 正直ユーザーの pending は有限トレースで必ず claim 可能。成り立たないなら**飢餓トレースを witness として証明する**(先頭が決済不能なら後続は支払可能でも凍る) | 定理 or **gap-witness** | E1, E4 |
-| **S11b** | `queue_capacity_griefing_witness` | 有界コストの攻撃者トレース後、正直ユーザーの enqueue が全て拒否される状態が到達可能 | **gap-witness** | E1, E4 |
-| **S12** | `inflight_conservation` + `tick_settles_exactly` | 未決済分と決済済み分の総和が全 op で保存。時計が進むと未決済分は**ちょうど**決済済みへ移る(`SettlementHonored` 下) | 定理(仮説付き) | E1, E2 |
-| **S13** | `venue_conservation` + `in_transit_lands` | Σ(拠点A + 拠点B + 移送中)が内部移送 op で保存。移送中資産が恒久滞留しない | 定理 / witness | E2 |
-| **S14** | `drift_bounded` / `drift_unbounded_witness` | 「意図した状態」と「実現した状態」の乖離に上界がある。無ければ**上界の不在を証明する** | 上界定理 or **gap-witness** | E3 |
-| **S15** | `net_value_nonneg` / `insolvency_witness` | 純資産が負になるトレースが存在しない / する | 定理 or **gap-witness** | E3 |
-| **S16** | `round_trip_nonprofitable` | 同一状態での往復操作が手数料分だけ必ず損 | 定理 | — |
+| # | 定理 | 主張 | 効く DeFi アーキタイプ | 形 | 要る拡張 |
+|---|---|---|---|---|---|
+| **S10** | `settlement_price_no_timing_gain` | request と settle の間に価格が動いても、**決済タイミングの選択**が実行者に利得を与えない(払出は request 時と settle 時のプロトコル有利側で評価) | 非同期 vault / 遅延償還 | 定理(S3 丸めの価格版) | E1, E2 |
+| **S10b** | `price_source_choice_no_gain` | 複数の価格ソースを読めるとき、どれを読むかの選択が caller に利得を与えない | 多重オラクル | 定理 or witness | P5 の解消(価格を複数フィールド化) |
+| **S11** | `queue_no_starvation` / `queue_head_of_line_blocking_witness` | 正直ユーザーの pending は有限トレースで必ず claim 可能。成り立たないなら**飢餓トレースを witness として証明する**(先頭が決済不能なら後続は支払可能でも凍る) | LST unstaking / 出金キュー | 定理 or **gap-witness** | E1, E4 |
+| **S11b** | `queue_capacity_griefing_witness` | 有界コストの攻撃者トレース後、正直ユーザーの enqueue が全て拒否される状態が到達可能 | pending 上限を持つ入出金 | **gap-witness** | E1, E4 |
+| **S12** | `inflight_conservation` + `tick_settles_exactly` | 未決済分と決済済み分の総和が全 op で保存。時計が進むと未決済分は**ちょうど**決済済みへ移る(`SettlementHonored` 下) | 決済が別ラウンドに落ちる会計 | 定理(仮説付き) | E1, E2 |
+| **S13** | `venue_conservation` + `in_transit_lands` | Σ(拠点A + 拠点B + 移送中)が内部移送 op で保存。移送中資産が恒久滞留しない | 多拠点運用 | 定理 / witness | E2 |
+| **S14** | `drift_bounded` / `drift_unbounded_witness` | 「意図した状態」と「実現した状態」の乖離に上界がある。無ければ**上界の不在を証明する** | 帳簿先行・執行後追いの設計 | 上界定理 or **gap-witness** | E3 |
+| **S15** | `net_value_nonneg` / `insolvency_witness` | 純資産が負になるトレースが存在しない / する | 負債・建て玉を持つ vault | 定理 or **gap-witness** | E3 |
+| **S16** | `round_trip_nonprofitable` | 同一状態での往復操作が手数料分だけ必ず損 | スワップ / 償還の往復 | 定理 | — |
 
 **根拠の種類は一様ではない**。S10(パターン J)と S11(パターン K)は ERC-7540 の
 Security Considerations と本番設計の防御策という**一次文献**で裏が取れている。S14(パターン L)は
