@@ -136,7 +136,7 @@
 
 第2の柱と同様、Tier A の性質族(保存則・solvency・丸め方向・非希釈・インフレ耐性)のパラメータ化スキーマを **[`templates/invariants/`](../templates/invariants/) に実装済み**(README = 記入ガイド、`Invariants.template.lean` = `‹PLACEHOLDER›` 付き骨格、`outputs/apyx/Safety.lean` = worked reference)。設計方針と業界脆弱性パターンとの対応は [`docs/08-defi-vuln-patterns.md`](08-defi-vuln-patterns.md)。ボトムアップ入力は**ドメイン別**: DeFi は公開被害集計、合意プロトコルは `ethereum-vuln-dataset`。生成定理は要件由来 / 脅威モデル由来 / **設計不変条件由来** / spec-consistency 由来 の4種を `review.json` で区別報告。
 
-## 7. 第4の状態族 — 非同期・多拠点・符号付き価値(S10–S16)
+## 7. 第4の状態族 — 非同期・多拠点・符号付き価値(S10–S16、枝番含む)
 
 > **ステータス(正直な明示)**: S1–S9 は `outputs/apyx/Safety.lean` で**実プロトコル**に対して証明済み。
 > 本節の S10–S16 に**実プロトコルの worked reference は一つも無い**。内訳は下記のとおりで、
@@ -145,7 +145,8 @@
 > | | 状態 |
 > |---|---|
 > | **S10 / S10c / S10d / S10e / S11(witness形) / S11b / S11c / S11d / S12 / S15** | ERC-7540 型の非同期償還 vault の最小形 [`templates/invariants/examples/AsyncQueueVault.lean`](../templates/invariants/examples/AsyncQueueVault.lean) で**証明済み**(22定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。ただしこれは**架空のプロトコル**であり、**スキーマが整合していることの証拠**であって実プロトコルについての証拠では一切ない |
-> | **S10b / S11(肯定形) / S13 / S14 / S16** | **スキーマのみ**。実証も worked reference も無い |
+> | **S10b / S13 / S14 / S16** | **スキーマのみ**。実証も worked reference も無い |
+> | **S11 の肯定形** | **部分的**。「資金が足りた成熟済み先頭は必ず決済される」(S11d)は証明済みだが、**任意位置の請求がいずれ必ず serve される**という完全形(`queue_no_starvation`)は未証明。監査で「飢餓しない」と書けるのは前者までである |
 >
 > テンプレートは [`templates/invariants/`](../templates/invariants/)(Step 0b と checklist g–k)。
 
@@ -207,12 +208,12 @@ E1 には**既に前例がある** — `BlastRadius.lean` の rate-limit ラッ�
 |---|---|---|---|---|---|
 | **S10** | `settlement_price_no_timing_gain` | request と settle の間に価格が動いても、**決済タイミングの選択**が実行者に利得を与えない(払出は request 時と settle 時のプロトコル有利側で評価) | 非同期 vault / 遅延償還 | 定理(S3 丸めの価格版) | E1, E2 |
 | **S10b** | `price_source_choice_no_gain` | 複数の価格ソースを読めるとき、どれを読むかの選択が caller に利得を与えない | 多重オラクル | 定理 or witness | P5 の解消(価格を複数フィールド化) |
-| **S11** | `queue_no_starvation` / `queue_head_of_line_blocking_witness` | 正直ユーザーの pending は有限トレースで必ず claim 可能。成り立たないなら**飢餓トレースを witness として証明する**(先頭が決済不能なら後続は支払可能でも凍る) | LST unstaking / 出金キュー | 定理 or **gap-witness** | E1, E4 |
-| **S11b** | `queue_capacity_griefing_witness` | 有界コストの攻撃者トレース後、正直ユーザーの enqueue が全て拒否される状態が到達可能 | pending 上限を持つ入出金 | **gap-witness** | E1, E4 |
 | **S10c** | `settlement_has_no_deadline` | 成熟後の決済を強制する仕組みが無く、**決済者のオプションに期限が無い**。S10 の `min` 規則と合わせると遅延コストは請求者が負担 | **gap-witness** | E1, E2 |
-| **S11c** | `fifo_pays_the_first_filer` | 準備金が不足するとき**按分されず先着順**。同サイズの2件で、支払われるかどうかが申請順だけで決まる=取り付けの誘因 | **gap-witness** | E1, E4 |
 | **S10d** | `cancel_refile_ratchets_the_quote` | `cancel` にも時間制約が無く、申請者は**取消・再申請で申請価格を無償で吊り上げられる**。増えた支払いは準備金=後続者の原資から出る | **gap-witness** | E1, E2, E4 |
 | **S10e** | `enqueue_then_settle_needs_a_round` | 成熟窓が非ゼロなら**申請と決済が同一ラウンドで成立しない**。フラッシュローンで資本を無限にしても往復できない=構造的免疫 | 定理 | E1, E2 |
+| **S11** | `queue_no_starvation` / `queue_head_of_line_blocking_witness` | 正直ユーザーの pending は有限トレースで必ず claim 可能。成り立たないなら**飢餓トレースを witness として証明する**(先頭が決済不能なら後続は支払可能でも凍る) | LST unstaking / 出金キュー | 定理 or **gap-witness** | E1, E4 |
+| **S11b** | `queue_capacity_griefing_witness` | 有界コストの攻撃者トレース後、正直ユーザーの enqueue が全て拒否される状態が到達可能 | pending 上限を持つ入出金 | **gap-witness** | E1, E4 |
+| **S11c** | `fifo_pays_the_first_filer` | 準備金が不足するとき**按分されず先着順**。同サイズの2件で、支払われるかどうかが申請順だけで決まる=取り付けの誘因 | **gap-witness** | E1, E4 |
 | **S11d** | `settle_succeeds_when_head_is_funded` | 資金が足りた成熟済み先頭は必ず決済される。S11 の**肯定側**で、飢餓 witness を「決済は動かない」と誤読させないための対 | 定理 | E1, E4 |
 | **S12** | `inflight_conservation` + `tick_settles_exactly` | 未決済分と決済済み分の総和が全 op で保存。時計が進むと未決済分は**ちょうど**決済済みへ移る(`SettlementHonored` 下) | 決済が別ラウンドに落ちる会計 | 定理(仮説付き) | E1, E2 |
 | **S13** | `venue_conservation` + `in_transit_lands` | Σ(拠点A + 拠点B + 移送中)が内部移送 op で保存。移送中資産が恒久滞留しない | 多拠点運用 | 定理 / witness | E2 |
@@ -259,12 +260,14 @@ E1–E4 を入れても閉じないもの:
   帰結(S12 の対偶)は書けるが、破れないことは本モデルの外側にある。監査レポートには
   「非同期決済の安全性は決済層の履行を仮定した条件付き保証である」と明記する必要がある。
 
-## 8. アーキタイプ族 — 担保付き債務ポジション(S17–S22)
+## 8. アーキタイプ族 — 担保付き債務ポジション(S17–S24、枝番含む)
 
-> **ステータス**: S17–S20 / S22 は架空の最小モデル
+> **ステータス**: S17 / S17b / S18 / S18b / S19 / S20 / S22 / S23 / S24 は架空の最小モデル
 > [`templates/invariants/examples/CollateralizedDebt.lean`](../templates/invariants/examples/CollateralizedDebt.lean)
-> で**証明済み**(39定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。S21 は
-> **スキーマのみ**。§7 と同じく、**実プロトコルの worked reference は無い**。
+> で**証明済み**(39定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。**S21 のみスキーマ**(社会化損失プールの保存 —
+> 相手方台帳が無いモデルで述べると半分しか描いていない系についての主張になるため)。§7 と同じく、
+> **実プロトコルの worked reference は一つも無い**。なお S18b と S24 は **gap-witness**、
+> すなわち「安全性が証明できなかった」ではなく「悪状態が到達可能であることを証明した」側である。
 
 ### 8.1 対象 — 口座単位の支払能力が本体になる設計
 
@@ -286,15 +289,15 @@ Apyx は集約台帳でポジション単位の担保比率を持たないため
 | # | 定理 | 主張 | 形 | 状態 |
 |---|---|---|---|---|
 | **S17** | `all_healthy_preserved` | 負債増加・担保減少の**全 op** の後で、書帳の**どのポジションも**健全。リスク源(価格・accrual)は名指しで除外 | 定理(**全 op 網羅**) | 証明済 |
-| **S18** | `liquidate_requires_unhealthy` + `liquidation_seizure_bounded` | 健全なポジションは清算できず、押収額は担保額を超えない | 定理 | 証明済 |
-| **S19** | `sorted_preserved` + `redeem_hits_head_only` | 約束した優先順序が**全 op で保存**され、償還は先頭しか触らない | 定理(**全 op 網羅**) | 証明済 |
 | **S17b** | `redeem_preserves_health` | 償還は担保を抜くので健全性は自明でない。**債務減少を切り上げる(I4)** かつ **過剰担保** の2条件でのみ保たれる | 定理 | 証明済 |
+| **S18** | `liquidate_requires_unhealthy` + `liquidation_seizure_bounded` | 健全なポジションは清算できず、押収額は担保額を超えない | 定理 | 証明済 |
+| **S18b** | `liquidation_unprofitable_witness` | 清算が**許可されるが採算が合わない**状態が到達可能。誰も執行しないのでポジションが残り差額が育つ | **gap-witness** | 証明済 |
+| **S19** | `sorted_preserved` + `redeem_hits_head_only` | 約束した優先順序が**全 op で保存**され、償還は先頭しか触らない | 定理(**全 op 網羅**) | 証明済 |
 | **S20** | `index_monotone` + `accrual_never_lowers_debt` | accrual index は非減少で、健全性を悪化方向にしか動かさない | 定理 | 証明済 |
 | **S21** | `loss_pool_conserves` | 社会化損失プールの積和会計が価値を創出しない | 定理 | **スキーマのみ** |
-| **S18b** | `liquidation_unprofitable_witness` | 清算が**許可されるが採算が合わない**状態が到達可能。誰も執行しないのでポジションが残り差額が育つ | **gap-witness** | 証明済 |
-| **S24** | `oracle_move_enables_full_seizure` | 健全なポジションが**1回の価格更新**で全担保押収の対象になる。S17–S23 は全て成立したまま | **gap-witness** | 証明済 |
-| **S23** | `liquidation_accounts_shortfall` + `bad_debt_only_from_liquidation` | 清算で回収できなかった債務が**明示的に計上**される。他のどの op も不良債権を生まない | 定理(**全 op 網羅**) | 証明済 |
 | **S22** | `min_ratio_immutable` | 「不変」と宣言したパラメータに**変更経路が存在しない** | 定理(**全 op 網羅**) | 証明済 |
+| **S23** | `liquidation_accounts_shortfall` + `bad_debt_only_from_liquidation` | 清算で回収できなかった債務が**明示的に計上**される。他のどの op も不良債権を生まない | 定理(**全 op 網羅**) | 証明済 |
+| **S24** | `oracle_move_enables_full_seizure` | 健全なポジションが**1回の価格更新**で全担保押収の対象になる。S17–S23 は全て成立したまま | **gap-witness** | 証明済 |
 
 **S17 が本節の中心**。Euler 型の欠陥は「全経路で成立するが1経路だけ抜けている」不変条件であり、
 `cases op` の全枝が通らないとビルドが落ちる形にすれば**構造的に起こりえない**。除外する op
