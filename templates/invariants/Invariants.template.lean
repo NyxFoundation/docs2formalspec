@@ -115,4 +115,111 @@ theorem ‹param›_has_no_bound :
     ∃ (s s' : State) ‹...›, ‹reachable/witnessed step› ∧ ‹BadState s'› := by
   ‹refine ⟨witness, ...⟩; the mandated op drives the param past any safe bound›
 
+/-! # Tier 1.5 — async / queue / signed value (I10–I15)
+
+**Skip this whole section unless Step 0b in the README says so.** These need model extensions
+E1–E4; adding them to a genuinely synchronous app buys nothing and costs proof effort.
+Worked reference: `templates/invariants/examples/AsyncQueueVault.lean` (fictional protocol,
+compiled). I13/I14 below are schema only — no reference exists yet.
+-/
+
+/-! ## E1/E4 — model extensions -/
+
+inductive Op
+  | ‹protocol ops›
+  -- E1: one settlement round elapses. `delivered` is what the settlement layer actually
+  -- acknowledged — make it an ARGUMENT, do not hard-wire `delivered = inflight`, or the model
+  -- assumes away exactly the failure it should expose.
+  | tick (delivered : Nat)
+
+structure Request where          -- E2: the two-phase op's filed intent
+  id      : Nat
+  owner   : Address
+  amount  : Nat
+  filedAt : Nat                  -- the round it was filed in
+  quote   : Nat                  -- price snapshot AT FILING — the crux of I10
+
+-- E4: `State` gains `pending : List Request`, `capacity : Nat`, `inflight`/`settled`.
+
+/-! ## I10 — settlement-timing neutrality (docs/08 pattern J) -/
+
+/-- Pay the protocol-favourable side of {filing price, settlement price}. -/
+def settlePayout (r : Request) (px : Nat) : Nat :=
+  min ‹entitle r.quote r.amount› ‹entitle px r.amount›
+
+theorem settle_credits_protocol_favourable_side (s : State) (r : Request) ‹...›
+    (h : step s (Op.settle r.id) ‹settler› = some s') :
+    ‹s'.paid r.owner = s.paid r.owner + settlePayout r s.price› := by
+  ‹cases the guards; the credit is exactly settlePayout›
+
+theorem settler_timing_cannot_gain (r : Request) (px : Nat) :
+    settlePayout r px ≤ ‹entitle r.quote r.amount› := Nat.min_le_left _ _
+
+/-- Contrast witness — why the `min` is required, not merely nice: a filing-quote-only rule
+    overpays whenever the price fell, handing a free option to whoever times settlement. -/
+theorem naive_filing_price_overpays_witness :
+    ∃ (r : Request) (px : Nat), ‹entitle px r.amount› < ‹entitle r.quote r.amount› := ‹WITNESS›
+
+/-! ## I11 — queue liveness / capacity griefing (docs/08 pattern K) — gap-witness by default -/
+
+/-- (a) occupancy: a full queue rejects EVERY honest enqueue; (b) zero cost: the attacker's
+    cancel-then-refile cycle restores his holdings with the queue just as full. (b) is what
+    turns a capacity bound into a denial of service — report it with the fix (per-user cap,
+    non-refundable reservation, or fee). -/
+theorem queue_capacity_griefing_witness :
+    -- control clause first: without it, (2) would follow just as well from an empty balance and
+    -- the witness would not be about capacity at all
+    ‹step free (Op.enqueue n) honest ≠ none› ∧
+    (∀ m, step ‹occupied› (Op.enqueue m) ‹honest› = none) ∧
+    ‹(execTrace occupied [cancel; re-enqueue]).holdings attacker = occupied.holdings attacker› :=
+  ‹WITNESS — or replace with the positive form below if the design guarantees progress›
+
+/-- The other mechanism: an unsettleable head freezes everything behind it. Strongest when it
+    exhibits a queued request the reserve COULD cover that still cannot settle. -/
+theorem queue_head_of_line_blocking_witness :
+    ‹(∀ c, step blocked (Op.settle headId) c = none)› ∧
+    ‹(∀ c, step blocked (Op.settle nextId) c = none)› ∧
+    ‹(∃ r ∈ blocked.pending, payout r ≤ blocked.reserve)› := ‹WITNESS›
+
+/-- …paired with a monotonicity lemma, so the block is permanent rather than merely current. -/
+theorem ‹backing›_non_increasing_trace (s : State) (σ : List (Op × Address)) :
+    ‹(execTrace s σ).reserve ≤ s.reserve› := ‹induction σ; exhaustive single-step lemma at head›
+
+theorem queue_no_starvation ‹(s) (σ) (r) (hpend : Pending (execTrace s σ) r)› :
+    ‹∃ τ, HonestOnly τ ∧ Claimed (execTrace (execTrace s σ) τ) r› := ‹PROOF›
+
+/-! ## I12 — in-flight conservation -/
+
+theorem inflight_conservation (s : State) (op : Op) (c : Address) (s' : State)
+    (h : step s op c = some s') ‹(hacc : ¬ IsAccounted op)› :
+    s'.settled + s'.inflight = s.settled + s.inflight := by
+  ‹cases op <;> exhaustive — note this holds for a PARTIAL tick too›
+
+/-- The "in-flight is zero next round" convention, with its hypothesis kept visible. -/
+theorem tick_settles_exactly (s : State) ‹...› (h : step s (Op.tick s.inflight) c = some s') :
+    s'.settled = s.settled + s.inflight ∧ s'.inflight = 0 := ‹PROOF›
+
+/-- …and proof that the hypothesis is load-bearing. -/
+theorem partial_tick_leaves_residue ‹(hd : d < s.inflight)› ‹...› : 0 < s'.inflight := ‹PROOF›
+
+/-! ## I15 — signed net value, and the `Nat` vacuity trap -/
+
+def netValueNat (s : State) : Nat := ‹assets - liabilities›        -- truncating: LIES
+def netValueInt (s : State) : Int := ‹(assets : Int) - liabilities› -- the real reading
+
+/-- True by typing; carries no protocol information. Keep it in the output next to the witness
+    so a reviewer sees why the unsigned ledger was rejected. -/
+theorem nat_solvency_is_vacuous (s : State) : 0 ≤ netValueNat s := Nat.zero_le _
+
+theorem insolvency_witness : ∃ s, ‹Reachable s› ∧ netValueInt s < 0 ∧ netValueNat s = 0 :=
+  ‹WITNESS — or prove `net_value_nonneg` over traces if the design really precludes it›
+
+/-! ## I13 / I14 — SCHEMA ONLY (no worked reference yet; do not report as covered)
+
+I13: add an explicit in-transit bucket, prove `Σ(venues) + inTransit` preserved by internal moves,
+     plus `in_transit_lands` (or witness permanently stuck funds).
+I14: `|intent − realized| ≤ ‹minActionSize› * ‹unexecuted count›`, or — following pattern G —
+     `∀ B, ∃ σ, B < |drift (execTrace s σ)|` when no bound is enforced.
+-/
+
 end ‹AppNamespace›

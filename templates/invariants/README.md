@@ -8,6 +8,14 @@ Part B) — for *any* protocol modeled in this tool's style: a `State` record, a
 This directory holds the **generic template** only. Instantiated, app-specific proofs live in that app's
 output directory (e.g. `outputs/apyx/Safety.lean`), never in `lean/`.
 
+[`examples/AsyncQueueVault.lean`](examples/AsyncQueueVault.lean) — a *fictional* protocol, not an
+analyzed app — is the one file here that compiles, because a reference nobody can check is worth
+little. It lives in its **own lake library**, `TemplateExamples`, symlinked from
+`lean/TemplateExamples/`, deliberately *not* inside `D2fsSpecs`:
+
+- `lake build D2fsSpecs` → exactly the analyzed systems (what an audit report tells its reader to run)
+- `lake build` → those plus this example, so the template keeps a regression test
+
 ## Why these invariants, and why this shape
 
 Part A of `docs/08` ranks the loss patterns; four invariants, proved over the **closed `Op` type by
@@ -21,6 +29,21 @@ exhaustive case analysis**, cover the bulk of them across Lending / Vault / AMM 
 | **I4 Rounding favors the protocol** | **C** (rounding leak) | `rounding_favors_protocol`, `withdrawShares_rounds_up` |
 | **I5 Donation-immunity** | **B** (the root of inflation attacks) | `donation_free`, `no_inflation_attack` |
 | **G Parameter-bound gap-witness** | **G** (unbounded params) | `redeem_payout_has_no_cap`, `admin_rfq_coalition_drains` |
+
+Those five assume an **atomic, single-venue, non-negative-valued** transition system. When the app
+breaks that assumption — two-phase (request/settle) operations, a shared bounded queue, value
+spread across venues with transfer latency, or a net position that can go negative — a second
+family applies (`docs/06` §7, `docs/08` §A.6/§B.2 Tier 1.5). Step 0 below decides which of these
+are even stateable for your app:
+
+| Invariant | Catches (docs/08 pattern) | Worked reference |
+|---|---|---|
+| **I10 Settlement-timing neutrality** | **J** (timing option for the settler) | [`examples/AsyncQueueVault.lean`](examples/AsyncQueueVault.lean) |
+| **I11 Queue liveness / capacity griefing** | **K** (starvation, occupancy DoS) | same (gap-witness form) |
+| **I12 In-flight conservation** | D, async accounting | same |
+| **I13 Cross-venue conservation** | D across venues | *schema only — no worked reference yet* |
+| **I14 Intent-vs-realized drift bound** | **L** | *schema only — no worked reference yet* |
+| **I15 Signed net value** | E with liabilities; the `Nat` vacuity trap | [`examples/AsyncQueueVault.lean`](examples/AsyncQueueVault.lean) |
 
 **The structural advantage.** Because `step` is total over a *closed* `Op`, proving `Inv s → Inv s'` for
 every op is a `cases op` whose branches must *all* discharge before the file compiles. So "no operation
@@ -47,6 +70,25 @@ README is the fill-in guide; `outputs/apyx/Safety.lean` is the worked reference 
 
 The last two rows decide which invariants are *provably true* (accounted-mint-only ⇒ I5 holds) and which
 become **gap-witnesses** (an unbounded param ⇒ prove a bad state is reachable, §Step 2f).
+
+### Step 0b — is this app synchronous? (five questions that gate I10–I15)
+
+Answer these from `Op`/`State` before writing a line of Lean. A single **yes** means the Tier-1
+invariants alone will pass while leaving most of the attack surface unexamined.
+
+| Question | If yes | Model extension needed |
+|---|---|---|
+| **Clock** — does any op advance a block / settlement-round counter? | I10–I12 become stateable at all. If **no**, every trace is same-instant and async properties cannot even be *written* | **E1**: add `Op.tick` |
+| **Two-phase ops** — is any user operation split into `request` then `settle`, executed by a different caller? | The settler holds a free timing option ⇒ **I10** | **E2**: `Request` with a price snapshot |
+| **In-flight state** — is there state meaning "sent but not yet acknowledged"? | Conservation must count it ⇒ **I12**. Make delivery an *argument*, never hard-wire full delivery | **E1** + explicit `delivered` |
+| **Signed value** — can any tracked net position go negative? | A `Nat` ledger makes the solvency claim **vacuously true** ⇒ **I15** | **E3**: `Int` ledger |
+| **Shared bounded queue** — do ops compete for a capacity-limited resource? | Starvation / occupancy ⇒ **I11**, gap-witness by default | **E4**: `pending : List Request` + capacity |
+
+> **The `Nat` trap is the one to internalize.** If net value can go negative and the ledger is
+> `Nat`, then `0 ≤ netValue` is true *by typing* and proves nothing about the protocol. The worked
+> reference makes this concrete: `nat_solvency_is_vacuous` (true for free) alongside
+> `insolvency_witness` (a reachable state the unsigned reading reports as solvent). Catch this at
+> Step 0 — it is far more expensive to discover after the invariants are written.
 
 ## Step 1 — infrastructure (copy near-verbatim)
 
@@ -94,6 +136,43 @@ ops that re-mint against an untracked obligation) — and document why, as `solv
 - This turns "we couldn't prove safety" into a **machine-checked vulnerability**, the asymmetric strength of
   this method. Report it with the recommended fix (a floor/cap/rate-limit).
 
+**g. I10 Settlement-timing neutrality.** *(only if Step 0b says two-phase)* The payout of a request
+settled at round `n` must not exceed the entitlement at the filing quote **nor** the entitlement at
+the settlement-time price — i.e. the rule takes the protocol-favourable side of the two.
+- Prove the step-level credit equals `min` of the two readings, then the two `≤` corollaries fall out.
+- Also witness the **contrast**: honouring the filing quote alone overpays whenever the price fell.
+  That single witness is what makes the `min` a requirement rather than a preference.
+
+**h. I11 Queue liveness / capacity griefing.** *(only if Step 0b says bounded queue)* Default to the
+**gap-witness** form; the positive form is rarely true of a real queue. Two distinct mechanisms —
+witness both, they need different fixes:
+- *Capacity occupancy*: a reachable state where **every** honest enqueue is rejected. Pair it with a
+  control clause showing the same enqueue succeeds against a free queue, or the witness does not
+  identify capacity as the cause. Then show zero cost: the attacker's cancel-then-refile cycle
+  returns him to his starting holdings with the queue just as full — cost-free recyclability is what
+  turns a capacity bound into a DoS.
+- *Head-of-line starvation*: an unsettleable head freezes everything behind it. The witness is
+  strongest when it shows a queued request that the reserve **could** cover and still cannot settle,
+  plus a monotonicity lemma (the reserve never grows) proving the block cannot resolve itself.
+- If the design *does* guarantee progress, prove `∀ pending r, ∃ τ, Claimed (execTrace s τ) r`.
+
+**i. I12 In-flight conservation.** *(only if Step 0b says in-flight state)*
+- `settled + inflight` is preserved by every non-accounted op — `cases op`, exhaustive.
+- **Model the delivered amount as an argument to the clock op.** Then conservation holds
+  unconditionally and only "in-flight drops to zero" needs the honesty hypothesis. Prove both halves
+  and a residue lemma showing the hypothesis is load-bearing. Hard-wiring full delivery into `step`
+  assumes the settlement layer's correctness instead of recording it — the single most common way
+  an async model quietly lies.
+
+**j. I15 Signed net value.** *(only if Step 0b says signed)* Move the ledger to `Int` **first**, then
+either prove `0 ≤ netValue` over traces or witness a reachable negative. Keep the vacuity pair in the
+output so a reviewer can see why the unsigned reading was rejected.
+
+**k. I13 / I14** — cross-venue conservation and intent-vs-realized drift are **schema only**: no
+worked reference exists yet. I13 needs an explicit in-transit bucket so `Σ(venues) + in-transit` is
+preserved by internal moves; I14 follows the pattern-G recipe exactly (bound it, or witness that no
+bound exists). Do not report either as covered until instantiated.
+
 ## Step 3 — reporting
 
 Tag each theorem by provenance in `review.json` so the audit is traceable:
@@ -106,3 +185,10 @@ reported as a protocol design flaw.
 
 This template + the blast-radius template + the `docs/07` spec-consistency layer together address the six
 highest-value invariants of `docs/08` §A.5. See the pattern→guarantee matrix in `docs/08` §B.4.
+
+**Honest status of the second family.** I10/I11/I12/I15 are proved in
+[`examples/AsyncQueueVault.lean`](examples/AsyncQueueVault.lean) — a *fictional* minimal protocol,
+not a real one. That file compiles as part of `lake build` (`sorry`-free, axioms `propext`/`Quot.sound`
+only) and doubles as the template's regression test, but it is **not** the same class of evidence as
+`outputs/apyx/Safety.lean`: no real protocol has been instantiated against I10–I15 yet, and I13/I14
+have no reference at all. Say so in any audit that cites them.
