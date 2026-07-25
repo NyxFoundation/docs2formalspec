@@ -144,7 +144,7 @@
 >
 > | | 状態 |
 > |---|---|
-> | **S10 / S10c / S11(witness形) / S11b / S11c / S12 / S15** | ERC-7540 型の非同期償還 vault の最小形 [`templates/invariants/examples/AsyncQueueVault.lean`](../templates/invariants/examples/AsyncQueueVault.lean) で**証明済み**(19定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。ただしこれは**架空のプロトコル**であり、**スキーマが整合していることの証拠**であって実プロトコルについての証拠では一切ない |
+> | **S10 / S10c / S10d / S11(witness形) / S11b / S11c / S11d / S12 / S15** | ERC-7540 型の非同期償還 vault の最小形 [`templates/invariants/examples/AsyncQueueVault.lean`](../templates/invariants/examples/AsyncQueueVault.lean) で**証明済み**(21定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。ただしこれは**架空のプロトコル**であり、**スキーマが整合していることの証拠**であって実プロトコルについての証拠では一切ない |
 > | **S10b / S11(肯定形) / S13 / S14 / S16** | **スキーマのみ**。実証も worked reference も無い |
 >
 > テンプレートは [`templates/invariants/`](../templates/invariants/)(Step 0b と checklist g–k)。
@@ -211,6 +211,8 @@ E1 には**既に前例がある** — `BlastRadius.lean` の rate-limit ラッ�
 | **S11b** | `queue_capacity_griefing_witness` | 有界コストの攻撃者トレース後、正直ユーザーの enqueue が全て拒否される状態が到達可能 | pending 上限を持つ入出金 | **gap-witness** | E1, E4 |
 | **S10c** | `settlement_has_no_deadline` | 成熟後の決済を強制する仕組みが無く、**決済者のオプションに期限が無い**。S10 の `min` 規則と合わせると遅延コストは請求者が負担 | **gap-witness** | E1, E2 |
 | **S11c** | `fifo_pays_the_first_filer` | 準備金が不足するとき**按分されず先着順**。同サイズの2件で、支払われるかどうかが申請順だけで決まる=取り付けの誘因 | **gap-witness** | E1, E4 |
+| **S10d** | `cancel_refile_ratchets_the_quote` | `cancel` にも時間制約が無く、申請者は**取消・再申請で申請価格を無償で吊り上げられる**。増えた支払いは準備金=後続者の原資から出る | **gap-witness** | E1, E2, E4 |
+| **S11d** | `settle_succeeds_when_head_is_funded` | 資金が足りた成熟済み先頭は必ず決済される。S11 の**肯定側**で、飢餓 witness を「決済は動かない」と誤読させないための対 | 定理 | E1, E4 |
 | **S12** | `inflight_conservation` + `tick_settles_exactly` | 未決済分と決済済み分の総和が全 op で保存。時計が進むと未決済分は**ちょうど**決済済みへ移る(`SettlementHonored` 下) | 決済が別ラウンドに落ちる会計 | 定理(仮説付き) | E1, E2 |
 | **S13** | `venue_conservation` + `in_transit_lands` | Σ(拠点A + 拠点B + 移送中)が内部移送 op で保存。移送中資産が恒久滞留しない | 多拠点運用 | 定理 / witness | E2 |
 | **S14** | `drift_bounded` / `drift_unbounded_witness` | 「意図した状態」と「実現した状態」の乖離に上界がある。無ければ**上界の不在を証明する** | 帳簿先行・執行後追いの設計 | 上界定理 or **gap-witness** | E3 |
@@ -221,6 +223,13 @@ E1 には**既に前例がある** — `BlastRadius.lean` の rate-limit ラッ�
 大口保有者の行動を決める2つの性質がそこからは見えない。決済に上限時刻が無いこと(S10c)と、
 不足時に按分されないこと(S11c)である。どちらも**どの安全性不変条件にも違反しない**まま成立する。
 安全性の証明だけを読んだ保有者は「準備金が薄いときの合理的な行動は先に走ること」を学べない。
+
+**そして欠けている境界は両方向を向いている**。`settle` に期限が無いのは決済者が申請者に対して持つ
+オプションだが、`cancel` にも時間制約が無く、これは同じ欠落の鏡像である。払出が
+`min(申請価格, 決済価格)` である以上、申請価格は**高いほど申請者に有利**なので、取消・再申請を
+繰り返せば入場以降の最高値を無償で握れる(S10d)。しかも増えた支払いは準備金から出る = **後ろに
+並んでいる全員の原資**である。プロトコルに不利な側の境界だけを塞ぐ設計は、非対称性を直したのではなく
+どちらの側に立つかを選んだだけになる。
 
 **根拠の種類は一様ではない**。S10(パターン J)と S11(パターン K)は ERC-7540 の
 Security Considerations と本番設計の防御策という**一次文献**で裏が取れている。S14(パターン L)は

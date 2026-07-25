@@ -23,6 +23,8 @@ What it demonstrates, in order:
 | **I15** signed net value | `nat_solvency_is_vacuous`, `insolvency_witness` |
 | **large-holder view** — no settlement deadline | `settlement_has_no_deadline`, `matured_request_can_stay_pending_forever`, `tick_preserves_pending` |
 | **large-holder view** — first-mover advantage | `fifo_pays_the_first_filer` |
+| **large-holder view** — free re-quoting | `cancel_refile_ratchets_the_quote` |
+| **I11** progress (the positive half) | `settle_succeeds_when_head_is_funded` |
 | anti-vacuity | `settle_is_reachable` |
 
 The three model extensions of `docs/06` §7.3 that this file exercises:
@@ -515,6 +517,50 @@ theorem fifo_pays_the_first_filer :
     (execTrace bFirst [(Op.settle 0, 9)]).paid 1 = 0 := by
   refine ⟨?_, fun c => ?_, ?_, ?_⟩ <;>
     simp [aFirst, bFirst, runState, griefState, execTrace, step, settlePayout, entitle, ray]
+
+/-- **Progress, the positive half of I11.** A funded, matured head always settles. Paired with
+    `queue_head_of_line_blocking_witness` this is the whole picture: the queue makes progress
+    exactly when its head is funded, and stalls completely when it is not. Stating it also stops
+    the head-of-line witness from being read as "settlement never works". -/
+theorem settle_succeeds_when_head_is_funded (s : State) (r : Request) (rest : List Request)
+    (c : Address) (hq : s.pending = r :: rest) (hm : r.filedAt + s.delay ≤ s.round)
+    (hf : settlePayout r s.price ≤ s.reserve) : (step s (Op.settle r.id) c).isSome := by
+  simp only [step, hq]
+  rw [if_neg (by simp), if_neg (by omega), if_neg (by omega)]
+  simp
+
+/-! ### The cancellation side of the same option
+
+`Op.settle` has no deadline, which is an option the settler holds against the filer. `Op.cancel`
+has no time constraint either, which is the mirror image: the filer may withdraw and re-file at
+will. Because the payout is `min(filing quote, settlement price)`, a *higher* filing quote can only
+help the filer — so cancel-and-refile lets them ratchet their quote up to the best price seen since
+they entered, at no cost. The two missing bounds are the same omission pointing in opposite
+directions, and a design that fixes only the one that hurts the protocol has simply chosen a side. -/
+
+/-- The book after the price has doubled under a filed request. -/
+def priceRose : State := execTrace occupied [(Op.setPrice (2 * ray), 9)]
+
+/-- Sit on the original quote. -/
+def heldQuote : State :=
+  execTrace priceRose [(Op.tick 0, 9), (Op.tick 0, 9), (Op.settle 0, 9)]
+
+/-- Cancel and re-file at the new price first. -/
+def refiledQuote : State :=
+  execTrace priceRose
+    [(Op.cancel 0, 0), (Op.enqueue 1, 0), (Op.tick 0, 9), (Op.tick 0, 9), (Op.settle 1, 9)]
+
+/-- **Free re-quoting, witnessed.** Same holder, same shares, same settlement price — the only
+    difference is a costless cancel-and-refile after the price moved, and the payout doubles. The
+    filer can therefore always hold the maximum price observed since entering, which is an option
+    written against the protocol and, through the reserve, against everyone still queued behind
+    them. Fix: charge for cancellation, keep the original quote on re-file, or bound how long a
+    filed request may be withdrawn. -/
+theorem cancel_refile_ratchets_the_quote :
+    heldQuote.paid 0 = 1 ∧ refiledQuote.paid 0 = 2 := by
+  refine ⟨?_, ?_⟩ <;>
+    simp [heldQuote, refiledQuote, priceRose, occupied, execTrace, step, griefState,
+          settlePayout, entitle, lookupReq, removeReq, ray]
 
 /-! ## I15 — signed net value, and the `Nat` vacuity trap -/
 

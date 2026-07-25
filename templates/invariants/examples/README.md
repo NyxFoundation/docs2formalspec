@@ -16,7 +16,7 @@ analyzed systems. `lake build` builds both, so the schema stays regression-teste
 
 ## What it proves
 
-19 theorems:
+21 theorems:
 
 | Invariant | Theorems | Form |
 |---|---|---|
@@ -30,6 +30,8 @@ analyzed systems. `lake build` builds both, so the schema stays regression-teste
 | anti-vacuity guard | `settle_is_reachable` | witness |
 | **holder view** — settlement has no deadline | `settlement_has_no_deadline`, `matured_request_can_stay_pending_forever`, `tick_preserves_pending` | **gap-witness** |
 | **holder view** — first-mover advantage | `fifo_pays_the_first_filer` | **gap-witness** |
+| **holder view** — free re-quoting | `cancel_refile_ratchets_the_quote` | **gap-witness** |
+| **I11** progress (positive half) | `settle_succeeds_when_head_is_funded` | proved |
 
 Status: `lake build` green, 0 `sorry`, axioms `propext` / `Quot.sound` only (`naive_filing_price_overpays_witness`
 and `nat_solvency_is_vacuous` depend on none).
@@ -50,6 +52,10 @@ looked before review:
   runs a trace where the price halves between filing and settlement and pins the credit at `500`,
   against the `1000` a filing-quote-only rule would have paid.
 
+`settle_succeeds_when_head_is_funded` is the positive half of I11, and it earns its place next to
+the starvation witness: without it the head-of-line result reads as "settlement never works" rather
+than "the queue progresses exactly when its head is funded".
+
 `all_healthy_preserved_is_applicable` is the same guard one level up: an invariant with three
 hypotheses proves nothing if no reachable configuration satisfies all of them at once, so the file
 exhibits one that does. `settle_is_reachable` guards the rest: every I10/I12 theorem is conditioned on a settlement
@@ -69,6 +75,14 @@ of the filing and settlement prices, every round of delay in a falling market is
 holder. `settlement_has_no_deadline` proves the delay is unbounded; the protective rounding and the
 missing deadline are one design decision seen from two sides. Fix: a deadline after which the
 request settles at the filing quote, or becomes cancellable.
+
+**The missing bounds point both ways.** `Op.settle` has no deadline, which is an option the settler
+holds against the filer. `Op.cancel` has no time constraint either, which is the same omission
+mirrored: because the payout is `min(filing quote, settlement price)`, a *higher* filing quote can
+only help the filer, so cancel-and-refile lets them ratchet up to the best price seen since they
+entered, for free. `cancel_refile_ratchets_the_quote` doubles a payout that way, and the extra comes
+straight out of the reserve — that is, out of everyone still queued behind them. A design that
+closes only the bound that hurts the protocol has picked a side rather than fixed the asymmetry.
 
 **The reserve is never split.** `fifo_pays_the_first_filer` exhibits two holders filing identical
 requests against a reserve covering exactly one: the first is paid in full, the second gets nothing,
@@ -169,7 +183,12 @@ leaving it. Every theorem here is a statement about the book, and no conservatio
 
 ## What it does NOT cover
 
-I20 (socialized-loss pool conservation) is schema only, and deliberately so: repayment and
+I20 (socialized-loss pool conservation) is schema only, and deliberately so. Note what that costs:
+`badDebt` records *how much* was not recovered, and nothing here says **who bears it**. That is the
+question a large holder asks first, and this model cannot answer it — the loss has to land on a
+backstop, on remaining holders pro-rata, or on a reserve, and none of those exist here. Instantiating
+I20 means modelling that party explicitly; until then, do not let a reader infer that a booked
+shortfall is a contained one. Concretely: repayment and
 liquidation move debt out of the book without a matching counterparty ledger in this model, so any
 conservation claim stated here would be about a half-drawn system. A faithful I20 needs the other
 side modelled. Do not cite it as covered.
