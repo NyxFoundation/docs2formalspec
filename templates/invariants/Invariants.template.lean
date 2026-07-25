@@ -240,8 +240,16 @@ theorem all_healthy_preserved (s : State) (op : Op) (c : Address) (s' : State)
   ‹cases op; for each: pull membership back through the list update, then either reuse the op's own
    guard (borrow / withdraw / open) or a monotonicity lemma (repay / addCollateral / redeem)›
 -- Budget for five mechanical helpers first: membership through update / drop / insert, and
--- `healthy_add_coll` / `healthy_sub_debt`. Plus `price_index_stable`: the pricing inputs the health
+-- `healthy_add_coll` / `healthy_sub_debt`. Plus `price_ratio_stable`: the pricing inputs the health
 -- check reads must be shown untouched, or "healthy before" and "healthy after" are different claims.
+
+/-- Whichever op REMOVES backing (redemption buying collateral out, partial withdrawal against a
+    reduced obligation) is the one case of I16 that is not bookkeeping. State it separately. It is
+    safe only if the user's obligation is computed with CEILING rounding (I4) and the protocol
+    over-collateralizes — make both explicit, do not let them hide inside `step`. -/
+theorem ‹redeem›_preserves_health (s : State) (p : ‹Position›) (amount : Nat)
+    (hoc : ‹one ≤ s.minRatio›) (hp : Healthy s p) :
+    ‹Healthy s { p with coll := p.coll - amount, debt := p.debt - obligation s amount }› := ‹PROOF›
 
 /-- **I17.** A healthy position cannot be liquidated, and the seizure is bounded by the collateral
     actually present. An unbounded seizure is a finding, not a theorem (pattern G on the penalty). -/
@@ -255,7 +263,7 @@ theorem ‹insert›_sorted (p : ‹Position›) : ∀ l, Sorted l → Sorted (�
 /-- **I19.** The accrual index never falls, and accrual moves health one way only — which is why
     it is in `IsRiskSource` rather than being a counterexample to I16. -/
 theorem index_monotone ‹...› : s.‹index› ≤ s'.‹index› := ‹cases op, exhaustive›
-theorem accrual_never_improves_health ‹...› : ‹owed s p ≤ owed s' p› := ‹PROOF›
+theorem accrual_never_lowers_debt ‹...› : ‹∃ p ∈ s.positions, p.debt ≤ q.debt› := ‹PROOF›
 
 /-- **I21 — the dual of the pattern-G gap-witness, and the cheapest theorem in this file.**
     Wherever a deployment calls a parameter immutable, prove there is no mutation path. One

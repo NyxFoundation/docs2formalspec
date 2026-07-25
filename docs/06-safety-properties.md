@@ -272,7 +272,7 @@ Apyx は集約台帳でポジション単位の担保比率を持たないため
 | **S18** | `liquidate_requires_unhealthy` + `liquidation_seizure_bounded` | 健全なポジションは清算できず、押収額は担保額を超えない | 定理 | 証明済 |
 | **S19** | `redeem_hits_head_only` + `insertPos_sorted` | 約束した優先順序に割り込めず、飛ばされない。新規ポジションは正しい位置に入る | 定理 | 証明済 |
 | **S17b** | `redeem_preserves_health` | 償還は担保を抜くので健全性は自明でない。**債務減少を切り上げる(I4)** かつ **過剰担保** の2条件でのみ保たれる | 定理 | 証明済 |
-| **S20** | `index_monotone` + `accrual_never_improves_health` | accrual index は非減少で、健全性を悪化方向にしか動かさない | 定理 | 証明済 |
+| **S20** | `index_monotone` + `accrual_never_lowers_debt` | accrual index は非減少で、健全性を悪化方向にしか動かさない | 定理 | 証明済 |
 | **S21** | `loss_pool_conserves` | 社会化損失プールの積和会計が価値を創出しない | 定理 | **スキーマのみ** |
 | **S22** | `min_ratio_immutable` | 「不変」と宣言したパラメータに**変更経路が存在しない** | 定理(**全 op 網羅**) | 証明済 |
 
