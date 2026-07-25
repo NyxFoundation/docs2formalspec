@@ -71,6 +71,13 @@
 
 ## 4. 本モデルでは原理的に扱えない安全性(正直な限界)
 
+**まず区別すべき2種類の「非原子性」**。本モデルの `step` が原子的であることが閉ざすのは、
+
+- **(i) 1操作の実行途中への割り込み(再入)** — 扱えない。`step` の不可分性が構造的前提。
+- **(ii) 1つのユーザー操作が request と settle の2相に分かれ、その間に時間が進む(非同期決済)** — **扱える**。`Op` に時計を入れれば表現でき、§7 でこの拡張と定理族を扱う。
+
+の (i) だけであって (ii) ではない。両者を同じ「原理的に扱えない」箱に入れるのはスコープ記述として不正確なので、以下では (i) のみを限界として述べる。
+
 第3の柱の最大の落とし穴は**再入(reentrancy)**。本モデルの `step : State → Op → Address → Option State` は**原子的**で、1つの操作は不可分に完了する。外部コントラクト呼び出しの「途中で」別の操作が状態に割り込む、という実行のインターリーブが表現できない。再入攻撃はまさにこのインターリーブを突くので、**このモデルでは再入バグを見つけることも、無いことを証明することもできない**。同様に、フラッシュローンによる複数プロトコル横断の価格操作、実装レベルの入力検証(型付きモデルなので範囲外)、ガス/ストレージ/upgrade安全性も範囲外。
 
 これは Certora/Halmos 等の**バイトコードレベル検証**が担う領域であり、第3の柱の抽象モデル証明はそれらを代替しない。「設計レベルの経済的欠陥(保存則・solvency・丸め・希釈・インフレ攻撃)」を検証する道具であって、「実装レベルの実行順序バグ」は対象外、と監査レポートに明記する必要がある。
@@ -129,9 +136,102 @@
 
 第2の柱と同様、Tier A の性質族(保存則・solvency・丸め方向・非希釈・インフレ耐性)のパラメータ化スキーマを **[`templates/invariants/`](../templates/invariants/) に実装済み**(README = 記入ガイド、`Invariants.template.lean` = `‹PLACEHOLDER›` 付き骨格、`outputs/apyx/Safety.lean` = worked reference)。設計方針と業界脆弱性パターンとの対応は [`docs/08-defi-vuln-patterns.md`](08-defi-vuln-patterns.md)。ボトムアップ入力は**ドメイン別**: DeFi は公開被害集計、合意プロトコルは `ethereum-vuln-dataset`。生成定理は要件由来 / 脅威モデル由来 / **設計不変条件由来** / spec-consistency 由来 の4種を `review.json` で区別報告。
 
+## 7. 第4の状態族 — 非同期・多拠点・符号付き価値(S10–S16)
+
+> **ステータス(正直な明示)**: S1–S9 は `outputs/apyx/Safety.lean` で**実プロトコル**に対して証明済み。
+> 本節の S10–S16 に**実プロトコルの worked reference は一つも無い**。内訳は下記のとおりで、
+> 監査でこれらを引用する際は必ずこの区別を明記すること。
+>
+> | | 状態 |
+> |---|---|
+> | **S10 / S11(witness形) / S11b / S12 / S15** | 架空の最小モデル [`templates/invariants/examples/AsyncQueueVault.lean`](../templates/invariants/examples/AsyncQueueVault.lean) で**証明済み**(15定理・`lake build` 緑・sorry 0・公理 `propext`/`Quot.sound` のみ)。ただし架空モデルは**スキーマが整合していることの証拠**であって、実プロトコルについての証拠では一切ない |
+> | **S10b / S11(肯定形) / S13 / S14 / S16** | **スキーマのみ**。実証も worked reference も無い |
+>
+> テンプレートは [`templates/invariants/`](../templates/invariants/)(Step 0b と checklist g–k)。
+
+### 7.0 なぜ S1–S9 だけでは足りないか
+
+S1–S9 は、明示されてはいないが次の5つのモデル前提の上に成立している:
+
+| # | 前提 | 本リポジトリでの根拠 |
+|---|---|---|
+| P1 | **トレース中に時間が進まない** | `execTrace` は `step` を畳むだけで、コア `Op` に時計を進める操作が無い(`Apyx.lean` の `State.now` を動かす op は存在しない) |
+| P2 | **step は原子的かつ即時決済** | `step : State → Op → Address → Option State` |
+| P3 | **価値は非負(`Nat`)** | `valueAt : Nat → State → Address → Nat` |
+| P4 | **台帳は `Address → Nat` の集約** | `Σ over holders` が書けないことは §6.2 相当の限界として既知 |
+| P5 | **価格ソースは単一・常に新鮮** | `redemptionValue` / `apxUSDMarketPrice` は state の単一フィールド |
+
+次の4条件のいずれかを満たすプロトコルでは、この前提の**外側**に攻撃面の大半が落ちる:
+
+1. 入出金が request → settle の2相で、その間に時間が進む(ERC-7540 型の非同期 vault、
+   出金キュー、遅延償還)
+2. 資産が複数の会計拠点にまたがり、拠点間の移送に遅延がある
+3. 保有価値が符号付きになりうる(負債を差し引いた純資産)
+4. 操作が有限容量の共有キューを奪い合う
+
+S1–S9 をこの種のプロトコルにそのまま当てると、**証明は通るが攻撃面をほとんど覆っていない**という
+最悪の結果(空虚に近い安全性主張)になりうる。特に P3 は危険で、`Nat` 台帳では債務超過が
+そもそも表現できないため、支払能力の定理が**空虚に真**になる。これは本ツールが `review.json` の
+`vacuous` 判定で常に警戒している失敗様式の、型レベル版である。
+
+### 7.1 必要なモデル拡張(E1–E4)
+
+| # | 拡張 | 内容 | 開く定理 |
+|---|---|---|---|
+| **E1** | **時計** | `Op` に `tick`(1決済ラウンドの経過)を追加し、`execTrace` が時間を進められるようにする | S10, S11, S12 |
+| **E2** | **二相操作と決済仮説** | `Request`(owner / amount / filedAt / 価格スナップショット)と `settle` op。**決済層が約束どおり処理することは定理ではなく明示された仮説** `SettlementHonored` として置く | S10, S12, S13 |
+| **E3** | **符号付き台帳** | `netValue : State → Address → Int`。`Nat` のままでは S15 が空虚に真 | S14, S15 |
+| **E4** | **明示キュー** | `State` に `pending : List Request` と容量パラメータ | S11 |
+
+E1 には**既に前例がある** — `BlastRadius.lean` の rate-limit ラッパ(`RLOp.advanceEpoch` /
+`execTrace2` / `countEpochs`)と timelock ラッパ(`TLOp.tick` / `execTraceTL` / `countTicks`)は
+既に時計付きの遷移系である。コアモデルへ昇格していないだけで、手法とその証明作法は確立済み。
+
+### 7.2 定理リスト
+
+| # | 定理 | 主張 | 形 | 要る拡張 |
+|---|---|---|---|---|
+| **S10** | `settlement_price_no_timing_gain` | request と settle の間に価格が動いても、**決済タイミングの選択**が実行者に利得を与えない(払出は request 時と settle 時のプロトコル有利側で評価) | 定理(S3 丸めの価格版) | E1, E2 |
+| **S10b** | `price_source_choice_no_gain` | 複数の価格ソースを読めるとき、どれを読むかの選択が caller に利得を与えない | 定理 or witness | P5 の解消(価格を複数フィールド化) |
+| **S11** | `queue_no_starvation` / `queue_head_of_line_blocking_witness` | 正直ユーザーの pending は有限トレースで必ず claim 可能。成り立たないなら**飢餓トレースを witness として証明する**(先頭が決済不能なら後続は支払可能でも凍る) | 定理 or **gap-witness** | E1, E4 |
+| **S11b** | `queue_capacity_griefing_witness` | 有界コストの攻撃者トレース後、正直ユーザーの enqueue が全て拒否される状態が到達可能 | **gap-witness** | E1, E4 |
+| **S12** | `inflight_conservation` + `tick_settles_exactly` | 未決済分と決済済み分の総和が全 op で保存。時計が進むと未決済分は**ちょうど**決済済みへ移る(`SettlementHonored` 下) | 定理(仮説付き) | E1, E2 |
+| **S13** | `venue_conservation` + `in_transit_lands` | Σ(拠点A + 拠点B + 移送中)が内部移送 op で保存。移送中資産が恒久滞留しない | 定理 / witness | E2 |
+| **S14** | `drift_bounded` / `drift_unbounded_witness` | 「意図した状態」と「実現した状態」の乖離に上界がある。無ければ**上界の不在を証明する** | 上界定理 or **gap-witness** | E3 |
+| **S15** | `net_value_nonneg` / `insolvency_witness` | 純資産が負になるトレースが存在しない / する | 定理 or **gap-witness** | E3 |
+| **S16** | `round_trip_nonprofitable` | 同一状態での往復操作が手数料分だけ必ず損 | 定理 | — |
+
+**根拠の種類は一様ではない**。S10(パターン J)と S11(パターン K)は ERC-7540 の
+Security Considerations と本番設計の防御策という**一次文献**で裏が取れている。S14(パターン L)は
+分散システムの **dual-write problem** という既知の失敗様式に構造アンカーを持つが、
+**DeFi 固有の公開インシデントは見つかっていない**。詳細と、それでも3つとも A.1 に
+昇格させない理由は [`docs/08`](08-defi-vuln-patterns.md) §A.6 を参照。
+
+いずれも**ゼロからではない**: S16 は S8 `no_same_state_arbitrage_round_trip` の一般化、
+S14 と S11b は S4b の `redeem_payout_has_no_cap`(上界の不在を witness で確定させる型)の
+再利用、S12 は S2 `solvency_preserved` と同じ「仮説をトレール各点で再供給する正直形」である。
+
+### 7.3 副産物: S6 の開放問題
+
+S6(`caller_net_nonpositive`)のトレース閉包が §4b で開放問題として残っているのは、
+「レートが動くトレース」を書く手段がモデルに無いことが一因である。E1 の時計を入れると、
+レート移動を `tick` の回数で量化した形(`|R' − R| ≤ maxMovePerTick × ticks`)で初めて
+**定式化が可能になる**。証明が済むという意味ではないが、書けない問題から書ける問題に変わる。
+
+### 7.4 拡張しても残る限界
+
+E1–E4 を入れても閉じないもの:
+
+- **再入** — §4 (i) のまま。
+- **フラッシュローンのクロスプロトコル合成**、実装レベルの入力検証、gas/storage/upgrade。
+- **決済層自体の生存性** — `SettlementHonored` は**仮説であって定理ではない**。仮説が破れた場合の
+  帰結(S12 の対偶)は書けるが、破れないことは本モデルの外側にある。監査レポートには
+  「非同期決済の安全性は決済層の履行を仮定した条件付き保証である」と明記する必要がある。
+
 ## 参考リンク
 
 - crytic/properties (Trail of Bits) — ERC4626の37安全性性質: https://github.com/crytic/properties/blob/main/PROPERTIES.md
+- ERC-7540 Asynchronous ERC-4626 Tokenized Vaults(request→claim の2相モデル): https://eips.ethereum.org/EIPS/eip-7540
 - a16z erc4626-tests / ERC4626 inflation attack (OZ, Zellic Perennial finding)
 - 2024 DeFi exploit taxonomy: Three Sigma, Hacken Top-10 2025, Halborn Top-100 DeFi Hacks 2025
 - AMM-in-Lean4 (arXiv:2402.06064), Clockwork Finance(経済的安全性の形式化) — docs/01-related-work.md
