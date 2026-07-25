@@ -8,10 +8,9 @@ Part B) — for *any* protocol modeled in this tool's style: a `State` record, a
 This directory holds the **generic template** only. Instantiated, app-specific proofs live in that app's
 output directory (e.g. `outputs/apyx/Safety.lean`), never in `lean/`.
 
-[`examples/AsyncQueueVault.lean`](examples/AsyncQueueVault.lean) — a *fictional* protocol, not an
-analyzed app — is the one file here that compiles, because a reference nobody can check is worth
-little. It lives in its **own lake library**, `TemplateExamples`, symlinked from
-`lean/TemplateExamples/`, deliberately *not* inside `D2fsSpecs`:
+[`examples/`](examples/) holds the files here that compile — *fictional* protocols, not analyzed
+apps, because a reference nobody can check is worth little. They live in their **own lake library**,
+`TemplateExamples`, symlinked from `lean/TemplateExamples/`, deliberately *not* inside `D2fsSpecs`:
 
 - `lake build D2fsSpecs` → exactly the analyzed systems (what an audit report tells its reader to run)
 - `lake build` → those plus this example, so the template keeps a regression test
@@ -44,6 +43,23 @@ are even stateable for your app:
 | **I13 Cross-venue conservation** | D across venues | *schema only — no worked reference yet* |
 | **I14 Intent-vs-realized drift bound** | **L** | *schema only — no worked reference yet* |
 | **I15 Signed net value** | E with liabilities; the `Nat` vacuity trap | [`examples/AsyncQueueVault.lean`](examples/AsyncQueueVault.lean) |
+
+And a third family when solvency is **per account** rather than pooled — collateralized debt
+positions, borrow/lend markets (`docs/06` §8, `docs/08` §A.7 / §B.2 Tier 1-C):
+
+| Invariant | Catches (docs/08 pattern) | Worked reference |
+|---|---|---|
+| **I16 Health on every path** | **E**, per account | [`examples/CollateralizedDebt.lean`](examples/CollateralizedDebt.lean) |
+| **I17 Liquidation reduces risk** | **F** | same |
+| **I18 Priority-order integrity** | **M** (advertised order is skippable) | same |
+| **I19 Accrual monotone** | **I**, per account | same |
+| **I20 Socialized-loss pool conserves** | D, per account | *schema only — no worked reference yet* |
+| **I21 Immutable-parameter proof** | **the dual of G** | [`examples/CollateralizedDebt.lean`](examples/CollateralizedDebt.lean) |
+
+> **Take I21 even if you take nothing else here.** Pattern G says: no enforced bound, so witness the
+> bad state. Its dual applies to every parameter a deployment calls immutable — prove no mutation
+> path exists, `cases op`, one tactic block. A deployment comment becomes a theorem, and a setter
+> added later breaks the build.
 
 **The structural advantage.** Because `step` is total over a *closed* `Op`, proving `Inv s → Inv s'` for
 every op is a `cases op` whose branches must *all* discharge before the file compiles. So "no operation
@@ -95,6 +111,18 @@ invariants alone will pass while leaving most of the attack surface unexamined.
 > reference makes this concrete: `nat_solvency_is_vacuous` (true for free) alongside
 > `insolvency_witness` (a reachable state the unsigned reading reports as solvent). Catch this at
 > Step 0 — it is far more expensive to discover after the invariants are written.
+
+### Step 0c — is solvency per account? (four questions that gate I16–I21)
+
+Independent of Step 0b: a synchronous CDP needs this and not that; an async pooled vault the
+reverse; a design with both needs both.
+
+| Question | If yes |
+|---|---|
+| **Per-account positions** — do users hold individual collateral/debt positions with a liquidation threshold? | **I16** — and it is the highest-value theorem in this document, because it is the Euler shape |
+| **Advertised ordering** — does the protocol promise an order for liquidation, redemption or queue service? | **I18**. An order nobody proved is an order nobody enforces |
+| **Accrual** — does a time-based index change position health without anyone transacting? | **I19**, and it becomes the *named exclusion* in I16 |
+| **"Immutable" parameters** — does any doc or comment claim a parameter cannot change? | **I21**, near-free |
 
 ## Step 1 — infrastructure (copy near-verbatim)
 
@@ -173,6 +201,18 @@ witness both, they need different fixes:
 **j. I15 Signed net value.** *(only if Step 0b says signed)* Move the ledger to `Int` **first**, then
 either prove `0 ≤ netValue` over traces or witness a reachable negative. Keep the vacuity pair in the
 output so a reviewer can see why the unsigned reading was rejected.
+
+**l. I16 Health on every path.** *(only if Step 0c says per-account)* State it **book-wide**, not
+just for the touched position: `AllHealthy s → AllHealthy s'`, `cases op`, every branch discharged.
+The per-op guard lemmas are a stepping stone, not the deliverable — a guard proof says the op you
+looked at is safe, and the Euler defect is always in the op you did not look at.
+- Name the excluded ops (price updates, accrual) and prove which direction they move health in.
+- You will need three small list lemmas (membership through update / drop / insert) and two
+  monotonicity lemmas (more collateral and less debt never hurt). Budget for them.
+
+**m. I21 Immutable-parameter proof.** *(whenever any parameter is called immutable)* `∀ op c s',
+step s op c = some s' → s'.param = s.param`, exhaustive. Cheapest theorem in this document and it
+keeps working: a setter added in a later version breaks the build rather than the invariant.
 
 **k. I13 / I14** — cross-venue conservation and intent-vs-realized drift are **schema only**: no
 worked reference exists yet. I13 needs an explicit in-transit bucket so `Σ(venues) + in-transit` is

@@ -214,6 +214,63 @@ theorem nat_solvency_is_vacuous (s : State) : 0 ≤ netValueNat s := Nat.zero_le
 theorem insolvency_witness : ∃ s, ‹Reachable s› ∧ netValueInt s < 0 ∧ netValueNat s = 0 :=
   ‹WITNESS — or prove `net_value_nonneg` over traces if the design really precludes it›
 
+/-! # Tier 1-C — per-account solvency (I16–I21)
+
+**Skip unless Step 0c says so.** Applies when users hold individual collateral/debt positions, the
+protocol advertises an ordering, or a parameter is called immutable. Worked reference:
+`templates/invariants/examples/CollateralizedDebt.lean` (fictional protocol, compiled).
+I20 is schema only.
+-/
+
+def Healthy (s : State) (p : ‹Position›) : Prop := ‹owed s p * s.minRatio ≤ p.coll * s.price›
+def AllHealthy (s : State) : Prop := ∀ p ∈ s.‹positions›, Healthy s p
+
+/-- Ops that may legitimately make a position liquidatable — the honest exclusion list. Naming them
+    is what keeps I16 from being either false or a lie. -/
+def IsRiskSource : Op → Prop
+  | Op.‹accrue› _   => True
+  | Op.‹setPrice› _ => True
+  | _               => False
+
+/-- **I16.** State it BOOK-WIDE. A per-op guard lemma proves the op you looked at is safe; the
+    Euler defect is always in the op you did not look at. -/
+theorem all_healthy_preserved (s : State) (op : Op) (c : Address) (s' : State)
+    (h : step s op c = some s') (hsafe : ¬ IsRiskSource op) (hs : AllHealthy s) :
+    AllHealthy s' := by
+  ‹cases op; for each: pull membership back through the list update, then either reuse the op's own
+   guard (borrow / withdraw / open) or a monotonicity lemma (repay / addCollateral / redeem)›
+-- Budget for five mechanical helpers first: membership through update / drop / insert, and
+-- `healthy_add_coll` / `healthy_sub_debt`. Plus `price_index_stable`: the pricing inputs the health
+-- check reads must be shown untouched, or "healthy before" and "healthy after" are different claims.
+
+/-- **I17.** A healthy position cannot be liquidated, and the seizure is bounded by the collateral
+    actually present. An unbounded seizure is a finding, not a theorem (pattern G on the penalty). -/
+theorem liquidate_requires_unhealthy ‹...› : ¬ Healthy s p := ‹PROOF›
+theorem liquidation_seizure_bounded (s : State) (p : ‹Position›) : ‹seizure s p ≤ p.coll› := ‹PROOF›
+
+/-- **I18.** An advertised order is a safety property: no skipping ahead, no being skipped. -/
+theorem ‹redeem›_hits_head_only ‹...› : ‹s'.positions = f p :: rest› := ‹PROOF›
+theorem ‹insert›_sorted (p : ‹Position›) : ∀ l, Sorted l → Sorted (‹insert› p l) := ‹PROOF›
+
+/-- **I19.** The accrual index never falls, and accrual moves health one way only — which is why
+    it is in `IsRiskSource` rather than being a counterexample to I16. -/
+theorem index_monotone ‹...› : s.‹index› ≤ s'.‹index› := ‹cases op, exhaustive›
+theorem accrual_never_improves_health ‹...› : ‹owed s p ≤ owed s' p› := ‹PROOF›
+
+/-- **I21 — the dual of the pattern-G gap-witness, and the cheapest theorem in this file.**
+    Wherever a deployment calls a parameter immutable, prove there is no mutation path. One
+    `cases op`; a setter added in a later version breaks the build instead of the invariant. -/
+theorem ‹param›_immutable (s : State) (op : Op) (c : Address) (s' : State)
+    (h : step s op c = some s') : s'.‹param› = s.‹param› := by
+  cases op <;> ‹EXHAUSTIVE — every branch is `rfl` after inverting the step›
+
+/-! ## I20 — SCHEMA ONLY (socialized-loss pool)
+
+Absorbing a loss into a shared pool must not create value: after absorption the depositors'
+aggregate claim equals the pool before minus the amount absorbed, and no depositor's share rises.
+Needs the counterparty side of the ledger in the model; no worked reference exists.
+-/
+
 /-! ## I13 / I14 — SCHEMA ONLY (no worked reference yet; do not report as covered)
 
 I13: add an explicit in-transit bucket, prove `Σ(venues) + inTransit` preserved by internal moves,

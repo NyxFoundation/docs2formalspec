@@ -1,4 +1,4 @@
-# Worked reference for the Tier-1.5 invariants
+# Worked references for the Tier-1.5 and Tier-1-C invariants
 
 [`AsyncQueueVault.lean`](AsyncQueueVault.lean) is a minimal **async redemption vault**: file a
 request against a share balance, wait out a maturity window, have a settler execute it at a price
@@ -73,3 +73,47 @@ I13 (cross-venue conservation) and I14 (intent-vs-realized drift) are schema onl
 
 Nothing here is evidence about any real protocol. It is evidence that the *schema* is coherent and
 that its two subtle points are real.
+
+---
+
+# `CollateralizedDebt.lean` — the per-account solvency family (Tier 1-C)
+
+A minimal **collateralized debt protocol**: positions with collateral and debt, a liquidation
+threshold, interest accrual, and a redemption mechanism with an advertised priority order. The shape
+shared by CDP stablecoins and borrow/lend markets, where the safety property is **per-account**
+health rather than pooled solvency. Fictional, as above.
+
+19 theorems:
+
+| Invariant | Theorems | Form |
+|---|---|---|
+| **I16** health on every path | `all_healthy_preserved` (book-wide, exhaustive over `Op`), `borrow_requires_health`, `withdraw_requires_health` | proved |
+| — its supporting lemmas | `healthy_add_coll`, `healthy_sub_debt`, `price_index_stable`, `mem_updatePos`, `mem_dropPos`, `mem_insertPos` | proved |
+| **I17** liquidation reduces risk | `liquidate_requires_unhealthy`, `liquidation_seizure_bounded` | proved |
+| **I18** priority-order integrity | `redeem_hits_head_only`, `insertPos_sorted` | proved |
+| **I19** accrual monotone | `index_monotone`, `accrual_never_improves_health` | proved |
+| **I21** immutable parameter | `min_ratio_immutable`, `penalty_immutable` | proved |
+| anti-vacuity | `liquidation_is_reachable`, `healthy_position_cannot_be_liquidated` | witness + control |
+
+## The two transferable lessons
+
+1. **State the health invariant book-wide, not per touched position.** A guard lemma proves the op
+   you looked at is safe; the Euler defect is always in the op you did not look at.
+   `all_healthy_preserved` is `AllHealthy s → AllHealthy s'` by `cases op`, so a debt-increasing
+   operation that skipped its check would fail to compile. The price of stating it properly is three
+   list-membership lemmas and two monotonicity lemmas — budget for them, they are mechanical.
+
+   Excluding ops is not cheating *if you name them*. `accrue` and `setPrice` are excluded because
+   they are supposed to be able to make a position liquidatable, and
+   `accrual_never_improves_health` proves which direction they move it in.
+
+2. **Prove immutability, do not assert it.** `min_ratio_immutable` is one tactic block and turns a
+   deployment comment into a theorem that a later-added setter would break. This is the dual of the
+   pattern-G gap-witness and it is the cheapest useful theorem in the whole template.
+
+## What it does NOT cover
+
+I20 (socialized-loss pool conservation) is schema only, and deliberately so: repayment and
+liquidation move debt out of the book without a matching counterparty ledger in this model, so any
+conservation claim stated here would be about a half-drawn system. A faithful I20 needs the other
+side modelled. Do not cite it as covered.
