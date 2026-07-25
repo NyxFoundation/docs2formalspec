@@ -70,6 +70,33 @@ DeFi 攻撃の SoK は実インシデント181件・$3.24B、その多くが non
 5. **全経済パラメータに caps / floors / rate-limit**。
 6. **ガバナンスは決定と発効を snapshot + timelock で分離**。
 
+## A.6 状態モデルが同期型でないアーキタイプ(パターン J/K/L)
+
+A.1–A.5 のパターン群は「原子的に決済される単一拠点の会計」を暗黙に仮定している。次の3パターンは
+その仮定が崩れるアーキタイプ(**非同期 vault(ERC-7540)・出金キュー付き償還・複数拠点にまたがる
+会計・負債を含む純資産**)に固有で、A.1 の不変条件をいくら証明しても触れられない。
+
+| # | パターン | 破られる不変条件 | 根拠 |
+|---|---|---|---|
+| **J** | **非同期決済のタイミング選択** | 決済価格は**実行者の裁量で選べない**。request 時と settle 時のプロトコル有利側で評価される | **ERC-7540 が規格の Security Considerations 自身で認めている**: 「`redeem`/`withdraw` で受け取る `assets` は Request 時点の `convertToAssets(shares)` と等しいとは限らない。Pending から Claimed の間に価格が動きうるからである」「最終的な交換レートを Request 時に知りえないため、ユーザーは交換レートの計算と Request の履行についてその実装を**信頼するほかない**」。「コミット後に実行するかどうかを選べる裁量 = 無償のオプション」という経済的対象そのものは [Mazorra–Öz–Schlegel–Wu, *The Free Option Problem of ePBS*](https://arxiv.org/abs/2509.24849) が別ドメインで形式化しており、そこでもボラティリティが高い局面ほど行使確率が跳ね上がると報告されている |
+| **K** | **キュー飢餓 / 容量グリーフィング** | 共有キューは**有界コストで占有できない**。先行要求が後続を恒久的にブロックしない | ERC-7540 Security Considerations が「Request のためにロックされた share/asset は **Pending 状態のまま滞留しうる**」と明記。本番設計が実際に境界で防いでいる例として [Lido `WithdrawalQueueERC721`](https://docs.lido.fi/contracts/withdrawal-queue-erc721/) — FIFO キューで、1件あたり最小 `100 wei`・最大 `1000 ETH` を課し、その理由を「極端に大きな request でキューが詰まるのを避けるため」と明示している。飢餓の形そのものは分散システムの [head-of-line blocking](https://en.wikipedia.org/wiki/Head-of-line_blocking) と同型 |
+| **L** | **意図 vs 実現の乖離** | 「発注したつもりの状態」と「実現した状態」の差に**強制上界**がある | 分散システムでは [**dual-write problem**](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html) として既知の失敗様式 — 「1つの論理操作が2つの異なるシステムに書き込み、片方が失敗すると不整合な状態に入りうる」。オンチェーン会計が先に確定し、実際の反映を外部の実行主体に委ねる設計はこの形。最小実行サイズ未満の指示が黙って捨てられるなど、片側だけが**設計上意図的にスキップされる**場合、収束を強制する仕組みが無ければ差は単調に累積する |
+
+**引用の質(正直な明示)**: 3パターンで**根拠の種類が違う**。J と K は規格(ERC-7540)と本番設計
+(Lido)の**一次文献**。L は分散システムの一般クラス(dual-write)としては確立しているが、
+**DeFi 固有の公開インシデントは見つかっていない** — 探した範囲で当たったのは実装バグ側の
+近縁形(外部呼び出しの戻り値未チェック)と、運用リスクとしてのヘッジ乖離の記述だけである。
+K に head-of-line blocking を当てたのと同じく、L も分野横断の構造アンカーで留めてある状態。
+
+なお J/K についても **A.1 には昇格させない**。A.1 は「損失規模でランクした最頻・最大コストの
+パターン」であり、J/K の裏付けは規格の Security Considerations と本番設計の防御策であって、
+損失規模つきインシデントではない。根拠の種類が違うものを同じ表に混ぜると A.1 のランキングとしての
+意味が壊れる。
+
+破れ方の共通構造は「**時間が状態の一部になっている**」点にある。J は request と settle の間の
+時間、K はキューが掃ける時間、L は指示と反映の間の時間。したがって Lean 側の対処も共通で、
+**遷移系に時計を入れる**ことが3つ同時に効く(Part B.2 Tier 1.5)。
+
 ---
 
 # Part B — Lean で最もクリティカル&広範囲な保証を与える提案
@@ -110,6 +137,27 @@ theorem inv_trace (s : State) (σ : List (Op × Address)) (h0 : Inv s)
 
 > **コア4 の推奨**: I2(solvency)+ I3/I5(share 価値・donation)+ I4(丸め)を最優先。これだけで **Lending・Vault・AMM・Stablecoin を横断**して Part A の B/C/D/E を覆う(=最も広範囲)。Apyx の `Safety.lean` は既にこの5本を証明済みで、**テンプレ化の worked reference** になる。
 
+**Tier 1.5 — 非同期・多拠点・符号付き価値(パターン J/K/L。`docs/06` §7)**
+
+Tier 1 は「原子的・単一拠点・非負値」の遷移系を前提にしている。その前提が崩れるアーキタイプ
+向けの不変条件族で、**遷移系に時計(`Op.tick`)を入れることが前提**になる。設計メモは
+[`docs/06-safety-properties.md`](06-safety-properties.md) §7、スキーマは
+[`templates/invariants/`](../templates/invariants/)。
+
+| 不変条件 | 主張 | 捕捉するパターン | 状態 |
+|---|---|---|---|
+| **I10 決済タイミング中立** | request と settle の間の価格移動が、実行タイミングを選べる者に利得を与えない | **J** | スキーマ + 架空モデル実証 |
+| **I11 キュー生存性** | 正直ユーザーの pending が有限トレースで claim 可能。反例は witness 化 | **K** | 同上(既定は gap-witness) |
+| **I12 in-flight 保存** | 未決済+決済済みの総和が保存。「次ラウンドで未決済は 0」は仮説として明示 | D の非同期版 | スキーマ + 架空モデル実証 |
+| **I13 拠点間保存** | Σ(拠点 + 移送中)が内部移送で保存 | D の多拠点版 | スキーマ |
+| **I14 乖離上界** | 意図と実現の差に上界。無ければ不在を証明 | **L** | スキーマ(G と同型) |
+| **I15 符号付き支払能力** | 純資産が負になるトレースの有無。**`Nat` 台帳では空虚に真になる** | E の符号付き版 | スキーマ |
+
+> **`Nat` 空虚性の罠**: 保有価値を `Nat` で持つモデルは、切り詰め減算のせいで債務超過を
+> **そもそも表現できない**。この状態で「支払能力は保存される」を証明しても情報量はゼロである。
+> Step 0 プロファイルで「純資産は負になりうるか」を必ず問い、Yes なら台帳を `Int` にすること。
+> これは I15 を採らない場合でも独立に成り立つ指摘。
+
 **Tier 2 — パラメータ境界・単調性(パターン G/I)**
 
 - **I6 パラメータ境界**: `redemptionValue`/price/fee/collateral-factor 等に `step` ガードで floor/cap があることを証明。**無ければ、その不在を証明する**(下記 B.3)。
@@ -148,6 +196,11 @@ Apyx は `redeem_payout_has_no_cap`(払戻上限の不在)・`admin_rfq_coalitio
 | I index 単調 | **I7 単調 accumulator** | Tier 2(Apyx 実装済: `exchange_rate_monotone_deposit`〔新規入金は希釈しない〕・`exchange_rate_monotone_creditYield`〔yield credit は不変〕・`req_exchange_rate_non_decreasing`〔時間方向〕) |
 | ガバナンス結託 | blast-radius(役割集合)+ I9 realizability | Tier 3/4 |
 | 死のスパイラル | **I9 realizability**(挙動前) | Tier 4(`docs/07`) |
+| **J 決済タイミング選択** | **I10 決済タイミング中立** | Tier 1.5(時計が前提) |
+| **K キュー飢餓/占有** | **I11 キュー生存性** | Tier 1.5(既定は **gap-witness**) |
+| **L 意図vs実現の乖離** | **I14 乖離上界** | Tier 1.5 + B.3(不在の証明) |
+| 非同期会計の二重計上 | **I12 in-flight 保存 / I13 拠点間保存** | Tier 1.5 |
+| 負債込みの債務超過 | **I15 符号付き支払能力** | Tier 1.5(`Int` 台帳が前提) |
 
 ## B.5 実装ロードマップと優先順位(criticality × breadth)
 
@@ -158,6 +211,10 @@ Apyx は `redeem_payout_has_no_cap`(払戻上限の不在)・`admin_rfq_coalitio
 3. **blast-radius テンプレ(`docs/05`)** を役割集合パラメトリックに。鍵漏洩・多役割結託(2024-25 最大の損失バケット)を被害上限で定量。
 4. **spec-consistency 層(`docs/07`)を監査の第一歩に**。realizability/充足性で Beanstalk/UST 型を**モデル化前に**除外。安価で上流。
 5. **オラクル被害上限(I8)** をアーキタイプ別に。「操作耐性は証明できない、上限は出せる」を標準成果物に。
+6. **Tier 1.5(I10–I15)を、対象が非同期・多拠点・符号付きのときだけ有効化**。判定は Step 0
+   プロファイルの5問(時計 / 二相操作 / in-flight 状態 / 符号付き価値 / 有界共有キュー)で機械的に決まる。
+   投資対効果の順は **時計(E1)→ 明示キュー(E4)→ `Int` 台帳(E3)→ 拠点分割(E2)**。最初の2つで
+   J/K と `docs/06` §7.3 の S6 開放問題の定式化までが開き、拠点分割だけが重い。
 
 ## B.6 監査ワークフローへの組み込み
 
@@ -182,6 +239,8 @@ Apyx は `redeem_payout_has_no_cap`(払戻上限の不在)・`admin_rfq_coalitio
 **オラクル**: [OZ ERC-4626 exchange-rate risks](https://www.openzeppelin.com/news/erc-4626-tokens-in-defi-exchange-rate-manipulation-risks) · [Cyfrin oracle manipulation](https://www.cyfrin.io/blog/price-oracle-manipulation-attacks-with-examples) · [ChainSecurity Curve LP oracles](https://www.chainsecurity.com/blog/heartbreaks-curve-lp-oracles) · [SecPLF oracle (arXiv 2401.08520)](https://arxiv.org/pdf/2401.08520)
 
 **ERC4626 インフレ/donation**: [OZ novel defense](https://www.openzeppelin.com/news/a-novel-defense-against-erc4626-inflation-attacks) · [OZ ERC4626 docs](https://docs.openzeppelin.com/contracts/5.x/erc4626) · [Euler exchange-rate manipulation](https://www.euler.finance/blog/exchange-rate-manipulation-in-erc4626-vaults) · [Solodit donation checklist](https://checkwithhans.substack.com/p/solodit-checklist-explained-3-donation)
+
+**非同期決済・キュー(A.6 / Tier 1.5)**: [ERC-7540 Asynchronous ERC-4626 Tokenized Vaults](https://eips.ethereum.org/EIPS/eip-7540)(規格本体の Security Considerations が J と K の一次根拠) · [The Free Option Problem of ePBS (arXiv 2509.24849)](https://arxiv.org/abs/2509.24849)(コミット後の実行裁量 = 無償オプションの形式化) · [Lido WithdrawalQueueERC721 docs](https://docs.lido.fi/contracts/withdrawal-queue-erc721/)(FIFO + 1件あたり最小/最大額という本番の防御策) · [head-of-line blocking](https://en.wikipedia.org/wiki/Head-of-line_blocking)(K の飢餓の形) · [AWS Prescriptive Guidance — transactional outbox / dual-write problem](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html)(L の構造アンカー)
 
 **不変条件・形式検証**: [Trail of Bits — invariant-driven development](https://blog.trailofbits.com/2025/02/12/the-call-for-invariant-driven-development/) · [ToB reusable properties](https://blog.trailofbits.com/2023/02/27/reusable-properties-ethereum-contracts-echidna/) · [Certora — securing Kamino](https://www.certora.com/blog/securing-kamino-lending) · [Certora — stopping DeFi bugs at scale](https://medium.com/certora/stopping-defi-bugs-at-scale-6e3fba22dd3d) · [Certora CVL invariants](https://docs.certora.com/en/latest/docs/cvl/invariants.html)
 
