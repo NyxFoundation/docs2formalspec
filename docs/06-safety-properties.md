@@ -234,13 +234,13 @@ E1 には**既に前例がある** — `BlastRadius.lean` の rate-limit ラッ�
 |---|---|---|---|---|---|
 | **S10** | `settlement_price_no_timing_gain` | request と settle の間に価格が動いても、**決済タイミングの選択**が実行者に利得を与えない(払出は request 時と settle 時のプロトコル有利側で評価) | 非同期 vault / 遅延償還 | 定理(S3 丸めの価格版) | E1, E2 |
 | **S10b** | `price_source_choice_no_gain` | 複数の価格ソースを読めるとき、どれを読むかの選択が caller に利得を与えない | 多重オラクル | 定理 or witness | P5 の解消(価格を複数フィールド化) |
-| **S10c** | `settlement_has_no_deadline` | 成熟後の決済を強制する仕組みが無く、**決済者のオプションに期限が無い**。S10 の `min` 規則と合わせると遅延コストは請求者が負担 | **gap-witness** | E1, E2 |
-| **S10d** | `cancel_refile_ratchets_the_quote` | `cancel` にも時間制約が無く、申請者は**取消・再申請で申請価格を無償で吊り上げられる**。増えた支払いは準備金=後続者の原資から出る | **gap-witness** | E1, E2, E4 |
-| **S10e** | `enqueue_then_settle_needs_a_round` | 成熟窓が非ゼロなら**申請と決済が同一ラウンドで成立しない**。フラッシュローンで資本を無限にしても往復できない=構造的免疫 | 定理 | E1, E2 |
+| **S10c** | `settlement_has_no_deadline` | 成熟後の決済を強制する仕組みが無く、**決済者のオプションに期限が無い**。S10 の `min` 規則と合わせると遅延コストは請求者が負担 | 非同期 vault / 遅延償還 | **gap-witness** | E1, E2 |
+| **S10d** | `cancel_refile_ratchets_the_quote` | `cancel` にも時間制約が無く、申請者は**取消・再申請で申請価格を無償で吊り上げられる**。増えた支払いは準備金=後続者の原資から出る | 非同期 vault / 遅延償還 | **gap-witness** | E1, E2, E4 |
+| **S10e** | `enqueue_then_settle_needs_a_round` | 成熟窓が非ゼロなら**申請と決済が同一ラウンドで成立しない**。フラッシュローンで資本を無限にしても往復できない=構造的免疫 | 二相償還を持つ設計全般 | 定理 | E1, E2 |
 | **S11** | `queue_no_starvation` / `queue_head_of_line_blocking_witness` | 正直ユーザーの pending は有限トレースで必ず claim 可能。成り立たないなら**飢餓トレースを witness として証明する**(先頭が決済不能なら後続は支払可能でも凍る) | LST unstaking / 出金キュー | 定理 or **gap-witness** | E1, E4 |
 | **S11b** | `queue_capacity_griefing_witness` | 有界コストの攻撃者トレース後、正直ユーザーの enqueue が全て拒否される状態が到達可能 | pending 上限を持つ入出金 | **gap-witness** | E1, E4 |
-| **S11c** | `fifo_pays_the_first_filer` | 準備金が不足するとき**按分されず先着順**。同サイズの2件で、支払われるかどうかが申請順だけで決まる=取り付けの誘因 | **gap-witness** | E1, E4 |
-| **S11d** | `settle_succeeds_when_head_is_funded` | 資金が足りた成熟済み先頭は必ず決済される。S11 の**肯定側**で、飢餓 witness を「決済は動かない」と誤読させないための対 | 定理 | E1, E4 |
+| **S11c** | `fifo_pays_the_first_filer` | 準備金が不足するとき**按分されず先着順**。同サイズの2件で、支払われるかどうかが申請順だけで決まる=取り付けの誘因 | 出金キュー / LST unstaking | **gap-witness** | E1, E4 |
+| **S11d** | `settle_succeeds_when_head_is_funded` | 資金が足りた成熟済み先頭は必ず決済される。S11 の**肯定側**で、飢餓 witness を「決済は動かない」と誤読させないための対 | 出金キュー / LST unstaking | 定理 | E1, E4 |
 | **S12** | `inflight_conservation` + `tick_settles_exactly` | 未決済分と決済済み分の総和が全 op で保存。時計が進むと未決済分は**ちょうど**決済済みへ移る(`SettlementHonored` 下) | 決済が別ラウンドに落ちる会計 | 定理(仮説付き) | E1, E2 |
 | **S13** | `venue_conservation` + `in_transit_lands` | Σ(拠点A + 拠点B + 移送中)が内部移送 op で保存。移送中資産が恒久滞留しない | 多拠点運用 | 定理 / witness | E2 |
 | **S14** | `drift_bounded` / `drift_unbounded_witness` | 「意図した状態」と「実現した状態」の乖離に上界がある。無ければ**上界の不在を証明する** | 帳簿先行・執行後追いの設計 | 上界定理 or **gap-witness** | E3 |
@@ -311,7 +311,7 @@ CDP・借貸市場・担保付き債務を扱う設計では、プール合計�
 
 Apyx は集約台帳でポジション単位の担保比率を持たないため、**本節は Apyx に適用されない** —
 こちらは §7 と違い**設計として**該当しない(モデルの表現力の問題ではない)。Step 0c は Apyx について
-すべて No である。"
+すべて No である。
 
 ### 8.2 定理リスト
 

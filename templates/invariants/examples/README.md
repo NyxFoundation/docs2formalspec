@@ -209,12 +209,8 @@ side modelled. Do not cite it as covered.
 
 | | 位置づけ |
 |---|---|
-| 本ファイル群の61定理 | **schema-level**。「不変条件のスキーマが整合していること」の証拠であって、
-いかなるプロトコルについての証拠でもない。`lake build` 緑・`sorry` 0・公理 `propext`/`Quot.sound` のみ
-は**モデル内の主張として**信頼できることを意味するにすぎない |
-| 実プロトコルにインスタンス化した場合 | 出発点は `confidence high`。`perfect` に上げるには
-docs/09 **Phase 5 の source-tracing gate** を通す必要がある — corpus と Solidity に遡り、
-定理が原典のどの記述に対応するかを確定させる作業である |
+| 本ファイル群の61定理 | **schema-level**。「不変条件のスキーマが整合していること」の証拠であって、いかなるプロトコルについての証拠でもない。`lake build` 緑・`sorry` 0・公理 `propext`/`Quot.sound` のみ、は**モデル内の主張として**信頼できることを意味するにすぎない |
+| 実プロトコルにインスタンス化した場合 | 出発点は `confidence high`。`perfect` に上げるには docs/09 **Phase 5 の source-tracing gate** を通す必要がある — corpus と Solidity に遡り、定理が原典のどの記述に対応するかを確定させる作業である |
 
 したがって**査読者がここで検証すべきは「Apyx について正しいか」ではなく**、
 (a) スキーマが自己整合か、(b) witness が落ちる形になっているか、(c) 空虚な仮説を持つ定理が
