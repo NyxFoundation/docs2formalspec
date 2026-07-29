@@ -218,8 +218,33 @@ carry to the deployment as configured:
    — 0 / 4h / 24h / 3d / 7d — with 5-day minimum setback on reductions. What remains without delay
    is **ADMIN_ROLE itself**, held by one Safe.
 
-**Still unresolved.** The signer set and threshold of Safe `0xABdd8c8e…65e96` — the whole delay
-scheme rests on it, and this snapshot does not read it. Also unread: whether any operation is
-currently scheduled in the manager's queue.
+**The Safes, and whether the ladder can be stepped around.** Both Safes are v1.4.1 and carry the
+**same six owners**; the admin Safe `0xABdd8c8e…65e96` is **4-of-6**, the ops Safe
+`0xf9862EfC…63cE2` is **3-of-6**. So the separation between the undelayed admin tier and the
+delayed operational tiers is a *threshold* separation, not a signer separation — the same people
+sign both, one more of them for the admin path.
+
+That makes the bypass question the important one, and the configuration answers it:
+`getRoleGrantDelay` is **7 days for every operational role** (0, 21, 22, 23, 24, 25), so the admin
+cannot mint a fresh zero-delay holder of the price-push role and act. The remaining routes are
+also slow: re-pointing a selector to the zero-delay role 21 is `setTargetFunctionRole` against the
+collateral oracle, whose `getTargetAdminDelay` is **3 days**; and shortening any delay is subject
+to `minSetback() = 5 days`. **So the shortest on-chain path to an undelayed price write is about
+three days of public notice** — which is the escape window `timelock_escape_guarantee` formalizes,
+present in the deployment and quantified.
+
+Current write-side roles on `ApyxCollateralRatioOracle`: `pushRound(int256)` → 22 (4h),
+`upgradeToAndCall` → 24 (3d), while `pushRound(int256,uint80)`, `setUpstreamOracle` and
+`clearOverride` are still **role 0** (admin, undelayed).
+
+**Queue.** `expiration() = 7 days`. Of 896 operations ever scheduled, 169 executed and 5 cancelled;
+almost all the rest expired. Four are live at the time of reading, and all four are housekeeping:
+two `setTargetFunctionRole` calls that would move `pushRound(int256,uint80)` onto role 22 and
+`setUpstreamOracle` onto role 24 — i.e. bring the two remaining admin-only price functions into the
+ladder — plus a `MinterV0.setRateLimit(1e24, 86400)` and an `upgradeToAndCall` on the collateral
+oracle whose target implementation is **already** the live one.
+
+**Still unread.** The signers behind the six Safe owners, and whether any of the six are shared with
+an external party.
 
 *All state transitions are atomic and protected by the Checks‑Effects‑Interactions pattern; re‑entrancy guards are applied to every external call.*

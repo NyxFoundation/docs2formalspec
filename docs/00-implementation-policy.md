@@ -139,7 +139,11 @@ A–D は Apyx の保証レベルを上げる作業、E は外部提案の取り
   - 償還価格の実体は **`ApyxRedemptionOracle`**(`0x2037a5eb…23b4`)。**setter を一切持たない**読み取り専用アグリゲータで、`min(担保比率, cap)` を publish し **`cap()` = 1.00**。上流の `ApyxCollateralRatioOracle.pushRound` は role 22 = **4時間の予約実行**。
   - 帰結3件を `README.md` に反映済 — (a)「償還価格に上限が無い」は**設計**についての主張で、デプロイには上限がある、(b) `Safety.lean` の仮説 `h_rv : redemptionValue ≤ ray` は **cap によってデプロイ不変条件になっている**(仮定ではなく強制)、(c)「admin 変更は同一ブロックで発効」は**モデルについては真、デプロイについては ADMIN_ROLE 以外は偽**。
   - `withdrawReserve` の live 対応物は `YieldDistributor.withdrawTokens` で、role 23 = **24時間の予約実行**。
-- [ ] 残: Safe `0xABdd8c8e…65e96` の署名者集合と閾値(遅延スキーム全体がここに乗っている)。および manager のキューに現在予約されている操作の有無。
+- [x] **Safe とキューも確認済**。admin Safe `0xABdd8c8e…65e96` は **4-of-6**、運用 Safe `0xf9862EfC…63cE2` は **3-of-6**、**署名者6名は同一**。つまり無遅延 admin 層と遅延層の分離は「署名者の分離」ではなく「閾値の分離」。
+  - ただし**迂回はできない** — `getRoleGrantDelay` が全運用ロール(0/21/22/23/24/25)で **7日**なので、無遅延の新規保有者を作れない。セレクタを role 21 に付け替える経路も collateral oracle の `getTargetAdminDelay` = **3日**、遅延短縮は `minSetback` **5日**。**無遅延の価格書き込みに至る最短経路で約3日の公開猶予**がある = `timelock_escape_guarantee` が形式化している escape window がデプロイに存在し、しかも定量化できた。
+  - キュー: `expiration()` は7日。累計896件中 執行169・取消5、残りはほぼ期限切れ。読み取り時点で生きているのは4件で全て housekeeping(`pushRound(int256,uint80)` を role 22 へ、`setUpstreamOracle` を role 24 へ、`MinterV0.setRateLimit(1e24, 86400)`、および既に反映済の実装への `upgradeToAndCall`)。
+  - なお `pushRound(int256,uint80)` / `setUpstreamOracle` / `clearOverride` は現時点で **role 0(admin・無遅延)**のまま。上記キューはそれを塞ぐ方向の変更。
+- [ ] 残: Safe 6署名者の実体(外部関係者が含まれるか)。
 - [x] 判明した対応関係は `model.md` §5 に表としてまとめた。償還が `ROLE_REDEEMER` ゲートであること、`redeem` に `minReserveAssetOut` があるので**ユーザー起点の経路は `redemption_has_no_floor` が示すより実際はマシ**であること(RFQ のようにユーザーが実行しない経路には効かない)、decimal スケーリングが未モデル化であることも記載。
 
 ### D. 報告の正確さ(Phase 9)
