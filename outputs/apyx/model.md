@@ -244,7 +244,32 @@ two `setTargetFunctionRole` calls that would move `pushRound(int256,uint80)` ont
 ladder — plus a `MinterV0.setRateLimit(1e24, 86400)` and an `upgradeToAndCall` on the collateral
 oracle whose target implementation is **already** the live one.
 
-**Still unread.** The signers behind the six Safe owners, and whether any of the six are shared with
-an external party.
+**Individual EOAs hold two undelayed powers.** Role 31 (`getRoleGrantDelay` 0, execution delay 0)
+is granted to **five of the six Safe owners individually**, plus the deployer EOA — not to a Safe.
+It covers `MinterV0.cancelMint(bytes32)` (a guardian stop, reasonable to leave instant) and
+`OrderDelegate.transferToken(address,uint256)` / `transfer(uint256)` on `OrderDelegate` and on an
+**unverified contract** `0xdbef8322…20ef`. Both of those hold no tokens at the time of reading, so
+the current exposure is zero, but the capability is unilateral, undelayed and outside the Safe
+threshold. Role 41 (`LiquidationBatcher.batchLiquidate`) is likewise an undelayed single-EOA
+keeper role, rotated once on 2026-07-28.
+
+**Modelled surface vs governed surface.** The authority governs fourteen contracts. This model
+covers apxUSD, apyUSD, the unlock registry, vesting and yield distribution, and the deny list.
+It does **not** cover:
+
+| Governed, not modelled | What it is |
+|---|---|
+| `LiquidationBatcher` `0x4dB4D934…b732` | `batchLiquidate(...)`, an undelayed keeper role (41). The model has no liquidation mechanism at all |
+| Three further `CommitToken`s `0x17122d86…`, `0x55095f69…`, `0xdfc3cf7e…` | ERC-7540 async-redeem vaults. `UnlockToken` is one such instance and *is* modelled; these three are separate deployments |
+| `OrderDelegate` `0xcCa1AF4d…f7b8` and `0xdbEF8322…20ef` | Delegated signing / settlement helpers, holding the role-31 transfer powers above. The second is unverified |
+| `MinterV0` `0x2c36e1aD…a76e` | EIP-712 signed minting with a rate limit. The model abstracts mint authorization away (README §6.4 #11) |
+| `ApyxCollateralRatioOracle` / `ApyxRedemptionOracle` | The two-stage price pipeline; the model carries a single `redemptionValue` field |
+
+The first two rows are the ones that matter for scope: a liquidation path and three additional
+async-redemption vaults are live under the same keys the report reasons about, and no theorem here
+ranges over either.
+
+**Still unread.** Who the six owner EOAs are — all six are plain externally-owned accounts with no
+ENS name or public label, so the chain says nothing further. None is itself a multisig.
 
 *All state transitions are atomic and protected by the Checks‑Effects‑Interactions pattern; re‑entrancy guards are applied to every external call.*

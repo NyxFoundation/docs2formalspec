@@ -143,7 +143,10 @@ A–D は Apyx の保証レベルを上げる作業、E は外部提案の取り
   - ただし**迂回はできない** — `getRoleGrantDelay` が全運用ロール(0/21/22/23/24/25)で **7日**なので、無遅延の新規保有者を作れない。セレクタを role 21 に付け替える経路も collateral oracle の `getTargetAdminDelay` = **3日**、遅延短縮は `minSetback` **5日**。**無遅延の価格書き込みに至る最短経路で約3日の公開猶予**がある = `timelock_escape_guarantee` が形式化している escape window がデプロイに存在し、しかも定量化できた。
   - キュー: `expiration()` は7日。累計896件中 執行169・取消5、残りはほぼ期限切れ。読み取り時点で生きているのは4件で全て housekeeping(`pushRound(int256,uint80)` を role 22 へ、`setUpstreamOracle` を role 24 へ、`MinterV0.setRateLimit(1e24, 86400)`、および既に反映済の実装への `upgradeToAndCall`)。
   - なお `pushRound(int256,uint80)` / `setUpstreamOracle` / `clearOverride` は現時点で **role 0(admin・無遅延)**のまま。上記キューはそれを塞ぐ方向の変更。
-- [ ] 残: Safe 6署名者の実体(外部関係者が含まれるか)。
+- [x] Safe 6署名者は**全員が素の EOA**(ENS なし・public tag なし・いずれも multisig ではない)。チェーンからはこれ以上分からないので、実体の確認は実装側の質問として残る。
+- [x] **個人 EOA が無遅延の権限を2つ持っている**ことを確認。role 31(付与遅延0・実行遅延0)は Safe ではなく**署名者6名のうち5名 + デプロイヤ EOA に個別付与**されていて、`MinterV0.cancelMint`(ガーディアン停止、即時で妥当)と `OrderDelegate.transferToken` / `transfer`(`OrderDelegate` と**未検証コントラクト** `0xdbEF8322…20ef` 上)を覆う。読み取り時点で両者の残高は0なので現エクスポージャはゼロだが、能力としては Safe 閾値の外側で単独・無遅延。role 41(`batchLiquidate`)も同型の単独 keeper。
+- [x] **統治対象とモデル対象のズレを確定**。authority が統治する14コントラクトのうち、モデルが覆っていないのは `LiquidationBatcher`(清算機構そのものがモデルに無い)、`UnlockToken` 以外の **`CommitToken` 3インスタンス**、`OrderDelegate` と未検証の `0xdbEF8322…`、`MinterV0`、2段の価格パイプライン。前2者はスコープとして効く — **同じ鍵の下で清算経路と追加の非同期償還 vault が動いているのに、こちらの定理はどちらにも及んでいない**。`README.md` §6.4 に #18 として追加。
+- [ ] 次段: Step-0 プロファイルを**ドキュメントだけでなくオンチェーンの authority グラフから**起こす手順にする(F の自動化に組み込む)。
 - [x] 判明した対応関係は `model.md` §5 に表としてまとめた。償還が `ROLE_REDEEMER` ゲートであること、`redeem` に `minReserveAssetOut` があるので**ユーザー起点の経路は `redemption_has_no_floor` が示すより実際はマシ**であること(RFQ のようにユーザーが実行しない経路には効かない)、decimal スケーリングが未モデル化であることも記載。
 
 ### D. 報告の正確さ(Phase 9)
