@@ -258,6 +258,42 @@ design is correct on this point.**
 
 ---
 
+### 4.4 The other async-redemption vault (8 theorems, [`CommitToken.lean`](CommitToken.lean))
+
+Added after reading the deployed authority graph, which turned up a second async-redemption vault
+holding 250× what the modelled unlock path holds (§6.4 #18). `CommitToken` "CT-apxUSD"
+(`0x17122d86…871e`) is the contract `UnlockToken` subclasses; live parameters at the time of
+reading are a **14-day** `unlockingDelay`, a `1e26` supply cap, and 1:1 assets↔shares.
+
+This is also the first time `docs/06` §7's async family is instantiated against a **real** target
+rather than the fictional `AsyncQueueVault` reference, and it needs the clock to say anything at
+all.
+
+Three properties hold and are worth having: `cycle_closes_after_the_live_delay` (request, wait the
+deployed 14 days, claim — in one trace), `claim_conserves` (a claim burns exactly what it pays),
+and `commitment_is_bounded_by_balance` (a holder can never be committed to more than they hold).
+
+Three describe behaviour a holder should know about, none of which violates anything the code
+promises:
+
+- **`topup_restarts_the_whole_cooldown`** — `_requestRedeem` does `request.shares += shares;
+  request.requestedAt = block.timestamp`, with no tranches. Adding one unit to a request that has
+  already served its 14 days makes the **entire** position unclaimable for another 14.
+- **`no_partial_claim`** — `redeem` reverts unless the amount equals the request exactly. Composed
+  with the above, a position can only be exited whole, so a holder who tops up cannot take out the
+  part that had matured.
+- **`raising_the_delay_unclaims_pending_requests`** — `_cooldownRemaining` reads `unlockingDelay`
+  from storage rather than snapshotting it at request time, so lengthening it pushes out every
+  outstanding request, including ones claimable a moment earlier. Bounded by governance rather
+  than by the contract: `setUnlockingDelay` is role 24 on-chain, a 3-day scheduled operation
+  ([`model.md`](model.md) §6).
+
+`request_does_not_escrow` records the ERC-7540 deviation the contract's own docstring names —
+shares stay on the owner's balance between request and claim — and pairs it with the arithmetic
+check that makes that safe.
+
+---
+
 ## 5. Design recommendations for Apyx
 
 These follow directly from the proofs above. Items 1–3 are the defenses whose *absence* is the reason the
@@ -450,6 +486,7 @@ axioms of Lean's logic; none is an unproved assumption. Compile status is record
 | [`BlastRadius.lean`](BlastRadius.lean) | The 56 key-compromise blast-radius proofs and the defense wrappers |
 | [`Safety.lean`](Safety.lean) | The 30 design-safety proofs |
 | [`SpecDefects.lean`](SpecDefects.lean) | The spec-consistency and parameter-bound gap-witness proofs (§9) |
+| [`CommitToken.lean`](CommitToken.lean) | The deployed `CommitToken` "CT-apxUSD" async-redemption vault — 8 proofs (§4.4) |
 | [`leancheck.json`](leancheck.json) | Build status: requirement theorems, `sorry` count, vacuous count |
 | [`corpus.md`](corpus.md) | The raw ingested source documentation |
 

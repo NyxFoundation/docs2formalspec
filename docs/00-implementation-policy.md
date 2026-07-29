@@ -149,7 +149,10 @@ A–D は Apyx の保証レベルを上げる作業、E は外部提案の取り
   - **モデル化している unlock 経路(`UnlockToken`)の残高は 24,936 apxUSD。同じ authority 配下に、構造が同一の `CommitToken` "CT-apxUSD" があり、そちらは 6,226,697 apxUSD = 供給の1.90%、250倍。** 時計の導入で開いた非同期償還の議論は、2桁半小さいほうのインスタンスに向いていた。証明の誤りではなく Step-0 のスコープ誤り。`README.md` §6.4 #18 を書き直した。
   - `LiquidationBatcher` は**前回の書き方が過大だった**。ソースを読むと **Morpho Blue** に対する清算バッチャーで、Apyx 内部の清算機構ではない(Apyx に口座別担保ポジションが無いので、そもそも欠けている内部機構は存在しない)。市場 allowlist はコンストラクタ固定で setter 無し、`withdrawTokens` は宛先引数を取らず不変の `WITHDRAW_DESTINATION`(運用 Safe)固定、pausable でも upgradeable でもない。**無遅延の role 41 keeper は構成によって「どの市場を清算できるか」「収益がどこへ行くか」の両方を縛られている**。README §6.4 #2(クロスプロトコル合成)の管轄で、設定としてはむしろ堅い。
 - [ ] 次段: Step-0 プロファイルを**ドキュメントだけでなくオンチェーンの authority グラフから**起こす手順にする(F の自動化に組み込む)。今回のスコープ誤りはこれが無かったことに起因する。
-- [ ] 次段: 非同期償還族(docs/06 §7)を **CT-apxUSD** に対してインスタンス化する。時計は入ったので表現力は足りている。
+- [x] **非同期償還族を CT-apxUSD に対してインスタンス化した** — `outputs/apyx/CommitToken.lean`(8定理・`lake build` 緑・`sorry` 0・公理は `propext`/`Quot.sound`)。`docs/06` §7 が「実プロトコルの worked reference は一つも無い」としていた状態を解消。
+  - 成立するもの: `cycle_closes_after_the_live_delay`(実デプロイの14日を待って claim が同一トレースで成立)/ `claim_conserves`(焼いた分ちょうどを払う)/ `commitment_is_bounded_by_balance`(保有以上にコミットできない)。
+  - 保有者が知っておくべき挙動3件(いずれもコードの約束には違反しない): **`topup_restarts_the_whole_cooldown`**(トランシェが無く `requestedAt` を丸ごと上書きするので、14日経過済みの請求に1単位足すと全額がもう14日ロックされる)/ **`no_partial_claim`**(`redeem` は完全一致のみ。上と合成すると、積み増した保有者は満期済み部分だけ引き出すことができない)/ **`raising_the_delay_unclaims_pending_requests`**(`_cooldownRemaining` が storage の現在値を読むため、遅延の延長が**未決済の請求すべてに遡及**する。`setUnlockingDelay` は role 24 = 3日の予約実行なので、契約ではなくガバナンスで縛られている)。
+  - `request_does_not_escrow` はコントラクト自身が docstring で挙げている ERC-7540 逸脱(請求してもシェアは owner の残高に残る)を記録し、それを安全にしている算術チェックと対にした。
 - [x] 判明した対応関係は `model.md` §5 に表としてまとめた。償還が `ROLE_REDEEMER` ゲートであること、`redeem` に `minReserveAssetOut` があるので**ユーザー起点の経路は `redemption_has_no_floor` が示すより実際はマシ**であること(RFQ のようにユーザーが実行しない経路には効かない)、decimal スケーリングが未モデル化であることも記載。
 
 ### D. 報告の正確さ(Phase 9)
