@@ -1464,4 +1464,52 @@ theorem exchange_rate_monotone_creditYield (s : State) (amount : Nat) (caller : 
   unfold computeExchangeRate
   rw [hTA, hsupply]
 
+/-! ## Reachability of the hypotheses
+
+A theorem carrying a hypothesis is only as strong as the set of states that satisfy it. Where
+that set is empty along every trace, the theorem is decoration — and a report citing it says
+more than the model proved. This section discharges that question for the time-dependent
+requirements by *reaching* the states they assume, rather than supposing them.
+
+None of this was possible before `Op.tick`: `now` was constant along every trace, so the
+maturity windows these requirements are about were unreachable and their hypotheses could only
+ever be supplied by hand. -/
+
+private def feeWitness : State :=
+  { (default : State) with
+      globalPause := false
+      nextUnlockId := 0
+      totalSupply_apxUSD := 10000
+      apxUSDBal := fun a => if a = 0 then 10000 else 0 }
+
+private def flexRun (wait : Nat) : List (Op × Address) :=
+  [(Op.flexibleRequestUnlock 10000, 0), (Op.tick wait, 0), (Op.flexibleClaimUnlock 0, 0)]
+
+/-- **The early-unlock fee schedule fires, and its decline is realized along traces.**
+
+`req_early_unlock_fee_linear_decline` is a statement about `flexibleUnlockFee` as a function —
+antitone, floored at 10 bps, capped at 350. It says nothing on its own about whether the
+protocol ever applies it, because a lemma about a helper is not a property of the system.
+
+Here the schedule is exercised end to end. The holder files a flexible unlock of 10000 apxUSD,
+waits, and claims; the fee charged is exactly what the schedule prescribes for the elapsed time,
+and waiting longer strictly increases what the holder keeps:
+
+| wait | fee (bps) | apxUSD returned |
+|---|---|---|
+| 3 days (the minimum) | 299 | 9701 |
+| 10 days | 180 | 9820 |
+| 20 days (full cooldown) | 10 | 9990 |
+
+The 3-day row is also the reachability witness for `req_unlock_claimable_after_3d`, whose
+hypothesis posits a request filed `minFlexibleClaim` in the past — a state no trace could
+produce before the clock existed. -/
+theorem flexible_fee_schedule_is_reachable :
+    (execTrace feeWitness (flexRun (3 * day))).apxUSDBal 0 = 9701 ∧
+    (execTrace feeWitness (flexRun (10 * day))).apxUSDBal 0 = 9820 ∧
+    (execTrace feeWitness (flexRun (20 * day))).apxUSDBal 0 = 9990 := by
+  refine ⟨?_, ?_, ?_⟩ <;>
+    simp [flexRun, execTrace, step, feeWitness, createFlexibleUnlock, burnApxUSD,
+          mintApxUSD, burnUnlockNFT, flexibleUnlockFee, minFlexibleClaim, cooldownPeriod, day]
+
 end Apyx

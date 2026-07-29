@@ -295,6 +295,46 @@ guarantee is cited.
 
 Reported honestly so the boundary of these guarantees is clear.
 
+### 6.0 How to read a theorem count — quantifier scope, and what the model can refute
+
+Two questions decide what a machine-checked theorem is worth, and neither is answered by the
+count. **Over what does it quantify?** and **could the model have exhibited its failure?**
+
+**Quantifier scope.** **22 theorems quantify over an arbitrary operation sequence**
+(`execTrace`) — 4 in [`Safety.lean`](Safety.lean), 18 in
+[`BlastRadius.lean`](BlastRadius.lean). Those are the ones that rule out multi-step attacks.
+Every other theorem, **including all 82 requirement-conformance theorems**, is single-step: it
+says what one operation does from an arbitrary state satisfying its hypotheses. That is the
+right shape for most requirements — "`depositUSDC` mints apxUSD" is a single-step claim — but a
+single-step theorem cannot exclude a sequence, and citing one as if it could overstates it.
+Anywhere this report says "no operation can …" the statement is exhaustive over `Op` at one
+step; anywhere it says "no trace can …", it is the stronger claim.
+
+**Refutability.** A theorem is bounded above by whether its state space can express the failure
+it denies. This model has three known blind spots of that kind, all recorded below and in
+[`model.md`](model.md) §5:
+
+| The model cannot express | So these say less than they appear to |
+|---|---|
+| **Negative net value** — every balance is `Nat`, and `x - y` truncates at 0 | Any "never underwater" reading of `solvency_preserved` / `req_overcollateralization_limit`. Insolvency is not false here, it is unrepresentable |
+| **Per-holder totals** — the ledger is `Address → Nat` with no `Σ` | §6.2; the aggregate conservation clause of the backstop |
+| **A second, independent price** — one `redemptionValue`, where the deployment has a redemption price and a Curve-facing oracle price with nothing tying them together | Divergence between the two. See item #17 in §6.4 |
+
+Two blind spots that **used to be here and no longer are**, recorded because they show the cost
+of not asking this question: until `Op.tick` existed no trace advanced `now`, so every
+cooldown, vesting and settlement-timing requirement was stated about hand-supplied states; and
+until `updateRedemptionValue` wrote anything, `catastrophicBackstop` was the only writer of
+`redemptionValue`, which is the sole reason the worst coalition in §4.1 reads as needing two
+keys. Neither was a wrong theorem. Both were questions the model could not be asked.
+
+**Reachability is now carried, not assumed.** `flexible_fee_schedule_is_reachable` reaches the
+matured states the fee requirements assume — file, wait, claim — and pins the fee actually
+charged at 299 bps after 3 days, 180 after 10, 10 after the full cooldown.
+`redemption_cycle_closes_after_cooldown` does the same for the standard unlock. Their
+counterpart `req_redemption_async_process` proves only that an *immediate* claim reverts; the
+positive half is a **liveness** property, and liveness in general stays out of scope — nothing
+here forces any party to act (§6.3).
+
 ### 6.1 Off-chain or UI behavior (not attempted)
 Five requirements describe processes outside on-chain state and were flagged as such at extraction:
 treasury capital allocation (`offchain-allocation`), third-party custody attestations (`custody-attestation`),

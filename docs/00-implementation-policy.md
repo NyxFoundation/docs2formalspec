@@ -124,11 +124,11 @@ A–D は Apyx の保証レベルを上げる作業、E は外部提案の取り
 
 定理が通っていることと、**そのモデルが問題を表現できること**は別。後者が報告に出ていない。
 
-- [ ] `outputs/<name>/README.md` に「単発 `step` についての保証」と「トレース上の保証」の書き分けを入れる。Apyx では要件適合82本すべてが single-step、トレース級は `Safety.lean` 4 / `BlastRadius.lean` 17。
-- [ ] 仮説を持つ定理には、その仮説を満たす状態に到達するトレースを併記する(到達可能性を成果物にする)。現状 `req_unlock_claimable_after_3d` は `requestTime = now - minFlexibleClaim` という、どの操作列でも作れない状態を仮定している。
-- [ ] 「このモデルが反証できないこと」の一覧を README に置く — 時計なし / 符号なし台帳 / 集約台帳 / 単一価格 / oracle stub と、それぞれが何を述べられなくしているか。定理リストは「何を証明したか」に答えるが「何を反証できたか」に答えていない。
-- [ ] 補助関数についての補題を系の保証として数えない。`req_early_unlock_fee_linear_decline` は `flexibleUnlockFee` 単体の算術定理で、`step` に接続されていない。
-- [ ] 非同期償還の完了側(request → claim のサイクルが閉じること)は liveness なので本枠組みの対象外である旨を明記する。`req_redemption_async_process` が証明しているのは「即時 claim が必ず落ちる」= クールダウンの強制であって、サイクルの完了ではない。
+- [x] `outputs/apyx/README.md` に §6.0 を新設。量化のスコープ(トレース級は22本 — `Safety.lean` 4 / `BlastRadius.lean` 18。要件適合82本を含む残りは single-step)と、モデルが反証できないことの一覧を記載。
+- [x] 到達可能性を成果物にした。`flexible_fee_schedule_is_reachable`(申請 → `tick` → claim で、3日待ちなら手数料299bps・10日で180・20日で10、返却額はそれぞれ 9701 / 9820 / 9990)が `req_unlock_claimable_after_3d` の仮定を実際に到達させている。標準 unlock 側は `redemption_cycle_closes_after_cooldown`。
+- [x] README §6.0 に「反証できないこと」の表を設置(符号なし台帳 / 集約台帳 / 単一価格)。加えて**解消済みの2件**(時計なし・oracle stub)も、この問いを立てなかったコストの実例として明記した。
+- [x] `req_early_unlock_fee_linear_decline` が `flexibleUnlockFee` 単体の算術定理である点を明記し、系として発火することを `flexible_fee_schedule_is_reachable` で別途証明した。
+- [x] `req_redemption_async_process` が証明しているのは「即時 claim が必ず落ちる」= クールダウンの強制であって、サイクルの完了ではない旨を README §6.0 に明記。完了側は liveness で、誰にも行動を強制しない本枠組みの対象外(§6.3)。ただし到達可能性は上記2本で示した。
 
 ### E. PR #3(async / per-account の2族)の取り込み
 
