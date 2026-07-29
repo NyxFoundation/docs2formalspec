@@ -199,12 +199,26 @@ Supporting theorems include the exact per-role effect frames (`admin_frame`, `or
 `governance_token_balances_immutable`, `no_role_seizes_unlock_position`), and the extraction-channel
 characterizations (`redemption_price_writers`, `reserve_outflow_only_via_redemption`).
 
-**The one total-loss path is a two-key coalition** (`admin_rfq_coalition_drains`): the admin drives the
-redemption value to 0 via `catastrophicBackstop` (which has no lower bound in the model), after which an
-approved RFQ counterparty's `executeRFQRedemption` burns a victim's apxUSD for **0 USDC**. The redemption
-payout is exactly `amount × redemptionValue / ray` with no cap on `redemptionValue`
+**In this model the one total-loss path is a two-key coalition** (`admin_rfq_coalition_drains`): the admin
+drives the redemption value to 0 via `catastrophicBackstop` (which has no lower bound in the model), after
+which an approved RFQ counterparty's `executeRFQRedemption` burns a victim's apxUSD for **0 USDC**. The
+redemption payout is exactly `amount × redemptionValue / ray` with no cap on `redemptionValue`
 (`redeem_payout_formula`, `redeem_payout_has_no_cap`) — so the loss is unbounded. This directly motivates
 the recommendations in §5.
+
+**Two carve-outs on the word "one".** Both are limits of the model, not bounds on the adversary, and both
+are recorded in [`model.md`](model.md) §5:
+
+- **The counterparty does not need the admin key, only the clock.** `rfq_payout_is_set_by_execution_timing`
+  runs the same user, the same 100-apxUSD request and the same counterparty twice: settled immediately the
+  user is paid 100, settled after one *honest* price update the user is paid 50. Both traces are permitted,
+  both consume the request, and the counterparty picks — with no emergency and no compromised admin. Until
+  the model had a clock and a working `updateRedemptionValue` this was not expressible, which is the only
+  reason `admin_rfq_coalition_drains` reads as needing two keys.
+- **The deployed reserve has an admin exit this model does not carry.** `RedemptionPoolV0.withdraw` and
+  `withdrawTokens` are `ADMIN_ROLE` and move any ERC-20 — the reserve asset included — out of the pool with
+  no redemption at all. `reserve_outflow_only_via_redemption` is a theorem about this model; it does not
+  carry to that pool while the operation is absent from `Op`.
 
 ### 4.2 Design safety — honest-actor attacks (30 theorems, [`Safety.lean`](Safety.lean))
 
@@ -336,6 +350,8 @@ Halmos, hevm; **Fuzz** = Echidna, Medusa, Foundry invariant; **Config** = role-g
 | 13 | **Gas / DoS** — e.g. `MinterV0`'s `mintHistory` `DoubleEndedQueue` growth and any unbounded loops | Model has no gas metering or loop cost | Static + gas profiling + Fuzz |
 | 14 | **Cross-chain** — `BridgedApyxToken` / `CCIPBridge` in the repo | Out of the single-chain state machine entirely | Separate bridge audit |
 | 15 | **Off-chain processes** — USD collection & the mint/redeem **spread** (`price-may-include-spreads`, applied off-chain — §6.3), treasury custody, attestations, and the oracle **price-setting process** feeding `setRate` | Not on-chain state | Operational / process audit |
+| 16 | **Privileged reserve withdrawal** — `RedemptionPoolV0.withdraw` / `withdrawTokens` (`ADMIN_ROLE`) move the reserve asset out of the pool without any redemption | No corresponding `Op`, so `reserve_outflow_only_via_redemption` does not range over it | Config review (who holds `ADMIN_ROLE`, with what delay) + adding the op to the model (`docs/00` §C) |
+| 17 | **Redemption-price source** — `RedemptionPoolV0.exchangeRate` (what a redeemer is paid) and `ApxUSDRateOracle.rate` (what the Curve pool reads) are two independent unbounded values with nothing tying them together | The model carries a single `redemptionValue`; the second price has no consumer inside the modeled system | SMT/Fuzz across the pool boundary + Config review |
 
 **Priority within this list:** #3 (bytecode⊨model) and #7 (real-vault inflation defense) are the highest-value
 SMT targets — they directly re-check, at the implementation level, the two guarantees this report proves

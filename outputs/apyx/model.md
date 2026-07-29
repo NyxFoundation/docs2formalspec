@@ -26,7 +26,7 @@
 |----------|------|---------|
 | `totalSupply_apxUSD` | `uint256` | Total minted apxUSD (1 apxUSD ≈ $1). |
 | `totalSupply_apyUSD` | `uint256` | Total minted apyUSD shares. |
-| `redemptionValue` | `uint256` (ray, 1e27) | Per-apxUSD redemption price in USDC (`1e27` = $1.00); redeeming `amount` apxUSD pays `amount·redemptionValue/1e27` USDC. Matches the deployed `ApxUSDRateOracle.rate` (per-unit, with a `>0` guard on-chain). |
+| `redemptionValue` | `uint256` (ray, 1e27) | Per-apxUSD redemption price in USDC (`1e27` = $1.00); redeeming `amount` apxUSD pays `amount·redemptionValue/1e27` USDC. Corresponds to **`RedemptionPoolV0.exchangeRate`** — the value that actually prices a redemption (`previewRedeem = assetsAmount·exchangeRate/1e18/10^|assetDec−reserveDec|`). **Scale differs**: the contract is `1e18`, the model is `ray = 1e27`; only the dimension (per-unit, not aggregate) is shared. Not `ApxUSDRateOracle.rate` — see §5. |
 | `totalCollateralValue` | `uint256` | Full value of the reserve (collateral basket + buffer). |
 | `overcollateralizationBuffer` (derived) | `uint256` | `max(0, totalCollateralValue − totalSupply_apxUSD·redemptionValue/1e27)` — the excess of collateral over the outstanding redemption obligation. |
 | `exchangeRate` | `uint256` (ray, 1e27) | apyUSD → apxUSD conversion factor (≥ 1e27). |
@@ -70,7 +70,7 @@
 | **setVestPeriod** | `p` | `msg.sender == admin` | Accrue already-vested first (`fullyVestedAmount += newlyVested`), rebase `vestTotal := unvested`, reset `vestStart := now`, then `vestPeriod = p` — same preservation as creditYield (REQ‑credit‑preserves‑accrued‑vest). |
 | **voteBufferDeployment** | – | `msg.sender` holds governance tokens ≥ threshold | If the vote reaches the threshold, set `bufferDeployed = true` (governs intermediate-risk buffer deployment). |
 | **executeRFQRedemption** | `user`, `amount` | `!globalPause` ∧ `msg.sender` ∈ approved RFQ counterparties ∧ `balanceOf_apxUSD(user) ≥ amount` ∧ `usdcReserve ≥ amount·redemptionValue/1e27` | Burn `amount` apxUSD from `user`; `usdcReserve -= amount·redemptionValue/1e27`; transfer that USDC to `user`. |
-| **updateRedemptionValue** | – | `msg.sender == oracle` | Placeholder in the model (a no-op re-read of the oracle). On-chain the redemption price is the `ApxUSDRateOracle.rate`, set by admin `setRate` (guarded `newRate > 0`). |
+| **updateRedemptionValue** | `newValue` | `msg.sender == oracle` ∧ `newValue ≠ 0` | `redemptionValue = newValue`. Corresponds to **`RedemptionPoolV0.setExchangeRate`**, whose only guard is `newRate != 0` — no cap, no floor, no bounded per-update move, no cadence, no side effect on any other field. **Role caveat**: on-chain that selector is assigned to `ADMIN_ROLE` (`Roles.assignAdminTargetsFor`), not to a separate oracle role; the model still gates it on `oracle`. See §5. |
 | **handleStressEvent** | `amount` | `msg.sender == admin` | Models an exogenous collateral loss: `totalCollateralValue -= amount`; set `emergencyFlag = true`. (The buffer is the shock absorber, so this can reduce it — distinct from routine redemptions, which never consume the buffer.) |
 | **catastrophicBackstop** | – | `msg.sender == admin` ∧ `emergencyFlag == true` (the governance emergency flag must already be up — raised by the stress pathway `handleStressEvent`; the backstop does not raise it for itself) | `redemptionValue = totalCollateralValue·1e27 / totalSupply_apxUSD` (**per-unit**, matching `ApxUSDRateOracle`, so redeeming the whole supply distributes the full reserve — buffer included — pro-rata to holders, crediting each `a` with `usdcReserve·apxUSDBal(a)/totalSupply_apxUSD`); `usdcReserve = 0`. Drives `overcollateralizationBuffer` to 0. |
 
@@ -88,5 +88,50 @@
 * **Monthly yield-rate cadence**: `setYieldRate` succeeds at most once per 30-day period, and the accepted rate is bounded by the previous period's recorded collateral-base yield.  
 
 ---  
+
+---
+
+### 5. Implementation correspondence — where this model and `apyx-labs/evm-contracts` differ
+
+Recorded after re-reading the Solidity. Everything here is a **mapping fact**, not a finding;
+the findings that follow from it live in `README.md` §9 and in `docs/00`'s TODO.
+
+**Two independent, unbounded prices exist on-chain; this model carries one.**
+
+| On-chain | Scale | Setter / guard | Who reads it |
+|---|---|---|---|
+| `RedemptionPoolV0.exchangeRate` | `1e18` | `setExchangeRate`, guard `newRate != 0`, `ADMIN_ROLE` | `previewRedeem` / `redeem` — this is what a redeemer is paid |
+| `ApxUSDRateOracle.rate` | `1e18` | `setRate`, guard `newRate != 0`, `restricted` | The Curve Stableswap-NG pool, via `staticcall rate()`. **No consumer under `src/`** |
+
+The model's `redemptionValue` is the first. The second is out of scope: nothing in the modeled
+system reads it, so adding an inert second field would not buy a theorem. What *is* unmodelled
+is the **divergence** between the two — a redemption price and a pool price that no invariant
+ties together — and that surface belongs to the Curve pool, outside this state machine.
+
+**Other differences, all in the direction of the model being narrower than the implementation:**
+
+- **Redemption is permissioned on-chain.** `RedemptionPoolV0.redeem` carries `ROLE_REDEEMER`
+  (`Roles.assignRedeemerTargetsFor`). `Op.redeemApxUSD` is gated on whitelist membership instead.
+- **The model has no slippage floor.** `redeem` takes `minReserveAssetOut` and reverts on
+  `SlippageExceeded`, so a *user-initiated* redemption can bound its own downside. The witness
+  `redemption_has_no_floor` is therefore sharper than the deployed user path — it stays accurate
+  for paths the user does not execute, i.e. RFQ settlement.
+- **The reserve has an admin exit the model does not carry.** `RedemptionPoolV0.withdraw` and
+  `withdrawTokens` are `ADMIN_ROLE` and move any ERC-20 — including the reserve asset — out of
+  the pool with no redemption involved. `reserve_outflow_only_via_redemption` and the
+  "one total-loss path is a two-key coalition" headline are statements about *this model*, and
+  do not carry to the deployed pool while that op is absent. Adding it is an open decision
+  (`docs/00`, section C).
+- **No decimal scaling.** `previewRedeem` divides by `10^|assetDecimals − reserveDecimals|`;
+  the model treats apxUSD and USDC as commensurate.
+- **`ApxUSDRateOracle` is UUPS.** `_authorizeUpgrade` is `restricted`, so implementation
+  replacement is a strictly stronger authority than `setRate`. Out of scope per `README.md` §12.
+
+**Not verified.** Whether `RedemptionPoolV0` is deployed and is the live redemption path (the
+addresses published in `README.md` are apxUSD / apyUSD / UnlockToken only), and what the live
+`AccessManager` grants actually are — `Roles.sol` is the setup library, not a snapshot of chain
+state. Both are open questions for the implementation side.
+
+---
 
 *All state transitions are atomic and protected by the Checks‑Effects‑Interactions pattern; re‑entrancy guards are applied to every external call.*

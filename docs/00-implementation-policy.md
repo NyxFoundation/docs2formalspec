@@ -111,11 +111,14 @@ A–D は Apyx の保証レベルを上げる作業、E は外部提案の取り
 
 `apyx-labs/evm-contracts` を読み直したところ、`model.md` の対応付けに誤りがある。
 
-- [ ] `model.md` L29 / L73 — `redemptionValue` の対応先は `ApxUSDRateOracle.rate` ではない。同 oracle は docstring どおり Curve Stableswap-NG 向けで、`src/` 配下に消費者がいない。償還の支払額を決めているのは `RedemptionPoolV0.exchangeRate`(`previewRedeem = assetsAmount * exchangeRate / 1e18 / decimalScalingFactor`、setter は `setExchangeRate`)。
-- [ ] スケールの記述を直す。実装は `ApxUSDRateOracle.rate` / `RedemptionPoolV0.exchangeRate` とも **1e18**、モデルは `ray = 1e27`。次元(per-unit)は一致するがスケールは一致しないので、「Matches the deployed ...」は書き換える。
-- [ ] オンチェーンには境界の無い価格が**2本**ある(Curve 向け `oracle.rate` / 償還向け `pool.exchangeRate`)。モデルは1本にまとめているので、2本が乖離したときの抽出面が表現できない。モデルを2本に割るか判断する。
-- [ ] `RedemptionPoolV0.withdrawTokens` が reserve を含む任意の ERC20 を `restricted` 一発で引き出せる。`outputs/apyx/README.md` の「total-loss path は admin + RFQ counterparty の2鍵」を見直す。モデルの op として起こすかも判断する(起こすと blast-radius の結論が変わる)。
-- [ ] 実装側に確認 — AccessManager のロール設定(`restricted` の実鍵数。外部のリスク評価では 4-of-6 Safe)/ `RedemptionPoolV0` がデプロイ済みで現行の償還経路か / `ApxUSDRateOracle` は UUPS で `_authorizeUpgrade` も `restricted`(実装差し替えは `setRate` より強い権限。`outputs/apyx/README.md` §12 で対象外扱いのままでよいか)。
+- [x] `model.md` L29 / L73 を修正済。`redemptionValue` の対応先を `RedemptionPoolV0.exchangeRate` に変更。`ApxUSDRateOracle` は Curve Stableswap-NG 向けで `src/` 配下に消費者がいないことも明記。
+- [x] スケールの記述を修正済。実装は両方 **1e18**、モデルは `ray = 1e27`。共有しているのは次元(per-unit、集計値ではない)だけである旨に書き換えた。
+- [x] 2本の価格については**モデルを割らない**と判断。`ApxUSDRateOracle.rate` を読む主体はモデル化した系の中に存在しない(Curve プールが `staticcall rate()` で読む)ので、フィールドを足しても定理が1本も増えない。未モデル化なのは2本の**乖離**のほうで、そちらはプール境界の外側。`model.md` §5 と `README.md` §12 の #17 に記載。
+- [x] `README.md` の「total-loss path は2鍵」に carve-out を2つ付記済。(1) カウンターパーティは admin 鍵ではなく時計だけあれば足りる(`rfq_payout_is_set_by_execution_timing`)、(2) `RedemptionPoolV0.withdraw` / `withdrawTokens` は `ADMIN_ROLE` で、償還を経ずに reserve を抜ける。`README.md` §12 の対象外リストに #16 として追加。
+- [ ] **未決**: 特権 reserve 引き出しを `Op` として起こすか。起こすと `reserve_outflow_only_via_redemption` が偽になり、blast-radius の headline が「2鍵の結託」から「admin 単独」に変わる。`Roles.sol` が `withdrawTokens` を `ADMIN_ROLE` に割り当てているのは確認済だが、`RedemptionPoolV0` がライブ経路かは未確認なので、そこが取れてから判断する。
+- [ ] **未決**: `updateRedemptionValue` のロール対応。`Roles.assignAdminTargetsFor` は `setExchangeRate` を **`ADMIN_ROLE`** に割り当てており、モデルの `oracle` ゲートは実装と一致していない。`oracle` → `admin` に寄せると `redemption_price_writers` が「admin が2経路持つ」に畳まれる。ライブの `AccessManager` 設定を確認してから決める。
+- [ ] 実装側に確認 — ライブの AccessManager が各セレクタに実際に何を割り当てているか、および遅延値(`Roles.sol` はセットアップ用ライブラリであってチェーン状態のスナップショットではない。外部のリスク評価では admin は 4-of-6 Safe)/ `RedemptionPoolV0` がデプロイ済みで現行の償還経路か(`README.md` に載っている公開アドレスは apxUSD / apyUSD / UnlockToken の3つだけ)/ `ApxUSDRateOracle` の UUPS `_authorizeUpgrade`(実装差し替えは `setRate` より強い権限。`README.md` §12 #12 で対象外扱いのままでよいか)。
+- [x] 判明した対応関係は `model.md` §5 に表としてまとめた。償還が `ROLE_REDEEMER` ゲートであること、`redeem` に `minReserveAssetOut` があるので**ユーザー起点の経路は `redemption_has_no_floor` が示すより実際はマシ**であること(RFQ のようにユーザーが実行しない経路には効かない)、decimal スケーリングが未モデル化であることも記載。
 
 ### D. 報告の正確さ(Phase 9)
 
