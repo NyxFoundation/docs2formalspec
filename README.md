@@ -157,7 +157,10 @@ uv run pytest              # unit tests for the Lean-file decl-splitting/rebuild
 ```
 
 The Lean project lives in `lean/` (mathlib-free, Lean 4.31 via `elan`) and is shared across every analyzed
-system — `lake build` after any `run`/`relean` compiles whatever's currently in `lean/D2fsSpecs/`.
+system — `lake build D2fsSpecs` after any `run`/`relean` compiles whatever's currently in `lean/D2fsSpecs/`.
+A bare `lake build` also compiles `TemplateExamples`, the compiled reference instances for the reusable
+proof templates in [`templates/`](templates/) (fictional models, no analyzed system — they exist so the
+templates keep a regression test).
 `lean/D2fsSpecs/<Name>.lean` is conventionally a symlink into `outputs/<name>/<Name>.lean` (see how
 `outputs/apyx/Apyx.lean` is wired up) so there is exactly one copy of each generated model, editable from
 either path, with `lake build` and the pipeline's own file-writing both resolving through the symlink

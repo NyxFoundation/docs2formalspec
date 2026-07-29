@@ -1,0 +1,1 @@
+../../templates/invariants/examples/CollateralizedDebt.lean

@@ -410,8 +410,13 @@ curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf 
 
 # 2. Build — elan reads lean-toolchain (Lean 4.31.0) and fetches it automatically
 cd lean
-lake build
+lake build D2fsSpecs
 ```
+
+`D2fsSpecs` is the library of analyzed systems; naming it explicitly compiles exactly the four
+Apyx modules below and nothing else. (A bare `lake build` additionally compiles
+`TemplateExamples`, a fictional model that regression-tests the reusable proof templates in
+`templates/`; it is unrelated to Apyx.)
 
 `lake build` exiting `0` with no `sorry` warnings **is** the proof-checking event: the Lean kernel
 re-verifies every theorem from source. Every theorem depends only on Lean's standard `propext` and

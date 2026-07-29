@@ -1,0 +1,1 @@
+../../templates/invariants/examples/AsyncQueueVault.lean
