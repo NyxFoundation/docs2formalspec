@@ -824,7 +824,8 @@ theorem admin_cannot_touch_balances (s : State) (op : Op) (caller : Address) (s'
     h_gated
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step;
             exact ⟨rfl, rfl, fun _ => Nat.le_add_right _ _, rfl, rfl, rfl, Nat.zero_le _⟩)
@@ -1088,7 +1089,8 @@ theorem no_role_transfers_user_funds (s : State) (op : Op) (caller : Address) (s
       simp [burnApxUSD, hau] at h_dec
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact absurd h_dec (Nat.lt_irrefl _))
         | exact absurd h_step (by simp)
@@ -1218,7 +1220,8 @@ theorem no_role_debits_usdc (s : State) (op : Op) (caller : Address) (s' : State
     exact absurd h_dec (Nat.not_lt.mpr (Nat.le_add_right _ _))
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact absurd h_dec (Nat.lt_irrefl _))
         | exact absurd h_step (by simp)
@@ -1277,7 +1280,8 @@ theorem governance_token_balances_immutable (s : State) (op : Op) (caller : Addr
     simp [burnApxUSD]
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; rfl)
         | exact absurd h_step (by simp)
@@ -1410,7 +1414,8 @@ theorem no_role_seizes_unlock_position (s : State) (op : Op) (caller : Address) 
     exact Or.inl ⟨by simpa [burnApxUSD] using h_live, by simp [burnApxUSD]⟩
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact Or.inl ⟨h_live, rfl⟩)
         | exact absurd h_step (by simp)
@@ -1546,7 +1551,8 @@ theorem redemption_price_admin_only (s : State) (op : Op) (caller : Address) (s'
     exact absurd (by simp [burnApxUSD]) h_changed
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact absurd rfl h_changed)
         | exact absurd h_step (by simp)
@@ -1640,7 +1646,8 @@ theorem reserve_outflow_only_via_redemption (s : State) (op : Op) (caller : Addr
     exact absurd h_dec (by simp [mintApxUSD, burnUnlockNFT])
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact absurd h_dec (by simp <;> omega))
         | exact absurd h_step (by simp)
@@ -1979,7 +1986,8 @@ theorem apxUSD_credit_is_backed (s : State) (op : Op) (caller : Address) (s' : S
     split at h_inc <;> omega
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact absurd h_inc (Nat.lt_irrefl _))
         | exact absurd h_step (by simp)

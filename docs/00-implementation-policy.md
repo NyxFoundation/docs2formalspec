@@ -85,12 +85,13 @@ A–D は Apyx の保証レベルを上げる作業、E は外部提案の取り
 
 現行モデルは `step`(`outputs/apyx/Apyx.lean:535–787`)の中で `now` を一度も更新しない。`State.now` は読まれるだけで、どのトレースでも時間が進まない。結果として **要件適合82本のうち32本が時計・期間の項を含むのに、時間が動く実行の上では1本も述べられていない**(82本すべて single-step、statement に `execTrace` を含むものは 0)。
 
-- [ ] `Op.tick` を追加(`now` のみを進め、値フィールドには触れない)。全op網羅の証明23箇所(`Apyx.lean` 13 / `Safety.lean` 3 / `BlastRadius.lean` 7)に枝が増えるが、`tick` は値を動かさないので大半は自明に閉じる。
-- [ ] statement が `now` に触れる全op網羅の6本を個別に確認 — `rounding_favors_protocol` / `no_role_seizes_unlock_position` / `apxUSD_credit_is_backed` / `unlock_position_created_only_by_vault_ops` / `req_singleton_unlock_token_instance` / `req_unlock_cannot_be_cancelled`。
+- [x] `Op.tick dt` を追加済(`now` を `dt` 進め、値フィールドには触れない。時間を待つのは特権行為ではないので permissionless)。**既存170定理は1本も書き換えずに通った** — 必要だったのは `tick` 枝にガードが無いことによる `split` 失敗の吸収18箇所(`(try split at h_step)`、`Apyx.lean` 8 / `BlastRadius.lean` 8 / `Safety.lean` 2)のみ。`sorry` 0、公理は `propext`/`Quot.sound`。
+- [x] statement が `now` に触れる全op網羅の6本(`rounding_favors_protocol` / `no_role_seizes_unlock_position` / `apxUSD_credit_is_backed` / `unlock_position_created_only_by_vault_ops` / `req_singleton_unlock_token_instance` / `req_unlock_cannot_be_cancelled`)は、いずれも無修正で通った。
 - [ ] **時計を1本に統一する**。`BlastRadius.lean` の `RLOp.advanceEpoch` / `TLOp.tick` は独立した時計なので、`epoch = now / epochLength` に導出して `advanceEpoch` を op から落とす。二重時計のままだと「100 epoch 経過したが `now` は不動」というトレースが書けてしまい、`rate_limit_linear_bound` の `cap × epochs` を経過時間(=1日あたりの被害)に翻訳できない。
   - 段階移行する場合は、両フィールドを残したまま `epoch * epochLength ≤ now < (epoch+1) * epochLength` を1本証明して drift を止め、リファクタは後追いにする。
 - [ ] `solvency_preserved` の `h_excl` から `claimUnlock` / `flexibleClaimUnlock` を外す。現状は `cooldownEnd = now + 20日` かつ `now` 不動のため request と claim が同一トレース内で両立せず、除外がほぼ無コストになっている。`tick` 後は同じ除外が主要な償還フローを外すことになる。`requestUnlock` 側は `requestUnlock_backs_claim_by_burn`(S8)が押さえているので、書き足すのは claim 側。**ここが本作業の実質的な工数。**
-- [ ] 移行後、既存のトレース級定理21本(`Safety.lean` 4 / `BlastRadius.lean` 17)のうち何本が無修正で通るかを測り、`outputs/apyx/README.md` に載せる。この数字が現在の保証の頑健性の指標になる。
+- [x] 測定完了 — 既存のトレース級定理21本(`Safety.lean` 4 / `BlastRadius.lean` 17)は**21本すべて無修正で通る**。`tick` が値フィールドを動かさないので、保存則・solvency・blast-radius はいずれも時間経過に対して不変だった。→ D で `outputs/apyx/README.md` に記載する。
+- [x] 時計が入って初めて述べられるようになったことの実例を1本追加 — `redemption_cycle_closes_after_cooldown`(request → `tick cooldownPeriod` → claim が同一トレースで成立)。`req_redemption_async_process` は「即時 claim が必ず落ちる」という否定側しか述べておらず、肯定側は時計が無い間は未証明ではなく**述べられなかった**。
 
 ### B. Apyx — `updateRedemptionValue` の実装
 

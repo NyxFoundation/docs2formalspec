@@ -531,9 +531,16 @@ inductive Op
   | catastrophicBackstop
   | setVestPeriod (p : Nat)
   | setApxUSDMarketPrice (price : Nat)
+  /-- E1 (the clock). Advances `now` by `dt` settlement-seconds and touches nothing else.
+      Permissionless on purpose: waiting is not a privileged action, so any caller may let
+      time pass. Without this op every trace is same-instant and no cooldown, vesting or
+      settlement-timing property can be *stated* over a trace, let alone proved. -/
+  | tick (dt : Nat)
 
 def step (s : State) (op : Op) (caller : Address) : Option State :=
   match op with
+  | Op.tick dt =>
+    some { s with now := s.now + dt }
   | Op.depositUSDC amount =>
     if s.globalPause then none
     else if ¬ s.whitelist caller then none
@@ -1280,7 +1287,8 @@ private theorem apyUSDBal_unchanged_of_non_share_op (s : State) (op : Op) (calle
     simp [burnApxUSD]
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; rfl)
         | exact absurd h_step (by simp)
@@ -1336,7 +1344,8 @@ private theorem step_unlockTokenOperator_unchanged (s : State) (op : Op) (caller
     simp [burnApxUSD]
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; rfl)
         | exact absurd h_step (by simp)
@@ -1392,7 +1401,8 @@ private theorem step_unlockTokenAddress_unchanged (s : State) (op : Op) (caller 
     simp [burnApxUSD]
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; rfl)
         | exact absurd h_step (by simp)
@@ -1456,6 +1466,26 @@ theorem req_redemption_async_process (s : State) (amount : Nat) (caller : Addres
     split
     · rfl
     · simp [hlt]
+
+/-- **The redemption cycle closes, once the clock exists.**
+
+`req_redemption_async_process` above proves only the negative half — an *immediate* claim
+reverts. Before `Op.tick` existed that was the whole story the model could tell: no operation
+advanced `now`, so along every trace `now` was constant, the maturity deadline
+`now + cooldownPeriod` was never reached, and "the request eventually becomes claimable" was
+not merely unproved but **unstateable**. This is the positive half: request, let the cooldown
+elapse, claim — all three inside one trace. -/
+theorem redemption_cycle_closes_after_cooldown (s : State) (amount : Nat) (caller : Address)
+    (h1 : s.globalPause = false) (h2 : amount ≤ s.apxUSDBal caller)
+    (h3 : s.unlockRequestId caller = none) :
+    ∃ s₁ s₂,
+      step s (Op.requestUnlock amount) caller = some s₁ ∧
+      step s₁ (Op.tick cooldownPeriod) caller = some s₂ ∧
+      step s₂ (Op.claimUnlock s.nextUnlockId) caller ≠ none := by
+  refine ⟨requestUnlockStep s caller amount, _, ?_, rfl, ?_⟩
+  · simp [step, h1, Nat.not_lt.mpr h2]
+  · simp only [step, requestUnlockStep, burnApxUSD, h3, createStandardUnlock]
+    simp [cooldownPeriod, day]
 
 /-- REQ redemption-cooldown-period: After a redemption request is submitted, the system
 MUST enforce a cooldown period of approximately 20 days before a claim can be executed.
@@ -1886,7 +1916,8 @@ private theorem unlock_position_created_only_by_vault_ops (s : State) (op : Op) 
     simp [burnApxUSD, h_new] at h_now
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; simp_all)
         | exact absurd h_step (by simp)
@@ -2322,7 +2353,8 @@ theorem req_overcollateralization_limit (s : State) (op : Op) (caller : Address)
     omega
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact h_inv)
         | (cases Option.some.inj h_step; dsimp only; omega)
@@ -3595,7 +3627,8 @@ private theorem vaultApxUSDBal_unchanged_of_non_vault_op (s : State) (op : Op) (
     simp [burnApxUSD]
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; rfl)
         | exact absurd h_step (by simp)
@@ -3740,7 +3773,8 @@ theorem req_unlock_cannot_be_cancelled (s : State) (op : Op) (caller : Address) 
     simp [burnApxUSD, h_live] at h_gone
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; simp_all)
         | exact absurd h_step (by simp)
@@ -3869,7 +3903,8 @@ theorem req_unlock_token_nontransferable (s : State) (op : Op) (caller : Address
       fun id owner h_own => Or.inl (by simpa [burnApxUSD] using h_own)⟩
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step;
            exact ⟨fun i hi => h_fresh i hi, fun id owner h_own => Or.inl h_own⟩)

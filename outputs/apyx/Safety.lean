@@ -463,7 +463,8 @@ private theorem penniless_step (s : State) (op : Op) (caller : Address) (s' : St
     · exact absurd h_step (by simp)
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact ⟨hx, hu, hstd, hflex⟩)
         | exact absurd h_step (by simp)
@@ -1378,7 +1379,8 @@ theorem valueAt_step_le (R : Nat) (s : State) (op : Op) (caller a : Address) (s'
       simp [burnApxUSD, hau] <;> omega
   all_goals
     simp only [step] at h_step
-    split at h_step <;>
+    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
+    (try split at h_step) <;>
       first
         | (cases Option.some.inj h_step; simp [valueAt])
         | exact absurd h_step (by simp)
