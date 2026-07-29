@@ -314,7 +314,10 @@ private theorem penniless_step (s : State) (op : Op) (caller : Address) (s' : St
     (h_no_redeem_gift : ∀ n, op ≠ Op.redeem n a)
     -- The admin's bare reserve withdrawal names its receiver, so it is a gift channel in
     -- exactly the same sense as the three above: `a` ends up holding USDC it never paid for.
-    (h_no_reserve_gift : ∀ n, op ≠ Op.withdrawReserve n a) :
+    (h_no_reserve_gift : ∀ n, op ≠ Op.withdrawReserve n a)
+    -- The on-chain settlement leg names its `receiver`, and the receiver need not be the
+    -- address whose apxUSD was burned. So it too is a gift channel from `a`'s point of view.
+    (h_no_pool_gift : ∀ n m, op ≠ Op.poolRedeem n a m) :
     Penniless a s' := by
   obtain ⟨hx, hu, hstd, hflex⟩ := h
   cases op
@@ -479,6 +482,16 @@ private theorem penniless_step (s : State) (op : Op) (caller : Address) (s' : St
            · rename_i hra'
              exact absurd (by rw [hra']) (h_no_reserve_gift _)
            · exact hu)
+        -- `poolRedeem amt r mo`: burns the caller and credits `r`, with `r ≠ a` by
+        -- `h_no_pool_gift`. `a`'s own apxUSD is already 0, so the burn cannot move it either.
+        | (cases Option.some.inj h_step
+           refine ⟨by simpa [burnApxUSD, hx] using hx, ?_,
+                   by simpa [burnApxUSD] using hstd, by simpa [burnApxUSD] using hflex⟩
+           dsimp only
+           split
+           · rename_i hra'
+             exact absurd (by rw [hra']) (h_no_pool_gift _ _)
+           · exact hu)
         | exact absurd h_step (by simp)
 
 /-- The `Penniless` invariant holds across arbitrary traces (revert-skip
@@ -488,7 +501,7 @@ theorem penniless_invariant (s : State) (σ : List (Op × Address)) (a : Address
     (h0 : Penniless a s)
     (h_no_gift : ∀ p ∈ σ, (∀ n, p.1 ≠ Op.mintApxUSD a n) ∧
       (∀ n, p.1 ≠ Op.withdraw n a) ∧ (∀ n, p.1 ≠ Op.redeem n a) ∧
-      (∀ n, p.1 ≠ Op.withdrawReserve n a)) :
+      (∀ n, p.1 ≠ Op.withdrawReserve n a) ∧ (∀ n m, p.1 ≠ Op.poolRedeem n a m)) :
     Penniless a (execTrace s σ) := by
   induction σ generalizing s with
   | nil => exact h0
@@ -497,14 +510,14 @@ theorem penniless_invariant (s : State) (σ : List (Op × Address)) (a : Address
     have hhead := h_no_gift (op, c) List.mem_cons_self
     have htail : ∀ q ∈ σ, (∀ n, q.1 ≠ Op.mintApxUSD a n) ∧
         (∀ n, q.1 ≠ Op.withdraw n a) ∧ (∀ n, q.1 ≠ Op.redeem n a) ∧
-        (∀ n, q.1 ≠ Op.withdrawReserve n a) :=
+        (∀ n, q.1 ≠ Op.withdrawReserve n a) ∧ (∀ n m, q.1 ≠ Op.poolRedeem n a m) :=
       fun q hq => h_no_gift q (List.mem_cons_of_mem _ hq)
     simp only [execTrace]
     cases hstep : step s op c with
     | none => exact ih s h0 htail
     | some s1 =>
       exact ih s1 (penniless_step s op c s1 hstep a h0 hhead.1 hhead.2.1 hhead.2.2.1
-        hhead.2.2.2) htail
+        hhead.2.2.2.1 hhead.2.2.2.2) htail
 
 /-- **S1 `no_free_value_trace`** (docs/06-safety-properties.md, Tier A): no apxUSD
 value can be created from nothing, at trace level.
@@ -524,7 +537,7 @@ theorem no_free_value_trace (s : State) (σ : List (Op × Address)) (a : Address
     (h0 : Penniless a s)
     (h_no_gift : ∀ p ∈ σ, (∀ n, p.1 ≠ Op.mintApxUSD a n) ∧
       (∀ n, p.1 ≠ Op.withdraw n a) ∧ (∀ n, p.1 ≠ Op.redeem n a) ∧
-      (∀ n, p.1 ≠ Op.withdrawReserve n a)) :
+      (∀ n, p.1 ≠ Op.withdrawReserve n a) ∧ (∀ n m, p.1 ≠ Op.poolRedeem n a m)) :
     (execTrace s σ).apxUSDBal a = 0 :=
   (penniless_invariant s σ a h0 h_no_gift).1
 
@@ -1345,7 +1358,8 @@ def ValuePreservingOp (op : Op) : Prop :=
   (∀ to n, op ≠ Op.mintApxUSD to n) ∧ (∀ n, op ≠ Op.lockApxUSD n) ∧
   (∀ n r, op ≠ Op.withdraw n r) ∧ (∀ sh r, op ≠ Op.redeem sh r) ∧
   (∀ id, op ≠ Op.claimUnlock id) ∧ (∀ id, op ≠ Op.flexibleClaimUnlock id) ∧
-  (op ≠ Op.catastrophicBackstop) ∧ (∀ amt r, op ≠ Op.withdrawReserve amt r)
+  (op ≠ Op.catastrophicBackstop) ∧ (∀ amt r, op ≠ Op.withdrawReserve amt r) ∧
+  (∀ amt r mo, op ≠ Op.poolRedeem amt r mo)
 
 /-- Single step of S9: a value-preserving operation never increases any address's holdings
 valued at a fixed rate `R` (given the no-premium-redemption side condition). -/
@@ -1362,7 +1376,8 @@ theorem valueAt_step_le (R : Nat) (s : State) (op : Op) (caller a : Address) (s'
   case claimUnlock id => exact absurd rfl (hc id)
   case flexibleClaimUnlock id => exact absurd rfl (hf id)
   case catastrophicBackstop => exact absurd rfl hcb.1
-  case withdrawReserve amt r => exact absurd rfl (hcb.2 amt r)
+  case withdrawReserve amt r => exact absurd rfl (hcb.2.1 amt r)
+  case poolRedeem amt r mo => exact absurd rfl (hcb.2.2 amt r mo)
   case depositUSDC amount =>
     obtain ⟨-, -, -, hle, hs'⟩ := inv_depositUSDC s amount caller s' h_step
     subst hs'

@@ -119,11 +119,17 @@ ties together — and that surface belongs to the Curve pool, outside this state
   holder must part with their apxUSD first. `Op.executeRFQRedemption` instead burns the *user's*
   balance against their own recorded request, which is a stronger capability than the chain grants
   in one direction and, per `rfq_payout_is_set_by_execution_timing`, a weaker model of the timing
-  exposure in the other. Not yet reconciled.
-- **The model has no slippage floor.** `redeem` takes `minReserveAssetOut` and reverts on
-  `SlippageExceeded`, so a *user-initiated* redemption can bound its own downside. The witness
-  `redemption_has_no_floor` is therefore sharper than the deployed user path — it stays accurate
-  for paths the user does not execute, i.e. RFQ settlement.
+  exposure in the other. **Both legs are now carried**: `Op.executeRFQRedemption` models the
+  documented process (settlement against a user's own recorded request), `Op.poolRedeem` models
+  the on-chain contract (counterparty-gated, `burnFrom(msg.sender)`, named `receiver`, and the
+  `minReserveAssetOut` floor). The request registry has no on-chain counterpart — the user's
+  consent and handover happen outside this state machine.
+- **The slippage floor is now modelled, and it belongs to the redeemer.** `redeem` takes
+  `minReserveAssetOut` and reverts on `SlippageExceeded`. Because the same function is
+  `ROLE_REDEEMER`-gated and burns `msg.sender`, the party who sets the floor is the redeemer,
+  not the holder whose apxUSD is being converted — `pool_redeem_floor_is_the_redeemers` runs
+  both sides of that. So `redemption_has_no_floor` remains accurate for the holder's exposure;
+  what the deployment adds is protection for the counterparty.
 - ~~**The reserve has an admin exit the model does not carry.**~~ **Now carried**, as
   `Op.withdrawReserve`, after `RedemptionPool/Access.t.sol` showed `withdraw` / `withdrawTokens`
   are deliberately tested admin-only capabilities rather than an oversight. Consequences, all of

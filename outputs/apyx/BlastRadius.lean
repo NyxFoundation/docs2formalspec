@@ -1055,6 +1055,18 @@ theorem no_role_transfers_user_funds (s : State) (op : Op) (caller : Address) (s
       amount ≤ s.rfqRequests a ∧
       s'.usdcBal a = s.usdcBal a + (amount * s.redemptionValue) / ray := by
   cases op
+  case poolRedeem amount receiver minOut =>
+    -- The on-chain settlement leg burns `burnFrom(msg.sender)`: the only apxUSD it can debit
+    -- is the redeemer's own. It cannot reach a third party's balance at all — unlike
+    -- `executeRFQRedemption`, which models the documented process and debits the *user*.
+    simp only [step] at h_step
+    repeat' split at h_step
+    all_goals first
+      | (cases Option.some.inj h_step
+         by_cases hac : a = caller
+         · exact Or.inl hac
+         · exact absurd h_dec (by simp [burnApxUSD, hac]))
+      | exact absurd h_step (by simp)
   case depositUSDC amount =>
     obtain ⟨_, _, _, _, hs'⟩ := inv_depositUSDC _ _ _ _ h_step
     subst hs'
@@ -1669,8 +1681,25 @@ theorem reserve_outflow_only_via_redemption (s : State) (op : Op) (caller : Addr
     -- settled, no holder is compensated — the reserve simply moves to a named address.
     (∃ amount receiver, op = Op.withdrawReserve amount receiver ∧ caller = s.admin ∧
       s'.usdcReserve = s.usdcReserve - amount ∧
-      s'.usdcBal receiver = s.usdcBal receiver + amount) := by
+      s'.usdcBal receiver = s.usdcBal receiver + amount) ∨
+    -- The on-chain settlement leg. It *is* a redemption, but the burn and the credit land on
+    -- different addresses: `burnFrom(msg.sender)` takes the redeemer's apxUSD and the USDC goes
+    -- to a `receiver` the redeemer names. The holder is neither, until they have handed their
+    -- tokens over — so the price protection on this path (`minOut`) is the redeemer's, not theirs.
+    (∃ amount receiver minOut, op = Op.poolRedeem amount receiver minOut ∧
+      s.rfqCounterparties.contains caller = true ∧
+      s'.apxUSDBal caller = s.apxUSDBal caller - amount ∧
+      s'.usdcBal receiver = s.usdcBal receiver + amount * s.redemptionValue / ray ∧
+      s'.usdcReserve = s.usdcReserve - amount * s.redemptionValue / ray) := by
   cases op
+  case poolRedeem amount receiver minOut =>
+    simp only [step] at h_step
+    repeat' split at h_step
+    all_goals first
+      | (cases Option.some.inj h_step
+         refine Or.inr (Or.inr (Or.inr ⟨amount, receiver, minOut, rfl, ?_, ?_, ?_, ?_⟩)) <;>
+           simp_all [burnApxUSD])
+      | exact absurd h_step (by simp)
   case redeemApxUSD amount =>
     obtain ⟨_, _, hbal, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
     subst hs'
@@ -1735,7 +1764,7 @@ theorem reserve_outflow_only_via_redemption (s : State) (op : Op) (caller : Addr
     · exact absurd h_step (by simp)
     · rename_i hc _
       cases Option.some.inj h_step
-      exact Or.inr (Or.inr ⟨amount, receiver, rfl, by simpa using hc, rfl, by simp⟩)
+      exact Or.inr (Or.inr (Or.inl ⟨amount, receiver, rfl, by simpa using hc, rfl, by simp⟩))
     · exact absurd h_step (by simp)
   all_goals
     simp only [step] at h_step
@@ -2023,6 +2052,16 @@ theorem apxUSD_credit_is_backed (s : State) (op : Op) (caller : Address) (s' : S
           = s.apxUSDBal a + (amount - amount * flexibleUnlockFee requestTime s.now / 10000) ∧
         s'.apxUSDBal a ≤ s.apxUSDBal a + amount) := by
   cases op
+  case poolRedeem amount receiver minOut =>
+    -- Settlement only ever burns apxUSD; no balance rises.
+    simp only [step] at h_step
+    repeat' split at h_step
+    all_goals first
+      | (cases Option.some.inj h_step
+         by_cases hac : a = caller
+         · subst hac; exact absurd h_inc (by simp [burnApxUSD])
+         · exact absurd h_inc (by simp [burnApxUSD, hac]))
+      | exact absurd h_step (by simp)
   case depositUSDC amount =>
     obtain ⟨_, _, _, hle, hs'⟩ := inv_depositUSDC _ _ _ _ h_step
     subst hs'
@@ -2236,16 +2275,18 @@ theorem step2_charge_only_for_redemption (rs : RLState) (op : Op) (caller : Addr
     -- The rate limiter charges the admin's bare withdrawal too: it is an outflow, so the
     -- epoch cap bounds it exactly as it bounds a redemption. That is the point of pricing
     -- the wrapper on `usdcReserve` movement rather than on which operation caused it.
-    (∃ amount receiver, op = Op.withdrawReserve amount receiver ∧ caller = rs.base.admin) := by
+    (∃ amount receiver, op = Op.withdrawReserve amount receiver ∧ caller = rs.base.admin) ∨
+    (∃ amount receiver minOut, op = Op.poolRedeem amount receiver minOut) := by
   obtain ⟨s', hs, hgate, rfl⟩ := inv_step2_base rs op caller rs' h
   dsimp only at h_pos ⊢
   have hdec : s'.usdcReserve < rs.base.usdcReserve := by omega
   rcases reserve_outflow_only_via_redemption rs.base op caller s' hs hdec with
     ⟨user, amount, hop, hbal, hapx, husdc, -, -⟩ | ⟨hop, hc, hf, hres, husdc, -, -⟩ |
-    ⟨amt, rcv, hop, hc, -, -⟩
+    ⟨amt, rcv, hop, hc, -, -⟩ | ⟨amt, rcv, mo, hop, -, -, -, -⟩
   · exact Or.inl ⟨user, amount, hop, hbal, hapx, husdc⟩
   · exact Or.inr (Or.inl ⟨hop, hc, hf, hres, husdc⟩)
-  · exact Or.inr (Or.inr ⟨amt, rcv, hop, hc⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨amt, rcv, hop, hc⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨amt, rcv, mo, hop⟩))
 
 /-- The rate limiter's local invariant is self-establishing: after any accepted
 `step2` — with no assumption on the pre-state — `spentThisEpoch ≤ cap` holds (base
@@ -3054,5 +3095,47 @@ theorem rfq_payout_is_set_by_execution_timing :
                               (Op.executeRFQRedemption 0 100, 2)]).rfqRequests 0 = 0 := by
   refine ⟨?_, ?_, ?_⟩ <;>
     simp [execTrace, step, timingWitness, burnApxUSD, ray]
+
+/-! ## T12: on the settlement leg, the price protection belongs to the wrong party
+
+`RedemptionPoolV0.redeem` takes a `minReserveAssetOut` and reverts on `SlippageExceeded`, so
+the path does carry a price floor. But `redeem` is `ROLE_REDEEMER`-gated — `Access.t.sol`
+asserts the revert for an ordinary holder *and* for the admin — and it burns
+`burnFrom(msg.sender)`. The caller is therefore the redeemer, never the holder; the holder has
+already parted with their apxUSD by the time this runs. The floor is a parameter of the party
+that is not exposed. -/
+
+private def poolWitness : State :=
+  { (default : State) with
+      globalPause := false
+      admin := 3
+      rfqCounterparties := [2]
+      totalSupply_apxUSD := 100
+      apxUSDBal := fun a => if a = 2 then 100 else 0
+      usdcBal := fun _ => 0
+      redemptionValue := ray
+      usdcReserve := 100 }
+
+/-- **T12 `pool_redeem_floor_is_the_redeemers`.** One state, one redeemer (`2`), one receiver
+(`1`), one 100-apxUSD settlement, three runs:
+
+1. settled at par, the receiver is paid **100**;
+2. settled after one honest admin price update to `ray / 2`, the receiver is paid **50** — and
+   the call is *accepted*, because the floor was `0` and the floor is the redeemer's to choose;
+3. the redeemer, facing that same halved price, can simply decline: with a floor of `100` the
+   call reverts.
+
+Run 3 is the point. The lever exists, and it belongs to the party whose apxUSD is being burned
+— which, on this path, is the redeemer and not the holder. The holder's exposure is settled by
+whatever price holds when someone else decides to act, exactly as in
+`rfq_payout_is_set_by_execution_timing`, with the custody handover on top. -/
+theorem pool_redeem_floor_is_the_redeemers :
+    (execTrace poolWitness [(Op.poolRedeem 100 1 0, 2)]).usdcBal 1 = 100 ∧
+    (execTrace poolWitness [(Op.updateRedemptionValue (ray / 2), 3),
+                            (Op.poolRedeem 100 1 0, 2)]).usdcBal 1 = 50 ∧
+    step (execTrace poolWitness [(Op.updateRedemptionValue (ray / 2), 3)])
+      (Op.poolRedeem 100 1 100) 2 = none := by
+  refine ⟨?_, ?_, ?_⟩ <;>
+    simp [execTrace, step, poolWitness, burnApxUSD, ray]
 
 end Apyx

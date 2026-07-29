@@ -541,6 +541,14 @@ inductive Op
       capability. Absent from this model until now, which is why
       `reserve_outflow_only_via_redemption` read as if redemption were the only exit. -/
   | withdrawReserve (amount : Nat) (receiver : Address)
+  /-- The on-chain settlement leg, `RedemptionPoolV0.redeem(assetsAmount, receiver, minReserveAssetOut)`.
+      Distinct from `executeRFQRedemption`, which models the *documented* RFQ process where the
+      counterparty settles against a user's own recorded request. On-chain there is no request
+      registry: `redeem` is `ROLE_REDEEMER`-gated (`Access.t.sol` asserts the revert for an ordinary
+      holder **and** for the admin) and does `burnFrom(msg.sender)` — it burns the *redeemer's* own
+      apxUSD and pays a named `receiver`. So the holder has to part with custody first, and the only
+      price guard on the path, `minReserveAssetOut`, is chosen by the redeemer. -/
+  | poolRedeem (amount : Nat) (receiver : Address) (minOut : Nat)
   /-- E1 (the clock). Advances `now` by `dt` settlement-seconds and touches nothing else.
       Permissionless on purpose: waiting is not a privileged action, so any caller may let
       time pass. Without this op every trace is same-instant and no cooldown, vesting or
@@ -772,6 +780,20 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
         usdcReserve := s.usdcReserve - amount
         usdcBal := fun a => if a = receiver then s.usdcBal a + amount else s.usdcBal a }
     else none
+  | Op.poolRedeem amount receiver minOut =>
+    if s.globalPause then none
+    else if ¬ (s.rfqCounterparties.contains caller) then none
+    else if amount = 0 then none
+    else if receiver = 0 then none
+    -- `SlippageExceeded`: the floor is the *caller's*, and the caller is the redeemer.
+    else if (amount * s.redemptionValue) / ray < minOut then none
+    else if s.usdcReserve < (amount * s.redemptionValue) / ray then none
+    else if s.apxUSDBal caller < amount then none
+    else some { burnApxUSD s caller amount with
+      usdcReserve := s.usdcReserve - (amount * s.redemptionValue) / ray
+      usdcBal := fun a => if a = receiver
+                          then s.usdcBal a + (amount * s.redemptionValue) / ray
+                          else s.usdcBal a }
   | Op.handleStressEvent amount =>
     -- a stress loss reduces total collateral value; absorbed by the buffer, admin only
     if caller == s.admin then
@@ -1876,6 +1898,15 @@ private theorem unlock_position_created_only_by_vault_ops (s : State) (op : Op) 
      (∃ a r, op = Op.withdraw a r) ∨ (∃ sh r, op = Op.redeem sh r)) ∧
     id = s.nextUnlockId := by
   cases op
+  case poolRedeem amount receiver minOut =>
+    -- Settlement moves USDC and burns apxUSD; it never touches the unlock registry.
+    simp only [step] at h_step
+    repeat' split at h_step
+    all_goals first
+      | (cases Option.some.inj h_step; simp [burnApxUSD, h_new] at h_now)
+      | (cases Option.some.inj h_step; simp [burnApxUSD, h_live] at h_gone)
+      | (cases Option.some.inj h_step; simpa [burnApxUSD] using h_fresh)
+      | exact absurd h_step (by simp)
   case requestUnlock a =>
     obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
     subst hs'
@@ -2321,6 +2352,19 @@ theorem req_overcollateralization_limit (s : State) (op : Op) (caller : Address)
     s'.totalSupply_apxUSD + s'.overcollateralizationBuffer
       ≤ s'.totalCollateralValue + s'.usdcReserve := by
   cases op
+  case poolRedeem amount receiver minOut =>
+    -- The on-chain settlement leg is a redemption like any other: it burns apxUSD and pays the
+    -- reserve out at the recorded price, so both sides of the inequality fall together.
+    simp only [step] at h_step
+    repeat' split at h_step
+    all_goals first
+      | (cases Option.some.inj h_step
+         simp only [burnApxUSD]
+         have hle : amount * s.redemptionValue / ray ≤ amount := by
+           rw [Nat.mul_comm]; exact div_mul_le_total h_rv
+         have := h_bal caller
+         omega)
+      | exact absurd h_step (by simp)
   case claimUnlock id => exact absurd rfl (h_not_claim id)
   case flexibleClaimUnlock id => exact absurd rfl (h_not_flex_claim id)
   case handleStressEvent a => exact absurd rfl (h_not_stress a)
@@ -3729,6 +3773,13 @@ theorem req_unlock_cannot_be_cancelled (s : State) (op : Op) (caller : Address) 
         s'.apxUSDBal owner = s.apxUSDBal owner
           + (amount - amount * flexibleUnlockFee requestTime s.now / 10000)) := by
   cases op
+  case poolRedeem amount receiver minOut =>
+    -- Settlement never touches an unlock position, so it cannot be the op that cleared one.
+    simp only [step] at h_step
+    repeat' split at h_step
+    all_goals first
+      | (cases Option.some.inj h_step; simp [burnApxUSD, h_live] at h_gone)
+      | exact absurd h_step (by simp)
   case claimUnlock rid =>
     obtain ⟨o, am, ce, hreq, howner, _, htime, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
     subst hs'
@@ -3822,6 +3873,17 @@ theorem req_unlock_token_nontransferable (s : State) (op : Op) (caller : Address
     (∀ id owner, s.unlockTokenOwner id = some owner →
       s'.unlockTokenOwner id = some owner ∨ s'.unlockTokenOwner id = none) := by
   cases op
+  case poolRedeem amount receiver minOut =>
+    -- Settlement moves USDC and burns apxUSD; it never touches the unlock registry.
+    simp only [step] at h_step
+    repeat' split at h_step
+    all_goals first
+      | (cases Option.some.inj h_step; simp [burnApxUSD, h_new] at h_now)
+      | (cases Option.some.inj h_step; simp [burnApxUSD, h_live] at h_gone)
+      | (cases Option.some.inj h_step
+         exact ⟨fun i hi => h_fresh i (by simpa [burnApxUSD] using hi),
+                fun _ _ h => Or.inl (by simpa [burnApxUSD] using h)⟩)
+      | exact absurd h_step (by simp)
   case requestUnlock a =>
     obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
     subst hs'
