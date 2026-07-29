@@ -133,7 +133,13 @@ A–D は Apyx の保証レベルを上げる作業、E は外部提案の取り
   - `no_free_value_trace` / `ValuePreservingOp`: `receiver` を指名して USDC を渡すので**贈与経路**として名指し除外。
   - `reserve_outflow_only_via_redemption`: 焼く先と払う先が別アドレスなので独立の disjunct。
   - `pool_redeem_floor_is_the_redeemers`: 同一 state・同一 receiver・同一 100 apxUSD で、par なら 100、正直な価格更新1回のあとなら 50。しかも後者は**受理される**(フロアが0で、フロアを選ぶのは redeemer だから)。redeemer はフロアを 100 にすれば拒否できる。**価格保護のレバーは、晒されていない側が握っている。**
-- [ ] 実装側に確認 — ライブの AccessManager が各セレクタに実際に何を割り当てているか、および遅延値(`Roles.sol` はセットアップ用ライブラリであってチェーン状態のスナップショットではない。外部のリスク評価では admin は 4-of-6 Safe)/ `RedemptionPoolV0` がデプロイ済みで現行の償還経路か(`README.md` に載っている公開アドレスは apxUSD / apyUSD / UnlockToken の3つだけ)/ `ApxUSDRateOracle` の UUPS `_authorizeUpgrade`(実装差し替えは `setRate` より強い権限。`README.md` §12 #12 で対象外扱いのままでよいか)。
+- [x] **オンチェーンで解決**(2026-07-30、≈ block 25,641,600 時点。`outputs/apyx/model.md` §6 に記録)。
+  - AccessManager は `0xe167330E…2824`。ロールは**遅延の階段**になっている — 21=0(pause) / 22=4時間(価格 push) / 23=24時間 / 24=3日(`upgradeToAndCall`) / 25=7日(`setAuthority`)。遅延の**短縮**は `minSetback` 5日、role 0 の付与は 7日。遅延ゼロで残っているのは **ADMIN_ROLE 本体**だけで、保有者は Safe `0xABdd8c8e…65e96` 1つ(デプロイヤ EOA と運用 Safe は付与後に**剥奪済**)。
+  - **`RedemptionPoolV0` はこの authority 配下にデプロイされていない。** `setExchangeRate` / `redeem` / `ApxUSDRateOracle.setRate` のセレクタは function-role テーブルに1つも現れない。
+  - 償還価格の実体は **`ApyxRedemptionOracle`**(`0x2037a5eb…23b4`)。**setter を一切持たない**読み取り専用アグリゲータで、`min(担保比率, cap)` を publish し **`cap()` = 1.00**。上流の `ApyxCollateralRatioOracle.pushRound` は role 22 = **4時間の予約実行**。
+  - 帰結3件を `README.md` に反映済 — (a)「償還価格に上限が無い」は**設計**についての主張で、デプロイには上限がある、(b) `Safety.lean` の仮説 `h_rv : redemptionValue ≤ ray` は **cap によってデプロイ不変条件になっている**(仮定ではなく強制)、(c)「admin 変更は同一ブロックで発効」は**モデルについては真、デプロイについては ADMIN_ROLE 以外は偽**。
+  - `withdrawReserve` の live 対応物は `YieldDistributor.withdrawTokens` で、role 23 = **24時間の予約実行**。
+- [ ] 残: Safe `0xABdd8c8e…65e96` の署名者集合と閾値(遅延スキーム全体がここに乗っている)。および manager のキューに現在予約されている操作の有無。
 - [x] 判明した対応関係は `model.md` §5 に表としてまとめた。償還が `ROLE_REDEEMER` ゲートであること、`redeem` に `minReserveAssetOut` があるので**ユーザー起点の経路は `redemption_has_no_floor` が示すより実際はマシ**であること(RFQ のようにユーザーが実行しない経路には効かない)、decimal スケーリングが未モデル化であることも記載。
 
 ### D. 報告の正確さ(Phase 9)

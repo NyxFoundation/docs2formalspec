@@ -276,8 +276,14 @@ guarantee is cited.
 3. **Add a timelock on privileged admin changes.** The base model is proved to have **no exit window** —
    admin changes take effect in the same block (`base_model_has_no_timelock`,
    `catastrophicBackstop_is_instantaneous`). A delay queue is formalized and proved to give users a
-   guaranteed window to exit before any queued change lands (`timelock_escape_guarantee`). (This mirrors the
-   external observation that `ApxUSDRateOracle.setRate` currently sits behind a 0-second timelock.)
+   guaranteed window to exit before any queued change lands (`timelock_escape_guarantee`).
+   **Largely already met on-chain, and this recommendation was written against a stale
+   observation.** The deployed `AccessManager` (`0xe167330E…2824`) runs a graded delay ladder —
+   0 for `pause()`, 4h for the price push, 24h for privileged token withdrawal, 3 days for
+   `upgradeToAndCall`, 7 days for `setAuthority` — with a 5-day minimum setback on any reduction
+   and a 7-day grant delay on `ADMIN_ROLE` itself. What still carries **no** delay is `ADMIN_ROLE`,
+   held by a single Safe. See [`model.md`](model.md) §6 for the snapshot and the addresses; the
+   residual recommendation is about that one role, not about the scheme.
 
 4. **Minimize trust in the RFQ counterparty set.** With defenses 1–3 in place, user-fund safety against a
    compromised admin still depends on the honesty of approved RFQ counterparties (they are the second key in
@@ -454,14 +460,23 @@ This group turns the lens on the requirement set itself and on the economic para
 
 ### 9.1 A machine-checked parameter gap — the redemption price has no floor or cap
 
-The redemption price (`redemptionValue`) has **no enforced floor and no enforced cap** in the design, and it
-is written by the admin (`catastrophicBackstop`; on-chain, the `ApxUSDRateOracle`, gated only by `> 0`). Two
-witnesses prove the consequences:
+The redemption price (`redemptionValue`) has **no enforced floor and no enforced cap** in the design, and
+in the model it is written by the admin — either loudly (`catastrophicBackstop`) or quietly
+(`updateRedemptionValue`); see `redemption_price_writers`. Two witnesses prove the consequences:
 
 - **`redemption_has_no_floor`** — there is a reachable state (`redemptionValue = 0`) in which a whitelisted
   holder's `redeemApxUSD` **succeeds** yet pays **0 USDC** for the apxUSD it burns: a total loss the guards do
   not prevent.
 - **`BlastRadius.redeem_payout_has_no_cap`** — symmetrically, no upper bound on the payout exists.
+
+> **On-chain, the upper bound exists.** The deployed price source is `ApyxRedemptionOracle`
+> (`0x2037a5eb…23b4`), a read-only aggregator with **no setter at all**, publishing
+> `min(collateral ratio, cap)` with `cap() = 1.00`. So the no-cap finding describes the *design* —
+> nothing in the specification forces a bound — while the deployment supplies one outside the
+> modelled state. The same cap is what discharges `Safety.lean`'s `h_rv : redemptionValue ≤ ray`:
+> a hypothesis the proofs re-supply along the trace turns out to be a deployment invariant.
+> `RedemptionPoolV0.setExchangeRate` and `ApxUSDRateOracle.setRate` appear nowhere in the live
+> authority table. Details and addresses: [`model.md`](model.md) §6.
 
 Together with the two-key coalition (§4.1), these are the concrete design weaknesses of the model. **Fix:** a
 redemption-price floor/clamp, a withdrawal rate limit, and an admin timelock (§5) — the same three defenses §5

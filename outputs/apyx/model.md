@@ -154,4 +154,72 @@ state. Both are open questions for the implementation side.
 
 ---
 
+---
+
+### 6. On-chain snapshot — the deployed authority and price pipeline
+
+Read from Ethereum mainnet on 2026-07-30 (≈ block 25,641,600). This is a **snapshot of
+configuration, not of code**: it can be changed by the holders named below, subject to the delays
+named below. Everything in §5 is about the repository; this section is about what is actually
+wired up, and on three points the two differ enough to change findings in
+[`README.md`](README.md).
+
+**Authority.** `apxUSD`, `apyUSD` and `UnlockToken` all report
+`authority() = 0xe167330E2Eac88666de253e9607C6d9ae0cA2824`, an OpenZeppelin `AccessManager`.
+
+| Role | Holder | Execution delay |
+|---|---|---|
+| **0 — ADMIN** | Safe `0xABdd8c8e…65e96` **only** (the deployer EOA and the ops Safe were both granted role 0 and later revoked — `hasRole` is now false for both) | **0** |
+| 21 | ops Safe `0xf9862EfC…63cE2` | 0 (this is the `pause()` tier) |
+| 22 | ops Safe | **4 hours** (`unpause`, and the price push) |
+| 23 | ops Safe | **24 hours** |
+| 24 | ops Safe | **3 days** (`upgradeToAndCall`) |
+| 25 | ops Safe | **7 days** (`setAuthority`) |
+| 31, 41 | assorted EOAs | 0 |
+
+Granting role 0 to a new account carries `getRoleGrantDelay(0) = 7 days`, and every delay
+*reduction* carries `minSetback() = 5 days`. `getTargetAdminDelay` is 0 for the manager itself but
+**3 days** for the collateral oracle, so re-pointing that contract's function-role mapping is
+itself a 3-day scheduled operation.
+
+**The redemption price pipeline is not what either the repo or this model describes.**
+
+- `ApyxRedemptionOracle` — proxy `0x2037a5eb…23b4`, implementation `0xbcc4a174…d682`. A read-only
+  Chainlink-shaped aggregator: `latestRoundData` / `getRoundData` / `decimals() = 8`, description
+  **"Apyx Capped Collateralization Ratio"**. It has **no setter of any kind**. It reads
+  `collateralOracle()` and applies `cap()`.
+- `cap() = 1e8`, i.e. **1.00 at 8 decimals**. The published redemption ratio is
+  `min(collateral ratio, 1.0)`. Latest answer at the time of reading: `90365900` = **0.903659**.
+- `ApyxCollateralRatioOracle` — proxy `0x823210Eb…D305`. `pushRound(int256)` (selector
+  `0xc01096f0`) is assigned to **role 22**, so a price push is a **4-hour scheduled operation**,
+  not an immediate write.
+- **`RedemptionPoolV0` is not deployed under this authority.** `setExchangeRate(uint256)`
+  (`0xdb068e0e`) and `redeem(uint256,address,uint256)` (`0xd8780161`) appear nowhere in the
+  manager's function-role table, and neither does `ApxUSDRateOracle.setRate(uint256)`
+  (`0x34fcf437`). The contracts governed are `apxUSD`, `apyUSD`, three `CommitToken`s,
+  `UnlockToken`, `MinterV0`, `LinearVestV0`, `YieldDistributor`, `AddressList`, `OrderDelegate`,
+  `LiquidationBatcher` and the two oracles.
+- The live analogue of `Op.withdrawReserve` is `YieldDistributor.withdrawTokens(address,uint256,address)`
+  (`0x9bc5c509`), assigned to **role 23 — a 24-hour scheduled operation**.
+
+**What this changes.** Three of this report's findings are statements about the model that do not
+carry to the deployment as configured:
+
+1. **"The redemption price has no cap."** On-chain it is capped at par by construction, and the
+   capping contract cannot be written to at all. `redeem_payout_has_no_cap` remains a true and
+   useful statement about the model — it says the *design* imposes no bound — but the deployment
+   imposes one.
+2. **`redemptionValue ≤ ray`.** `Safety.lean` carries this as the hypothesis `h_rv`, re-supplied
+   along the trace. The `cap()` makes it a **deployment invariant**, which is the strongest
+   possible discharge of a hypothesis: not assumed, enforced.
+3. **"Admin changes take effect in the same block."** `base_model_has_no_timelock` and
+   `catastrophicBackstop_is_instantaneous` are true of the model, and §5's recommendation 3 cited
+   an external observation of a 0-second timelock. The deployed manager has a graded delay ladder
+   — 0 / 4h / 24h / 3d / 7d — with 5-day minimum setback on reductions. What remains without delay
+   is **ADMIN_ROLE itself**, held by one Safe.
+
+**Still unresolved.** The signer set and threshold of Safe `0xABdd8c8e…65e96` — the whole delay
+scheme rests on it, and this snapshot does not read it. Also unread: whether any operation is
+currently scheduled in the manager's queue.
+
 *All state transitions are atomic and protected by the Checks‑Effects‑Interactions pattern; re‑entrancy guards are applied to every external call.*
