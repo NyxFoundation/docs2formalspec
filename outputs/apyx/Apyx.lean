@@ -535,6 +535,12 @@ inductive Op
   | catastrophicBackstop
   | setVestPeriod (p : Nat)
   | setApxUSDMarketPrice (price : Nat)
+  /-- Privileged withdrawal straight out of the reserve, no redemption involved. Mirrors
+      `RedemptionPoolV0.withdraw` / `withdrawTokens`, which `Roles.assignAdminTargetsFor`
+      assigns to `ADMIN_ROLE` and `RedemptionPool/Access.t.sol` tests as an admin-only
+      capability. Absent from this model until now, which is why
+      `reserve_outflow_only_via_redemption` read as if redemption were the only exit. -/
+  | withdrawReserve (amount : Nat) (receiver : Address)
   /-- E1 (the clock). Advances `now` by `dt` settlement-seconds and touches nothing else.
       Permissionless on purpose: waiting is not a privileged action, so any caller may let
       time pass. Without this op every trace is same-instant and no cooldown, vesting or
@@ -751,13 +757,20 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
         }
         some s2
   | Op.updateRedemptionValue newValue =>
-    -- On-chain both redemption-price setters are role-gated and reject only zero
-    -- (`ApxUSDRateOracle.setRate`, `RedemptionPoolV0.setExchangeRate`). Modelling this as a
-    -- no-op — as this case previously did — made `catastrophicBackstop` the sole writer of
-    -- `redemptionValue`, so an honest-operations price move was not expressible.
-    if caller == s.oracle then
+    -- Admin-gated, not oracle-gated: `Roles.assignAdminTargetsFor` puts
+    -- `RedemptionPoolV0.setExchangeRate` under `ADMIN_ROLE`, and
+    -- `RedemptionPool/Access.t.sol::test_RevertWhen_SetExchangeRateNotAdmin` pins it.
+    -- Only guard on-chain is `newRate != 0`: no cap, floor, bounded move or cadence.
+    if caller == s.admin then
       if newValue = 0 then none
       else some { s with redemptionValue := newValue }
+    else none
+  | Op.withdrawReserve amount receiver =>
+    if caller == s.admin then
+      if s.usdcReserve < amount then none
+      else some { s with
+        usdcReserve := s.usdcReserve - amount
+        usdcBal := fun a => if a = receiver then s.usdcBal a + amount else s.usdcBal a }
     else none
   | Op.handleStressEvent amount =>
     -- a stress loss reduces total collateral value; absorbed by the buffer, admin only
@@ -2300,7 +2313,11 @@ theorem req_overcollateralization_limit (s : State) (op : Op) (caller : Address)
     (h_not_claim : ∀ id, op ≠ Op.claimUnlock id)
     (h_not_flex_claim : ∀ id, op ≠ Op.flexibleClaimUnlock id)
     (h_not_stress : ∀ a, op ≠ Op.handleStressEvent a)
-    (h_not_backstop : op ≠ Op.catastrophicBackstop) :
+    (h_not_backstop : op ≠ Op.catastrophicBackstop)
+    -- A privileged withdrawal takes USDC out of the reserve against nothing, so it lowers the
+    -- right-hand side with the left untouched. It has to be a named exclusion, exactly as the
+    -- stress loss and the backstop are — see `reserve_outflow_only_via_redemption`.
+    (h_not_withdraw_reserve : ∀ amt r, op ≠ Op.withdrawReserve amt r) :
     s'.totalSupply_apxUSD + s'.overcollateralizationBuffer
       ≤ s'.totalCollateralValue + s'.usdcReserve := by
   cases op
@@ -2308,6 +2325,7 @@ theorem req_overcollateralization_limit (s : State) (op : Op) (caller : Address)
   case flexibleClaimUnlock id => exact absurd rfl (h_not_flex_claim id)
   case handleStressEvent a => exact absurd rfl (h_not_stress a)
   case catastrophicBackstop => exact absurd rfl h_not_backstop
+  case withdrawReserve amt r => exact absurd rfl (h_not_withdraw_reserve amt r)
   case depositUSDC a =>
     obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
     subst hs'

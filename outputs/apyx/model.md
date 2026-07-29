@@ -70,7 +70,7 @@
 | **setVestPeriod** | `p` | `msg.sender == admin` | Accrue already-vested first (`fullyVestedAmount += newlyVested`), rebase `vestTotal := unvested`, reset `vestStart := now`, then `vestPeriod = p` — same preservation as creditYield (REQ‑credit‑preserves‑accrued‑vest). |
 | **voteBufferDeployment** | – | `msg.sender` holds governance tokens ≥ threshold | If the vote reaches the threshold, set `bufferDeployed = true` (governs intermediate-risk buffer deployment). |
 | **executeRFQRedemption** | `user`, `amount` | `!globalPause` ∧ `msg.sender` ∈ approved RFQ counterparties ∧ `balanceOf_apxUSD(user) ≥ amount` ∧ `usdcReserve ≥ amount·redemptionValue/1e27` | Burn `amount` apxUSD from `user`; `usdcReserve -= amount·redemptionValue/1e27`; transfer that USDC to `user`. |
-| **updateRedemptionValue** | `newValue` | `msg.sender == oracle` ∧ `newValue ≠ 0` | `redemptionValue = newValue`. Corresponds to **`RedemptionPoolV0.setExchangeRate`**, whose only guard is `newRate != 0` — no cap, no floor, no bounded per-update move, no cadence, no side effect on any other field. **Role caveat**: on-chain that selector is assigned to `ADMIN_ROLE` (`Roles.assignAdminTargetsFor`), not to a separate oracle role; the model still gates it on `oracle`. See §5. |
+| **updateRedemptionValue** | `newValue` | `msg.sender == admin` ∧ `newValue ≠ 0` | `redemptionValue = newValue`. Corresponds to **`RedemptionPoolV0.setExchangeRate`**, whose only guard is `newRate != 0` — no cap, no floor, no bounded per-update move, no cadence, no side effect on any other field. Gated on the admin role, matching `Roles.assignAdminTargetsFor`. See §5. |
 | **handleStressEvent** | `amount` | `msg.sender == admin` | Models an exogenous collateral loss: `totalCollateralValue -= amount`; set `emergencyFlag = true`. (The buffer is the shock absorber, so this can reduce it — distinct from routine redemptions, which never consume the buffer.) |
 | **catastrophicBackstop** | – | `msg.sender == admin` ∧ `emergencyFlag == true` (the governance emergency flag must already be up — raised by the stress pathway `handleStressEvent`; the backstop does not raise it for itself) | `redemptionValue = totalCollateralValue·1e27 / totalSupply_apxUSD` (**per-unit**, matching `ApxUSDRateOracle`, so redeeming the whole supply distributes the full reserve — buffer included — pro-rata to holders, crediting each `a` with `usdcReserve·apxUSDBal(a)/totalSupply_apxUSD`); `usdcReserve = 0`. Drives `overcollateralizationBuffer` to 0. |
 
@@ -110,18 +110,32 @@ ties together — and that surface belongs to the Curve pool, outside this state
 
 **Other differences, all in the direction of the model being narrower than the implementation:**
 
-- **Redemption is permissioned on-chain.** `RedemptionPoolV0.redeem` carries `ROLE_REDEEMER`
-  (`Roles.assignRedeemerTargetsFor`). `Op.redeemApxUSD` is gated on whitelist membership instead.
+- **Redemption is permissioned on-chain, and not even the admin may call it.**
+  `RedemptionPoolV0.redeem` carries `ROLE_REDEEMER` (`Roles.assignRedeemerTargetsFor`), and
+  `Access.t.sol::test_RevertWhen_RedeemNotRedeemer` asserts the revert for an ordinary holder
+  *and* for the admin. `Op.redeemApxUSD` is gated on whitelist membership instead, so the model's
+  self-service redemption path is more permissive than the deployment's. Further, on-chain `redeem`
+  does `burnFrom(msg.sender)` — it burns the *redeemer's* tokens and pays a named `receiver`, so a
+  holder must part with their apxUSD first. `Op.executeRFQRedemption` instead burns the *user's*
+  balance against their own recorded request, which is a stronger capability than the chain grants
+  in one direction and, per `rfq_payout_is_set_by_execution_timing`, a weaker model of the timing
+  exposure in the other. Not yet reconciled.
 - **The model has no slippage floor.** `redeem` takes `minReserveAssetOut` and reverts on
   `SlippageExceeded`, so a *user-initiated* redemption can bound its own downside. The witness
   `redemption_has_no_floor` is therefore sharper than the deployed user path — it stays accurate
   for paths the user does not execute, i.e. RFQ settlement.
-- **The reserve has an admin exit the model does not carry.** `RedemptionPoolV0.withdraw` and
-  `withdrawTokens` are `ADMIN_ROLE` and move any ERC-20 — including the reserve asset — out of
-  the pool with no redemption involved. `reserve_outflow_only_via_redemption` and the
-  "one total-loss path is a two-key coalition" headline are statements about *this model*, and
-  do not carry to the deployed pool while that op is absent. Adding it is an open decision
-  (`docs/00`, section C).
+- ~~**The reserve has an admin exit the model does not carry.**~~ **Now carried**, as
+  `Op.withdrawReserve`, after `RedemptionPool/Access.t.sol` showed `withdraw` / `withdrawTokens`
+  are deliberately tested admin-only capabilities rather than an oversight. Consequences, all of
+  them the honest ones: `reserve_outflow_only_via_redemption` gains a third disjunct that is not
+  a redemption at all; `solvency_preserved` has to name it as an exclusion alongside the stress
+  loss and the backstop; and `no_free_value_trace` has to name it as a *gift* channel, because it
+  credits an address the admin picks with USDC that address never paid for.
+- **The redemption-price setter is admin-gated, and the model now agrees.**
+  `Roles.assignAdminTargetsFor` assigns `RedemptionPoolV0.setExchangeRate` to `ADMIN_ROLE`, and
+  `RedemptionPool/Access.t.sol::test_RevertWhen_SetExchangeRateNotAdmin` pins it. `Op.updateRedemptionValue`
+  was oracle-gated; it is not any more. The oracle role publishes the reported market price and
+  nothing else.
 - **No decimal scaling.** `previewRedeem` divides by `10^|assetDecimals − reserveDecimals|`;
   the model treats apxUSD and USDC as commensurate.
 - **`ApxUSDRateOracle` is UUPS.** `_authorizeUpgrade` is `restricted`, so implementation

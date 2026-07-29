@@ -74,14 +74,15 @@ def DistributorOp (op : Op) : Prop := ∃ amount, op = Op.creditYield amount
 
 /-- Operations authorized by the `oracle` role. -/
 def OracleOp (op : Op) : Prop :=
-  (∃ v, op = Op.updateRedemptionValue v) ∨ ∃ price, op = Op.setApxUSDMarketPrice price
+  ∃ price, op = Op.setApxUSDMarketPrice price
 
 /-- Operations authorized by the `admin` role. -/
 def AdminOp (op : Op) : Prop :=
   (∃ a, op = Op.addToWhitelist a) ∨ (∃ a, op = Op.removeFromWhitelist a) ∨
   (∃ a, op = Op.addToDenylist a) ∨ (∃ a, op = Op.removeFromDenylist a) ∨
   (∃ bps, op = Op.setYieldRate bps) ∨ (∃ amount, op = Op.handleStressEvent amount) ∨
-  op = Op.catastrophicBackstop ∨ (∃ p, op = Op.setVestPeriod p)
+  op = Op.catastrophicBackstop ∨ (∃ p, op = Op.setVestPeriod p) ∨
+  (∃ v, op = Op.updateRedemptionValue v) ∨ (∃ amt r, op = Op.withdrawReserve amt r)
 
 /-! ## Local frame lemmas for `pullVestedYield`
 
@@ -766,8 +767,8 @@ theorem admin_frame (s : State) (op : Op) (caller : Address) (s' : State)
                emergencyFlag := ef, vestPeriod := vp,
                vestStart := vs, vestTotal := vt, fullyVestedAmount := fv,
                usdcBal := ub, usdcReserve := ur, overcollateralizationBuffer := ob } := by
-  obtain ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨bps, rfl⟩ | ⟨amt, rfl⟩ | rfl | ⟨p, rfl⟩ :=
-    h_gated
+  obtain ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨bps, rfl⟩ | ⟨amt, rfl⟩ | rfl | ⟨p, rfl⟩ |
+    ⟨v, rfl⟩ | ⟨amt, r, rfl⟩ := h_gated
   · obtain ⟨hc, rfl⟩ := step_addToWhitelist_exact s a caller s' h_step
     exact ⟨hc, fun _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => rfl⟩
   · obtain ⟨hc, rfl⟩ := step_removeFromWhitelist_exact s a caller s' h_step
@@ -784,6 +785,22 @@ theorem admin_frame (s : State) (op : Op) (caller : Address) (s' : State)
     exact ⟨hc, fun _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => rfl⟩
   · obtain ⟨hc, rfl⟩ := step_setVestPeriod_exact s p caller s' h_step
     exact ⟨hc, fun _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => rfl⟩
+  · -- `updateRedemptionValue`: writes only `redemptionValue`, already outside the frame.
+    simp only [step] at h_step
+    repeat' split at h_step
+    · exact absurd h_step (by simp)
+    · rename_i hc _
+      cases Option.some.inj h_step
+      exact ⟨by simpa using hc, fun _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => rfl⟩
+    · exact absurd h_step (by simp)
+  · -- `withdrawReserve`: writes only `usdcBal` and `usdcReserve`, both outside the frame.
+    simp only [step] at h_step
+    repeat' split at h_step
+    · exact absurd h_step (by simp)
+    · rename_i hc _
+      cases Option.some.inj h_step
+      exact ⟨by simpa using hc, fun _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => rfl⟩
+    · exact absurd h_step (by simp)
 
 /-- T3 `admin_cannot_touch_balances` (docs/05-blast-radius.md, Tier 1) — the
 single-step balance-field form.
@@ -820,17 +837,25 @@ theorem admin_cannot_touch_balances (s : State) (op : Op) (caller : Address) (s'
     s'.totalSupply_apyUSD = s.totalSupply_apyUSD ∧
     s'.vaultApxUSDBal = s.vaultApxUSDBal ∧
     s'.usdcReserve ≤ s.usdcReserve := by
-  obtain ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨bps, rfl⟩ | ⟨amt, rfl⟩ | rfl | ⟨p, rfl⟩ :=
-    h_gated
+  obtain ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨a, rfl⟩ | ⟨bps, rfl⟩ | ⟨amt, rfl⟩ | rfl | ⟨p, rfl⟩ |
+    ⟨v, rfl⟩ | ⟨amt, r, rfl⟩ := h_gated
   all_goals
     simp only [step] at h_step
-    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` and
+    -- `Op.withdrawReserve` have two each.
     (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step;
             exact ⟨rfl, rfl, fun _ => Nat.le_add_right _ _, rfl, rfl, rfl, Nat.zero_le _⟩)
         | (cases Option.some.inj h_step;
             exact ⟨rfl, rfl, fun _ => Nat.le_refl _, rfl, rfl, rfl, Nat.le_refl _⟩)
+        -- `withdrawReserve`: the admin's second USDC channel. Still credit-only pointwise
+        -- (the named receiver gains, nobody is debited) and still reserve-non-increasing,
+        -- so the theorem survives — but the reserve now falls for a reason other than the
+        -- backstop's pro-rata payout.
+        | (cases Option.some.inj h_step;
+            refine ⟨rfl, rfl, fun _ => ?_, rfl, rfl, rfl, Nat.sub_le _ _⟩;
+            dsimp only; split <;> omega)
         | exact absurd h_step (by simp)
 
 /-- T3 (trace form): an arbitrarily long attack trace consisting solely of
@@ -918,7 +943,7 @@ condition, `newRate != 0`; there is no cap, floor, bounded per-update move or ca
 the model does not invent one either. -/
 theorem step_updateRedemptionValue_exact (s : State) (newValue : Nat) (caller : Address)
     (s' : State) (h : step s (Op.updateRedemptionValue newValue) caller = some s') :
-    caller = s.oracle ∧ newValue ≠ 0 ∧ s' = { s with redemptionValue := newValue } := by
+    caller = s.admin ∧ newValue ≠ 0 ∧ s' = { s with redemptionValue := newValue } := by
   simp only [step] at h
   split at h
   · rename_i hc
@@ -940,23 +965,20 @@ theorem step_setApxUSDMarketPrice_exact (s : State) (price : Nat) (caller : Addr
   · exact absurd h (by simp)
 
 /-- Oracle frame (single step): an oracle-gated operation demands the oracle role and
-agrees with the pre-state on every field other than the two prices it publishes,
-`apxUSDMarketPrice` and `redemptionValue`.
+agrees with the pre-state on every field other than `apxUSDMarketPrice`.
 
-`redemptionValue` joined this list when `updateRedemptionValue` stopped being a no-op. The
-frame is still a frame — the oracle moves no balance — but the claim that the oracle has
-no influence over the redemption price does not survive, and should not: on-chain it is
-the oracle role that writes it. -/
+The redemption price is **not** in this frame, and the reason is a source-tracing correction
+rather than a modelling choice: `Roles.assignAdminTargetsFor` assigns
+`RedemptionPoolV0.setExchangeRate` to `ADMIN_ROLE`, and the deployment's own access-control
+suite pins it (`RedemptionPool/Access.t.sol::test_RevertWhen_SetExchangeRateNotAdmin`). The
+oracle role publishes the reported market price and nothing else. -/
 theorem oracle_frame (s : State) (op : Op) (caller : Address) (s' : State)
     (h_gated : OracleOp op) (h_step : step s op caller = some s') :
     caller = s.oracle ∧
-    ∀ mp rv, { s' with apxUSDMarketPrice := mp, redemptionValue := rv }
-           = { s with apxUSDMarketPrice := mp, redemptionValue := rv } := by
-  obtain ⟨v, rfl⟩ | ⟨price, rfl⟩ := h_gated
-  · obtain ⟨hc, -, rfl⟩ := step_updateRedemptionValue_exact s v caller s' h_step
-    exact ⟨hc, fun _ _ => rfl⟩
-  · obtain ⟨hc, rfl⟩ := step_setApxUSDMarketPrice_exact s price caller s' h_step
-    exact ⟨hc, fun _ _ => rfl⟩
+    ∀ mp, { s' with apxUSDMarketPrice := mp } = { s with apxUSDMarketPrice := mp } := by
+  obtain ⟨price, rfl⟩ := h_gated
+  obtain ⟨hc, rfl⟩ := step_setApxUSDMarketPrice_exact s price caller s' h_step
+  exact ⟨hc, fun _ => rfl⟩
 
 /-- Oracle trace form: an arbitrarily long attack trace consisting solely of
 oracle-gated operations changes nothing except the reported market price. The
@@ -964,23 +986,23 @@ oracle's entire direct blast radius is one price field; all asset movement it ca
 cause is mediated by *other* parties' subsequent operations (T6, Tier 2). -/
 theorem oracle_trace_blast_radius (s : State) (σ : List (Op × Address))
     (h_gated : ∀ p ∈ σ, OracleOp p.1) :
-    ∀ mp rv, { execTrace s σ with apxUSDMarketPrice := mp, redemptionValue := rv }
-        = { s with apxUSDMarketPrice := mp, redemptionValue := rv } := by
+    ∀ mp, { execTrace s σ with apxUSDMarketPrice := mp }
+        = { s with apxUSDMarketPrice := mp } := by
   induction σ generalizing s with
-  | nil => intro _ _; rfl
+  | nil => intro _; rfl
   | cons p σ ih =>
     obtain ⟨op, c⟩ := p
-    intro mp rv
+    intro mp
     have h_tail : ∀ q ∈ σ, OracleOp q.1 := fun q hq => h_gated q (List.mem_cons_of_mem _ hq)
     simp only [execTrace]
     cases hstep : step s op c with
-    | none => exact ih s h_tail mp rv
+    | none => exact ih s h_tail mp
     | some s1 =>
       obtain ⟨-, hframe⟩ :=
         oracle_frame s op c s1 (h_gated (op, c) List.mem_cons_self) hstep
-      calc { execTrace s1 σ with apxUSDMarketPrice := mp, redemptionValue := rv }
-          = { s1 with apxUSDMarketPrice := mp, redemptionValue := rv } := ih s1 h_tail mp rv
-        _ = { s with apxUSDMarketPrice := mp, redemptionValue := rv } := hframe mp rv
+      calc { execTrace s1 σ with apxUSDMarketPrice := mp }
+          = { s1 with apxUSDMarketPrice := mp } := ih s1 h_tail mp
+        _ = { s with apxUSDMarketPrice := mp } := hframe mp
 
 /-! ## T4: the non-custodial invariants and the trace headline
 
@@ -1237,10 +1259,14 @@ theorem no_role_debits_usdc (s : State) (op : Op) (caller : Address) (s' : State
     exact absurd h_dec (Nat.not_lt.mpr (Nat.le_add_right _ _))
   all_goals
     simp only [step] at h_step
-    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` and
+    -- `Op.withdrawReserve` have two each.
     (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact absurd h_dec (Nat.lt_irrefl _))
+        -- `withdrawReserve` credits its named receiver and debits nobody, so no USDC
+        -- balance falls. (The *reserve* falls — that is `reserve_outflow_only_via_redemption`.)
+        | (cases Option.some.inj h_step; revert h_dec; dsimp only; split <;> omega)
         | exact absurd h_step (by simp)
 
 /-- T4 companion — governance-token immutability: **no** operation, by **any**
@@ -1512,8 +1538,14 @@ down the only channels through which it can act. -/
 * `catastrophicBackstop` — admin role, governance emergency flag already up, and the new
   value forced to the per-token collateral price `totalCollateralValue * ray /
   totalSupply_apxUSD`. A *loud* write: the same step zeroes the reserve and the buffer.
-* `updateRedemptionValue v` — oracle role, `v` arbitrary and merely non-zero. A *quiet*
-  write: no side effect anywhere else in the state.
+* `updateRedemptionValue v` — **also the admin role**, `v` arbitrary and merely non-zero. A
+  *quiet* write: no side effect anywhere else in the state.
+
+Both writers are the same key. `Roles.assignAdminTargetsFor` puts
+`RedemptionPoolV0.setExchangeRate` under `ADMIN_ROLE`, and the deployment's own
+`RedemptionPool/Access.t.sol::test_RevertWhen_SetExchangeRateNotAdmin` pins it there, so the
+earlier reading of this theorem — that reaching the redemption price at all required an
+emergency — was an artifact of the model, not a property of the protocol.
 
 The second disjunct did not exist while `updateRedemptionValue` was a no-op placeholder,
 and its absence is what made the earlier "admin-only" reading of this theorem possible.
@@ -1527,7 +1559,7 @@ theorem redemption_price_writers (s : State) (op : Op) (caller : Address) (s' : 
     (h_changed : s'.redemptionValue ≠ s.redemptionValue) :
     (op = Op.catastrophicBackstop ∧ caller = s.admin ∧ s.emergencyFlag = true ∧
       s'.redemptionValue = (s.totalCollateralValue * ray) / s.totalSupply_apxUSD)
-    ∨ (∃ v, op = Op.updateRedemptionValue v ∧ caller = s.oracle ∧ v ≠ 0 ∧
+    ∨ (∃ v, op = Op.updateRedemptionValue v ∧ caller = s.admin ∧ v ≠ 0 ∧
       s'.redemptionValue = v) := by
   cases op
   case catastrophicBackstop =>
@@ -1630,7 +1662,14 @@ theorem reserve_outflow_only_via_redemption (s : State) (op : Op) (caller : Addr
       (∀ b, s'.usdcBal b
         = s.usdcBal b + (s.usdcReserve * s.apxUSDBal b) / s.totalSupply_apxUSD) ∧
       s'.apxUSDBal = s.apxUSDBal ∧
-      s'.totalSupply_apxUSD = s.totalSupply_apxUSD) := by
+      s'.totalSupply_apxUSD = s.totalSupply_apxUSD) ∨
+    -- The third exit, and the one that is not a redemption at all: an admin withdrawal
+    -- straight out of the reserve. Mirrors `RedemptionPoolV0.withdraw`/`withdrawTokens`
+    -- (`ADMIN_ROLE` per `Roles.assignAdminTargetsFor`). Nothing is burned, no claim is
+    -- settled, no holder is compensated — the reserve simply moves to a named address.
+    (∃ amount receiver, op = Op.withdrawReserve amount receiver ∧ caller = s.admin ∧
+      s'.usdcReserve = s.usdcReserve - amount ∧
+      s'.usdcBal receiver = s.usdcBal receiver + amount) := by
   cases op
   case redeemApxUSD amount =>
     obtain ⟨_, _, hbal, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
@@ -1651,7 +1690,7 @@ theorem reserve_outflow_only_via_redemption (s : State) (op : Op) (caller : Addr
   case catastrophicBackstop =>
     obtain ⟨hc, hf, hs'⟩ := step_catastrophicBackstop_exact _ _ _ h_step
     subst hs'
-    exact Or.inr ⟨rfl, hc, hf, rfl, fun b => rfl, rfl, rfl⟩
+    exact Or.inr (Or.inl ⟨rfl, hc, hf, rfl, fun b => rfl, rfl, rfl⟩)
   case depositUSDC amount =>
     obtain ⟨_, _, _, _, hs'⟩ := inv_depositUSDC _ _ _ _ h_step
     subst hs'
@@ -1690,6 +1729,14 @@ theorem reserve_outflow_only_via_redemption (s : State) (op : Op) (caller : Addr
     obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := inv_flexibleClaimUnlock _ _ _ _ h_step
     subst hs'
     exact absurd h_dec (by simp [mintApxUSD, burnUnlockNFT])
+  case withdrawReserve amount receiver =>
+    simp only [step] at h_step
+    repeat' split at h_step
+    · exact absurd h_step (by simp)
+    · rename_i hc _
+      cases Option.some.inj h_step
+      exact Or.inr (Or.inr ⟨amount, receiver, rfl, by simpa using hc, rfl, by simp⟩)
+    · exact absurd h_step (by simp)
   all_goals
     simp only [step] at h_step
     -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
@@ -1783,16 +1830,10 @@ op, so the extraction coalition is admin (price) + redeemer/RFQ-counterparty (dr
 /-- T6(a) `oracle_alone_preserves_balances`: an arbitrarily long trace whose operations
 are ALL oracle-gated leaves every balance, supply, and reserve field bitwise unchanged.
 The oracle key acting alone extracts exactly zero — its only reachable field is the
-two price fields it publishes, `apxUSDMarketPrice` and `redemptionValue`
-(`oracle_trace_blast_radius`).
-
-**The redemption price is no longer among the fields it leaves alone.** While
-`updateRedemptionValue` was a no-op this theorem also concluded `redemptionValue`
-unchanged; that conjunct is dropped, and `oracle_alone_moves_redemption_price` below
-records the capability it was hiding. What survives — and it is the part the
-non-custodial story rests on — is that the oracle acting alone moves no balance, supply
-or reserve: extraction still requires some *other* party to transact at the price it
-published (T6, Tier 2). -/
+reported market price `apxUSDMarketPrice` (`oracle_trace_blast_radius`), and the
+redemption price in particular is untouched (`redemptionValue` unchanged) — because
+writing it is an **admin** capability, not an oracle one
+(`Roles.assignAdminTargetsFor`; see `admin_alone_moves_redemption_price` below). -/
 theorem oracle_alone_preserves_balances (s : State) (σ : List (Op × Address))
     (h_gated : ∀ p ∈ σ, OracleOp p.1) :
     (execTrace s σ).apxUSDBal = s.apxUSDBal ∧
@@ -1803,9 +1844,10 @@ theorem oracle_alone_preserves_balances (s : State) (σ : List (Op × Address))
     (execTrace s σ).totalSupply_apxUSD = s.totalSupply_apxUSD ∧
     (execTrace s σ).totalSupply_apyUSD = s.totalSupply_apyUSD ∧
     (execTrace s σ).vaultApxUSDBal = s.vaultApxUSDBal ∧
-    (execTrace s σ).vestTotal = s.vestTotal := by
-  have h := oracle_trace_blast_radius s σ h_gated 0 0
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    (execTrace s σ).vestTotal = s.vestTotal ∧
+    (execTrace s σ).redemptionValue = s.redemptionValue := by
+  have h := oracle_trace_blast_radius s σ h_gated 0
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simpa using congrArg State.apxUSDBal h
   · simpa using congrArg State.apyUSDBal h
   · simpa using congrArg State.usdcBal h
@@ -1815,15 +1857,33 @@ theorem oracle_alone_preserves_balances (s : State) (σ : List (Op × Address))
   · simpa using congrArg State.totalSupply_apyUSD h
   · simpa using congrArg State.vaultApxUSDBal h
   · simpa using congrArg State.vestTotal h
+  · simpa using congrArg State.redemptionValue h
 
-/-- The capability the previous theorem used to deny: the oracle role, acting alone and
-without any emergency flag, publishes any non-zero redemption price it likes in one step.
-No cap, no floor, no bounded move, no cadence — the model now says what
-`ApxUSDRateOracle.setRate` and `RedemptionPoolV0.setExchangeRate` say. -/
-theorem oracle_alone_moves_redemption_price (s : State) (v : Nat) (hv : v ≠ 0) :
-    ∃ s', step s (Op.updateRedemptionValue v) s.oracle = some s' ∧ s'.redemptionValue = v := by
+/-- **The admin's quiet route to the redemption price.** No emergency flag, no compromised
+second key, no side effect anywhere else in the state: one step publishes any non-zero price.
+No cap, no floor, no bounded per-update move, no cadence — the model now says exactly what
+`RedemptionPoolV0.setExchangeRate` says, and the role it demands is the one
+`Roles.assignAdminTargetsFor` assigns.
+
+Contrast `catastrophicBackstop`, the admin's *loud* route: it needs the emergency flag, forces
+the value to the pro-rata price, and zeroes the reserve and the buffer in the same step. Only
+the loud one is visible to a monitor watching protocol state. -/
+theorem admin_alone_moves_redemption_price (s : State) (v : Nat) (hv : v ≠ 0) :
+    ∃ s', step s (Op.updateRedemptionValue v) s.admin = some s' ∧ s'.redemptionValue = v := by
   refine ⟨{ s with redemptionValue := v }, ?_, rfl⟩
   simp [step, hv]
+
+/-- **And the admin's route out of the reserve, with no redemption at all.** Mirrors
+`RedemptionPoolV0.withdraw` / `withdrawTokens`. Nothing is burned, no claim is settled: the
+reserve simply moves to an address the admin names. This is the operation whose absence made
+`reserve_outflow_only_via_redemption` read as an exhaustive account of reserve exits. -/
+theorem admin_alone_drains_reserve (s : State) (amount : Nat) (r : Address)
+    (h : amount ≤ s.usdcReserve) :
+    ∃ s', step s (Op.withdrawReserve amount r) s.admin = some s' ∧
+      s'.usdcReserve = s.usdcReserve - amount ∧ s'.usdcBal r = s.usdcBal r + amount := by
+  refine ⟨{ s with usdcReserve := s.usdcReserve - amount,
+                   usdcBal := fun a => if a = r then s.usdcBal a + amount else s.usdcBal a },
+          ?_, rfl, ?_⟩ <;> simp [step, Nat.not_lt.mpr h]
 
 /-- T6(b), payout formula: a successful `redeemApxUSD amount` credits the caller
 exactly `amount * redemptionValue / ray` USDC (removed from the reserve) against a burn
@@ -2172,14 +2232,20 @@ theorem step2_charge_only_for_redemption (rs : RLState) (op : Op) (caller : Addr
     (op = Op.catastrophicBackstop ∧ caller = rs.base.admin ∧
       rs.base.emergencyFlag = true ∧ rs'.base.usdcReserve = 0 ∧
       (∀ b, rs'.base.usdcBal b = rs.base.usdcBal b
-        + (rs.base.usdcReserve * rs.base.apxUSDBal b) / rs.base.totalSupply_apxUSD)) := by
+        + (rs.base.usdcReserve * rs.base.apxUSDBal b) / rs.base.totalSupply_apxUSD)) ∨
+    -- The rate limiter charges the admin's bare withdrawal too: it is an outflow, so the
+    -- epoch cap bounds it exactly as it bounds a redemption. That is the point of pricing
+    -- the wrapper on `usdcReserve` movement rather than on which operation caused it.
+    (∃ amount receiver, op = Op.withdrawReserve amount receiver ∧ caller = rs.base.admin) := by
   obtain ⟨s', hs, hgate, rfl⟩ := inv_step2_base rs op caller rs' h
   dsimp only at h_pos ⊢
   have hdec : s'.usdcReserve < rs.base.usdcReserve := by omega
   rcases reserve_outflow_only_via_redemption rs.base op caller s' hs hdec with
-    ⟨user, amount, hop, hbal, hapx, husdc, -, -⟩ | ⟨hop, hc, hf, hres, husdc, -, -⟩
+    ⟨user, amount, hop, hbal, hapx, husdc, -, -⟩ | ⟨hop, hc, hf, hres, husdc, -, -⟩ |
+    ⟨amt, rcv, hop, hc, -, -⟩
   · exact Or.inl ⟨user, amount, hop, hbal, hapx, husdc⟩
-  · exact Or.inr ⟨hop, hc, hf, hres, husdc⟩
+  · exact Or.inr (Or.inl ⟨hop, hc, hf, hres, husdc⟩)
+  · exact Or.inr (Or.inr ⟨amt, rcv, hop, hc⟩)
 
 /-- The rate limiter's local invariant is self-establishing: after any accepted
 `step2` — with no assumption on the pre-state — `spentThisEpoch ≤ cap` holds (base
@@ -2956,7 +3022,7 @@ act. -/
 private def timingWitness : State :=
   { (default : State) with
       globalPause := false
-      oracle := 3
+      admin := 3
       rfqCounterparties := [2]
       whitelist := fun a => a == 0
       usdcBal := fun _ => 0

@@ -311,7 +311,10 @@ private theorem penniless_step (s : State) (op : Op) (caller : Address) (s' : St
     (h_step : step s op caller = some s') (a : Address) (h : Penniless a s)
     (h_no_mint_gift : ∀ n, op ≠ Op.mintApxUSD a n)
     (h_no_withdraw_gift : ∀ n, op ≠ Op.withdraw n a)
-    (h_no_redeem_gift : ∀ n, op ≠ Op.redeem n a) :
+    (h_no_redeem_gift : ∀ n, op ≠ Op.redeem n a)
+    -- The admin's bare reserve withdrawal names its receiver, so it is a gift channel in
+    -- exactly the same sense as the three above: `a` ends up holding USDC it never paid for.
+    (h_no_reserve_gift : ∀ n, op ≠ Op.withdrawReserve n a) :
     Penniless a s' := by
   obtain ⟨hx, hu, hstd, hflex⟩ := h
   cases op
@@ -467,6 +470,15 @@ private theorem penniless_step (s : State) (op : Op) (caller : Address) (s' : St
     (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact ⟨hx, hu, hstd, hflex⟩)
+        -- `withdrawReserve amt r`: credits `r` only, and `r ≠ a` by `h_no_reserve_gift`.
+        | (cases Option.some.inj h_step
+           refine ⟨hx, ?_, hstd, hflex⟩
+           dsimp only
+           rename_i hra _
+           split
+           · rename_i hra'
+             exact absurd (by rw [hra']) (h_no_reserve_gift _)
+           · exact hu)
         | exact absurd h_step (by simp)
 
 /-- The `Penniless` invariant holds across arbitrary traces (revert-skip
@@ -475,7 +487,8 @@ directed at `a`. -/
 theorem penniless_invariant (s : State) (σ : List (Op × Address)) (a : Address)
     (h0 : Penniless a s)
     (h_no_gift : ∀ p ∈ σ, (∀ n, p.1 ≠ Op.mintApxUSD a n) ∧
-      (∀ n, p.1 ≠ Op.withdraw n a) ∧ (∀ n, p.1 ≠ Op.redeem n a)) :
+      (∀ n, p.1 ≠ Op.withdraw n a) ∧ (∀ n, p.1 ≠ Op.redeem n a) ∧
+      (∀ n, p.1 ≠ Op.withdrawReserve n a)) :
     Penniless a (execTrace s σ) := by
   induction σ generalizing s with
   | nil => exact h0
@@ -483,13 +496,15 @@ theorem penniless_invariant (s : State) (σ : List (Op × Address)) (a : Address
     obtain ⟨op, c⟩ := p
     have hhead := h_no_gift (op, c) List.mem_cons_self
     have htail : ∀ q ∈ σ, (∀ n, q.1 ≠ Op.mintApxUSD a n) ∧
-        (∀ n, q.1 ≠ Op.withdraw n a) ∧ (∀ n, q.1 ≠ Op.redeem n a) :=
+        (∀ n, q.1 ≠ Op.withdraw n a) ∧ (∀ n, q.1 ≠ Op.redeem n a) ∧
+        (∀ n, q.1 ≠ Op.withdrawReserve n a) :=
       fun q hq => h_no_gift q (List.mem_cons_of_mem _ hq)
     simp only [execTrace]
     cases hstep : step s op c with
     | none => exact ih s h0 htail
     | some s1 =>
-      exact ih s1 (penniless_step s op c s1 hstep a h0 hhead.1 hhead.2.1 hhead.2.2) htail
+      exact ih s1 (penniless_step s op c s1 hstep a h0 hhead.1 hhead.2.1 hhead.2.2.1
+        hhead.2.2.2) htail
 
 /-- **S1 `no_free_value_trace`** (docs/06-safety-properties.md, Tier A): no apxUSD
 value can be created from nothing, at trace level.
@@ -508,7 +523,8 @@ funded unlock position, an address with no funding source can never be credited.
 theorem no_free_value_trace (s : State) (σ : List (Op × Address)) (a : Address)
     (h0 : Penniless a s)
     (h_no_gift : ∀ p ∈ σ, (∀ n, p.1 ≠ Op.mintApxUSD a n) ∧
-      (∀ n, p.1 ≠ Op.withdraw n a) ∧ (∀ n, p.1 ≠ Op.redeem n a)) :
+      (∀ n, p.1 ≠ Op.withdraw n a) ∧ (∀ n, p.1 ≠ Op.redeem n a) ∧
+      (∀ n, p.1 ≠ Op.withdrawReserve n a)) :
     (execTrace s σ).apxUSDBal a = 0 :=
   (penniless_invariant s σ a h0 h_no_gift).1
 
@@ -569,10 +585,11 @@ theorem solvency_step (s : State) (op : Op) (caller : Address) (s' : State)
     (h_not_claim : ∀ id, op ≠ Op.claimUnlock id)
     (h_not_flex_claim : ∀ id, op ≠ Op.flexibleClaimUnlock id)
     (h_not_stress : ∀ a, op ≠ Op.handleStressEvent a)
-    (h_not_backstop : op ≠ Op.catastrophicBackstop) :
+    (h_not_backstop : op ≠ Op.catastrophicBackstop)
+    (h_not_withdraw_reserve : ∀ amt r, op ≠ Op.withdrawReserve amt r) :
     Solvent s' :=
   req_overcollateralization_limit s op caller s' h_step h_solvent h_wf.1 h_wf.2
-    h_not_claim h_not_flex_claim h_not_stress h_not_backstop
+    h_not_claim h_not_flex_claim h_not_stress h_not_backstop h_not_withdraw_reserve
 
 /-- **S2 `solvency_preserved`** (docs/06-safety-properties.md, Tier A): aggregate
 overcollateralization is preserved across arbitrary traces (revert-skip semantics),
@@ -585,7 +602,7 @@ theorem solvency_preserved (s : State) (σ : List (Op × Address))
     (h_wf : ∀ n, WellFormed (execTrace s (σ.take n)))
     (h_excl : ∀ p ∈ σ, (∀ id, p.1 ≠ Op.claimUnlock id) ∧
       (∀ id, p.1 ≠ Op.flexibleClaimUnlock id) ∧ (∀ a, p.1 ≠ Op.handleStressEvent a) ∧
-      p.1 ≠ Op.catastrophicBackstop) :
+      p.1 ≠ Op.catastrophicBackstop ∧ (∀ amt r, p.1 ≠ Op.withdrawReserve amt r)) :
     Solvent (execTrace s σ) := by
   induction σ generalizing s with
   | nil => exact h_solvent
@@ -594,7 +611,7 @@ theorem solvency_preserved (s : State) (σ : List (Op × Address))
     have hhead := h_excl (op, c) List.mem_cons_self
     have htail : ∀ q ∈ σ, (∀ id, q.1 ≠ Op.claimUnlock id) ∧
         (∀ id, q.1 ≠ Op.flexibleClaimUnlock id) ∧ (∀ a, q.1 ≠ Op.handleStressEvent a) ∧
-        q.1 ≠ Op.catastrophicBackstop :=
+        q.1 ≠ Op.catastrophicBackstop ∧ (∀ amt r, q.1 ≠ Op.withdrawReserve amt r) :=
       fun q hq => h_excl q (List.mem_cons_of_mem _ hq)
     have hwf0 : WellFormed s := by simpa [execTrace] using h_wf 0
     simp only [execTrace]
@@ -606,7 +623,7 @@ theorem solvency_preserved (s : State) (σ : List (Op × Address))
     | some s1 =>
       have hsolvent1 : Solvent s1 :=
         solvency_step s op c s1 hstep h_solvent hwf0 hhead.1 hhead.2.1 hhead.2.2.1
-          hhead.2.2.2
+          hhead.2.2.2.1 hhead.2.2.2.2
       refine ih s1 hsolvent1 ?_ htail
       intro n
       simpa [execTrace, hstep] using h_wf (n + 1)
@@ -1321,12 +1338,14 @@ genuinely hard arithmetic problem left explicitly open in `docs/06-safety-proper
 share-moving (`lockApxUSD`/`withdraw`/`redeem`), nor an unlock settlement
 (`claimUnlock`/`flexibleClaimUnlock`), nor a third-party gift mint (`mintApxUSD`), nor the
 catastrophic backstop (`catastrophicBackstop`), which pays the entire USDC reserve — buffer
-included — out to holders pro-rata and so legitimately *increases* holders' fixed-rate value. -/
+included — out to holders pro-rata and so legitimately *increases* holders' fixed-rate value,
+nor a privileged reserve withdrawal (`withdrawReserve`), which credits an address the admin
+names with USDC it did not pay for. -/
 def ValuePreservingOp (op : Op) : Prop :=
   (∀ to n, op ≠ Op.mintApxUSD to n) ∧ (∀ n, op ≠ Op.lockApxUSD n) ∧
   (∀ n r, op ≠ Op.withdraw n r) ∧ (∀ sh r, op ≠ Op.redeem sh r) ∧
   (∀ id, op ≠ Op.claimUnlock id) ∧ (∀ id, op ≠ Op.flexibleClaimUnlock id) ∧
-  (op ≠ Op.catastrophicBackstop)
+  (op ≠ Op.catastrophicBackstop) ∧ (∀ amt r, op ≠ Op.withdrawReserve amt r)
 
 /-- Single step of S9: a value-preserving operation never increases any address's holdings
 valued at a fixed rate `R` (given the no-premium-redemption side condition). -/
@@ -1342,7 +1361,8 @@ theorem valueAt_step_le (R : Nat) (s : State) (op : Op) (caller a : Address) (s'
   case redeem sh r => exact absurd rfl (hr sh r)
   case claimUnlock id => exact absurd rfl (hc id)
   case flexibleClaimUnlock id => exact absurd rfl (hf id)
-  case catastrophicBackstop => exact absurd rfl hcb
+  case catastrophicBackstop => exact absurd rfl hcb.1
+  case withdrawReserve amt r => exact absurd rfl (hcb.2 amt r)
   case depositUSDC amount =>
     obtain ⟨-, -, -, hle, hs'⟩ := inv_depositUSDC s amount caller s' h_step
     subst hs'
