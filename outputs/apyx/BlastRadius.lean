@@ -74,7 +74,7 @@ def DistributorOp (op : Op) : Prop := ∃ amount, op = Op.creditYield amount
 
 /-- Operations authorized by the `oracle` role. -/
 def OracleOp (op : Op) : Prop :=
-  op = Op.updateRedemptionValue ∨ ∃ price, op = Op.setApxUSDMarketPrice price
+  (∃ v, op = Op.updateRedemptionValue v) ∨ ∃ price, op = Op.setApxUSDMarketPrice price
 
 /-- Operations authorized by the `admin` role. -/
 def AdminOp (op : Op) : Prop :=
@@ -824,8 +824,8 @@ theorem admin_cannot_touch_balances (s : State) (op : Op) (caller : Address) (s'
     h_gated
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step;
             exact ⟨rfl, rfl, fun _ => Nat.le_add_right _ _, rfl, rfl, rfl, Nat.zero_le _⟩)
@@ -907,15 +907,25 @@ exactly the reported market-price field; the security-relevant channel is indire
 Quantifying worst-case extraction through mispricing is T6 (`oracle_blast_radius`,
 Tier 2). -/
 
-/-- Exact effect of `updateRedemptionValue`: demands the oracle role and — in this
-model — changes nothing at all. -/
-theorem step_updateRedemptionValue_exact (s : State) (caller : Address) (s' : State)
-    (h : step s Op.updateRedemptionValue caller = some s') :
-    caller = s.oracle ∧ s' = s := by
+/-- Exact effect of `updateRedemptionValue`: demands the oracle role, rejects zero, and
+publishes the supplied value verbatim as the new redemption price.
+
+Until the clock work this case was a no-op placeholder, which made `catastrophicBackstop`
+the sole writer of `redemptionValue` and left an honest-operations price move — the thing
+an RFQ counterparty would time its execution against — inexpressible. The deployed setters
+(`ApxUSDRateOracle.setRate`, `RedemptionPoolV0.setExchangeRate`) enforce exactly one
+condition, `newRate != 0`; there is no cap, floor, bounded per-update move or cadence, so
+the model does not invent one either. -/
+theorem step_updateRedemptionValue_exact (s : State) (newValue : Nat) (caller : Address)
+    (s' : State) (h : step s (Op.updateRedemptionValue newValue) caller = some s') :
+    caller = s.oracle ∧ newValue ≠ 0 ∧ s' = { s with redemptionValue := newValue } := by
   simp only [step] at h
   split at h
   · rename_i hc
-    exact ⟨by simpa using hc, (Option.some.inj h).symm⟩
+    split at h
+    · exact absurd h (by simp)
+    · rename_i hz
+      exact ⟨by simpa using hc, hz, (Option.some.inj h).symm⟩
   · exact absurd h (by simp)
 
 /-- Exact effect of `setApxUSDMarketPrice`: demands the oracle role and overrides
@@ -929,17 +939,24 @@ theorem step_setApxUSDMarketPrice_exact (s : State) (price : Nat) (caller : Addr
     exact ⟨by simpa using hc, (Option.some.inj h).symm⟩
   · exact absurd h (by simp)
 
-/-- Oracle frame (single step): an oracle-gated operation demands the oracle role
-and agrees with the pre-state on every field other than `apxUSDMarketPrice`. -/
+/-- Oracle frame (single step): an oracle-gated operation demands the oracle role and
+agrees with the pre-state on every field other than the two prices it publishes,
+`apxUSDMarketPrice` and `redemptionValue`.
+
+`redemptionValue` joined this list when `updateRedemptionValue` stopped being a no-op. The
+frame is still a frame — the oracle moves no balance — but the claim that the oracle has
+no influence over the redemption price does not survive, and should not: on-chain it is
+the oracle role that writes it. -/
 theorem oracle_frame (s : State) (op : Op) (caller : Address) (s' : State)
     (h_gated : OracleOp op) (h_step : step s op caller = some s') :
     caller = s.oracle ∧
-    ∀ mp, { s' with apxUSDMarketPrice := mp } = { s with apxUSDMarketPrice := mp } := by
-  obtain rfl | ⟨price, rfl⟩ := h_gated
-  · obtain ⟨hc, rfl⟩ := step_updateRedemptionValue_exact s caller s' h_step
-    exact ⟨hc, fun _ => rfl⟩
+    ∀ mp rv, { s' with apxUSDMarketPrice := mp, redemptionValue := rv }
+           = { s with apxUSDMarketPrice := mp, redemptionValue := rv } := by
+  obtain ⟨v, rfl⟩ | ⟨price, rfl⟩ := h_gated
+  · obtain ⟨hc, -, rfl⟩ := step_updateRedemptionValue_exact s v caller s' h_step
+    exact ⟨hc, fun _ _ => rfl⟩
   · obtain ⟨hc, rfl⟩ := step_setApxUSDMarketPrice_exact s price caller s' h_step
-    exact ⟨hc, fun _ => rfl⟩
+    exact ⟨hc, fun _ _ => rfl⟩
 
 /-- Oracle trace form: an arbitrarily long attack trace consisting solely of
 oracle-gated operations changes nothing except the reported market price. The
@@ -947,23 +964,23 @@ oracle's entire direct blast radius is one price field; all asset movement it ca
 cause is mediated by *other* parties' subsequent operations (T6, Tier 2). -/
 theorem oracle_trace_blast_radius (s : State) (σ : List (Op × Address))
     (h_gated : ∀ p ∈ σ, OracleOp p.1) :
-    ∀ mp, { execTrace s σ with apxUSDMarketPrice := mp }
-        = { s with apxUSDMarketPrice := mp } := by
+    ∀ mp rv, { execTrace s σ with apxUSDMarketPrice := mp, redemptionValue := rv }
+        = { s with apxUSDMarketPrice := mp, redemptionValue := rv } := by
   induction σ generalizing s with
-  | nil => intro _; rfl
+  | nil => intro _ _; rfl
   | cons p σ ih =>
     obtain ⟨op, c⟩ := p
-    intro mp
+    intro mp rv
     have h_tail : ∀ q ∈ σ, OracleOp q.1 := fun q hq => h_gated q (List.mem_cons_of_mem _ hq)
     simp only [execTrace]
     cases hstep : step s op c with
-    | none => exact ih s h_tail mp
+    | none => exact ih s h_tail mp rv
     | some s1 =>
       obtain ⟨-, hframe⟩ :=
         oracle_frame s op c s1 (h_gated (op, c) List.mem_cons_self) hstep
-      calc { execTrace s1 σ with apxUSDMarketPrice := mp }
-          = { s1 with apxUSDMarketPrice := mp } := ih s1 h_tail mp
-        _ = { s with apxUSDMarketPrice := mp } := hframe mp
+      calc { execTrace s1 σ with apxUSDMarketPrice := mp, redemptionValue := rv }
+          = { s1 with apxUSDMarketPrice := mp, redemptionValue := rv } := ih s1 h_tail mp rv
+        _ = { s with apxUSDMarketPrice := mp, redemptionValue := rv } := hframe mp rv
 
 /-! ## T4: the non-custodial invariants and the trace headline
 
@@ -1089,8 +1106,8 @@ theorem no_role_transfers_user_funds (s : State) (op : Op) (caller : Address) (s
       simp [burnApxUSD, hau] at h_dec
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact absurd h_dec (Nat.lt_irrefl _))
         | exact absurd h_step (by simp)
@@ -1220,8 +1237,8 @@ theorem no_role_debits_usdc (s : State) (op : Op) (caller : Address) (s' : State
     exact absurd h_dec (Nat.not_lt.mpr (Nat.le_add_right _ _))
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact absurd h_dec (Nat.lt_irrefl _))
         | exact absurd h_step (by simp)
@@ -1280,8 +1297,8 @@ theorem governance_token_balances_immutable (s : State) (op : Op) (caller : Addr
     simp [burnApxUSD]
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; rfl)
         | exact absurd h_step (by simp)
@@ -1414,8 +1431,8 @@ theorem no_role_seizes_unlock_position (s : State) (op : Op) (caller : Address) 
     exact Or.inl ⟨by simpa [burnApxUSD] using h_live, by simp [burnApxUSD]⟩
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact Or.inl ⟨h_live, rfl⟩)
         | exact absurd h_step (by simp)
@@ -1489,20 +1506,36 @@ which an approved RFQ counterparty can settle users' **outstanding RFQ requests*
 at zero USDC. Pricing that coalition is T10's table; the theorems below pin
 down the only channels through which it can act. -/
 
-/-- The redemption price is admin-gated: if a step changes `redemptionValue`, the
-operation was `catastrophicBackstop`, the caller held the admin role, the governance
-emergency flag was already set, and the new value is the per-token collateral price
-`totalCollateralValue * ray / totalSupply_apxUSD`. In particular the oracle role has
-**no** influence over the redemption price in this model. -/
-theorem redemption_price_admin_only (s : State) (op : Op) (caller : Address) (s' : State)
+/-- **Who can write the redemption price.** Exhaustive over `Op`: a step that changes
+`redemptionValue` was one of exactly two operations.
+
+* `catastrophicBackstop` — admin role, governance emergency flag already up, and the new
+  value forced to the per-token collateral price `totalCollateralValue * ray /
+  totalSupply_apxUSD`. A *loud* write: the same step zeroes the reserve and the buffer.
+* `updateRedemptionValue v` — oracle role, `v` arbitrary and merely non-zero. A *quiet*
+  write: no side effect anywhere else in the state.
+
+The second disjunct did not exist while `updateRedemptionValue` was a no-op placeholder,
+and its absence is what made the earlier "admin-only" reading of this theorem possible.
+It does not hold on-chain: `ApxUSDRateOracle.setRate` and
+`RedemptionPoolV0.setExchangeRate` are role-gated setters whose only guard is
+`newRate != 0`, with no cap, floor, bounded move or cadence. Any blast-radius claim that
+treats the redemption price as reachable only under an emergency has to carry this
+disjunct. -/
+theorem redemption_price_writers (s : State) (op : Op) (caller : Address) (s' : State)
     (h_step : step s op caller = some s')
     (h_changed : s'.redemptionValue ≠ s.redemptionValue) :
-    op = Op.catastrophicBackstop ∧ caller = s.admin ∧ s.emergencyFlag = true ∧
-    s'.redemptionValue = (s.totalCollateralValue * ray) / s.totalSupply_apxUSD := by
+    (op = Op.catastrophicBackstop ∧ caller = s.admin ∧ s.emergencyFlag = true ∧
+      s'.redemptionValue = (s.totalCollateralValue * ray) / s.totalSupply_apxUSD)
+    ∨ (∃ v, op = Op.updateRedemptionValue v ∧ caller = s.oracle ∧ v ≠ 0 ∧
+      s'.redemptionValue = v) := by
   cases op
   case catastrophicBackstop =>
     obtain ⟨hc, hf, rfl⟩ := step_catastrophicBackstop_exact s caller s' h_step
-    exact ⟨rfl, hc, hf, rfl⟩
+    exact Or.inl ⟨rfl, hc, hf, rfl⟩
+  case updateRedemptionValue v =>
+    obtain ⟨hc, hz, rfl⟩ := step_updateRedemptionValue_exact s v caller s' h_step
+    exact Or.inr ⟨v, rfl, hc, hz, rfl⟩
   case depositUSDC amount =>
     obtain ⟨_, _, _, _, hs'⟩ := inv_depositUSDC _ _ _ _ h_step
     subst hs'
@@ -1551,11 +1584,24 @@ theorem redemption_price_admin_only (s : State) (op : Op) (caller : Address) (s'
     exact absurd (by simp [burnApxUSD]) h_changed
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact absurd rfl h_changed)
         | exact absurd h_step (by simp)
+
+/-- The original admin-only characterization, kept under its own name and now carrying the
+hypothesis that makes it true: rule the oracle's own setter out and the backstop is the
+only remaining writer. Reports citing this must state the exclusion. -/
+theorem redemption_price_admin_only (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s')
+    (h_not_oracle_setter : ∀ v, op ≠ Op.updateRedemptionValue v)
+    (h_changed : s'.redemptionValue ≠ s.redemptionValue) :
+    op = Op.catastrophicBackstop ∧ caller = s.admin ∧ s.emergencyFlag = true ∧
+    s'.redemptionValue = (s.totalCollateralValue * ray) / s.totalSupply_apxUSD := by
+  rcases redemption_price_writers s op caller s' h_step h_changed with h | ⟨v, hv, -, -, -⟩
+  · exact h
+  · exact absurd hv (h_not_oracle_setter v)
 
 /-- Reserve outflows happen only through redemption **or the catastrophic
 backstop's wind-down distribution**. On the redemption paths, every unit that
@@ -1646,8 +1692,8 @@ theorem reserve_outflow_only_via_redemption (s : State) (op : Op) (caller : Addr
     exact absurd h_dec (by simp [mintApxUSD, burnUnlockNFT])
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact absurd h_dec (by simp <;> omega))
         | exact absurd h_step (by simp)
@@ -1737,8 +1783,16 @@ op, so the extraction coalition is admin (price) + redeemer/RFQ-counterparty (dr
 /-- T6(a) `oracle_alone_preserves_balances`: an arbitrarily long trace whose operations
 are ALL oracle-gated leaves every balance, supply, and reserve field bitwise unchanged.
 The oracle key acting alone extracts exactly zero — its only reachable field is the
-reported market price `apxUSDMarketPrice` (`oracle_trace_blast_radius`), and the
-redemption price in particular is untouched (`redemptionValue` unchanged). -/
+two price fields it publishes, `apxUSDMarketPrice` and `redemptionValue`
+(`oracle_trace_blast_radius`).
+
+**The redemption price is no longer among the fields it leaves alone.** While
+`updateRedemptionValue` was a no-op this theorem also concluded `redemptionValue`
+unchanged; that conjunct is dropped, and `oracle_alone_moves_redemption_price` below
+records the capability it was hiding. What survives — and it is the part the
+non-custodial story rests on — is that the oracle acting alone moves no balance, supply
+or reserve: extraction still requires some *other* party to transact at the price it
+published (T6, Tier 2). -/
 theorem oracle_alone_preserves_balances (s : State) (σ : List (Op × Address))
     (h_gated : ∀ p ∈ σ, OracleOp p.1) :
     (execTrace s σ).apxUSDBal = s.apxUSDBal ∧
@@ -1749,10 +1803,9 @@ theorem oracle_alone_preserves_balances (s : State) (σ : List (Op × Address))
     (execTrace s σ).totalSupply_apxUSD = s.totalSupply_apxUSD ∧
     (execTrace s σ).totalSupply_apyUSD = s.totalSupply_apyUSD ∧
     (execTrace s σ).vaultApxUSDBal = s.vaultApxUSDBal ∧
-    (execTrace s σ).vestTotal = s.vestTotal ∧
-    (execTrace s σ).redemptionValue = s.redemptionValue := by
-  have h := oracle_trace_blast_radius s σ h_gated 0
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    (execTrace s σ).vestTotal = s.vestTotal := by
+  have h := oracle_trace_blast_radius s σ h_gated 0 0
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simpa using congrArg State.apxUSDBal h
   · simpa using congrArg State.apyUSDBal h
   · simpa using congrArg State.usdcBal h
@@ -1762,7 +1815,15 @@ theorem oracle_alone_preserves_balances (s : State) (σ : List (Op × Address))
   · simpa using congrArg State.totalSupply_apyUSD h
   · simpa using congrArg State.vaultApxUSDBal h
   · simpa using congrArg State.vestTotal h
-  · simpa using congrArg State.redemptionValue h
+
+/-- The capability the previous theorem used to deny: the oracle role, acting alone and
+without any emergency flag, publishes any non-zero redemption price it likes in one step.
+No cap, no floor, no bounded move, no cadence — the model now says what
+`ApxUSDRateOracle.setRate` and `RedemptionPoolV0.setExchangeRate` say. -/
+theorem oracle_alone_moves_redemption_price (s : State) (v : Nat) (hv : v ≠ 0) :
+    ∃ s', step s (Op.updateRedemptionValue v) s.oracle = some s' ∧ s'.redemptionValue = v := by
+  refine ⟨{ s with redemptionValue := v }, ?_, rfl⟩
+  simp [step, hv]
 
 /-- T6(b), payout formula: a successful `redeemApxUSD amount` credits the caller
 exactly `amount * redemptionValue / ray` USDC (removed from the reserve) against a burn
@@ -1986,8 +2047,8 @@ theorem apxUSD_credit_is_backed (s : State) (op : Op) (caller : Address) (s' : S
     split at h_inc <;> omega
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact absurd h_inc (Nat.lt_irrefl _))
         | exact absurd h_step (by simp)
@@ -2877,5 +2938,55 @@ theorem admin_rfq_coalition_drains :
   · rw [hapx, show R.apxUSDBal 0 = 100 from rfl]
   · rw [husdc, show R.redemptionValue = 0 from rfl, show R.usdcBal 0 = 0 from rfl,
       Nat.mul_zero, Nat.zero_div]
+
+/-! ## T11: the RFQ counterparty's timing option
+
+Newly stateable. Two model changes were needed and neither is about the RFQ path itself:
+`Op.tick` (so a trace can contain more than one instant) and a working
+`updateRedemptionValue` (so the redemption price can move under *honest* operations rather
+than only under the admin's emergency backstop). Until both landed, "the counterparty picks
+the moment" was not a property this model could express — which is why `admin_rfq_coalition_drains`
+below it is stated as a **two-key** coalition. That is a fact about the model's reach, not a
+bound on the adversary.
+
+The witness holds the reserve full and the emergency flag down: nothing here is a
+catastrophe, and no key is compromised except that we let the counterparty choose when to
+act. -/
+
+private def timingWitness : State :=
+  { (default : State) with
+      globalPause := false
+      oracle := 3
+      rfqCounterparties := [2]
+      whitelist := fun a => a == 0
+      usdcBal := fun _ => 0
+      totalSupply_apxUSD := 100
+      apxUSDBal := fun a => if a = 0 then 100 else 0
+      rfqRequests := fun a => if a = 0 then 100 else 0
+      redemptionValue := ray
+      usdcReserve := 100 }
+
+/-- **T11 `rfq_payout_is_set_by_execution_timing`** — the user's realized payout on a
+submitted RFQ request is fixed by *when* the counterparty executes, and the user has no
+input into that moment.
+
+Same starting state, same user, same request of 100 apxUSD, same counterparty:
+
+* executed straight away, at the published price `ray` ($1.00), the user is paid **100**;
+* executed after one honest oracle update to `ray / 2`, the user is paid **50**.
+
+Both traces are permitted, both leave the request consumed, and the counterparty selects
+between them unilaterally. No key is compromised in either. This is the Apyx instance of
+the settlement-timing option that `docs/06` §7 files as S10 — the difference being that
+there the payout rule takes the protocol-favourable side of the two prices, whereas here
+the price at execution is simply taken as given. -/
+theorem rfq_payout_is_set_by_execution_timing :
+    (execTrace timingWitness [(Op.executeRFQRedemption 0 100, 2)]).usdcBal 0 = 100 ∧
+    (execTrace timingWitness [(Op.updateRedemptionValue (ray / 2), 3),
+                              (Op.executeRFQRedemption 0 100, 2)]).usdcBal 0 = 50 ∧
+    (execTrace timingWitness [(Op.updateRedemptionValue (ray / 2), 3),
+                              (Op.executeRFQRedemption 0 100, 2)]).rfqRequests 0 = 0 := by
+  refine ⟨?_, ?_, ?_⟩ <;>
+    simp [execTrace, step, timingWitness, burnApxUSD, ray]
 
 end Apyx

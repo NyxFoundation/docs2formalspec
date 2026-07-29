@@ -97,11 +97,14 @@ A–D は Apyx の保証レベルを上げる作業、E は外部提案の取り
 
 `Op.updateRedemptionValue`(`Apyx.lean:742`)は oracle-gated だが本体が `some s` の placeholder。モデル上 `redemptionValue` を書き換える op は `catastrophicBackstop`(`emergencyFlag` 必須)だけになっており、**正直な運用の中でレートが動く状況が表現できない**。A の時計とセットで初めて意味を持つ。
 
-- [ ] `updateRedemptionValue` を実装する(placeholder が意図的だったかは実装側に確認中)。
+- [x] `updateRedemptionValue newValue` を実装済。oracle ロール + `newValue ≠ 0` のみをガードとし、デプロイ側の2つの setter(`ApxUSDRateOracle.setRate` / `RedemptionPoolV0.setExchangeRate`)に合わせた。上限・下限・1回あたりの変動幅・頻度の制約はどれも実装に無いので、モデルにも入れない。
 - [ ] 実装後に初めて問えるようになるもの:
   1. 承認済み RFQ カウンターパーティが**単独で**、レート下落の瞬間を狙って `executeRFQRedemption` を実行して抜けられるか。既存 finding `admin_rfq_coalition_drains` は admin + counterparty の2鍵前提なので、成立すれば必要な鍵が1本少ない。
   2. `executeRFQRedemption` を強制する仕組みが無いこと(決済期限の不在)。
   3. `rfqRequests` / `unlockRequests` を未決済債務として保存する不変条件。
+- [x] stub 前提だった3定理を正確な形に書き直した。`step_updateRedemptionValue_exact`(「何も変えない」→「oracle が任意の非ゼロ値を publish する」)、`oracle_frame` / `oracle_trace_blast_radius`(フレームの除外フィールドに `redemptionValue` を追加)、`oracle_alone_preserves_balances`(`redemptionValue` 不変の結論を削除。残高・供給・準備金の保全は成立したまま)。
+- [x] `redemption_price_admin_only` を `redemption_price_writers` に一般化(全op網羅)。`redemptionValue` を書けるのは **`catastrophicBackstop`(admin・緊急フラグ必須・値は公正 pro-rata に固定・reserve と buffer を同時に0にする「騒がしい」書き込み)か `updateRedemptionValue`(oracle・任意の非ゼロ値・副作用なしの「静かな」書き込み)の2つ**。旧称の定理は「oracle の setter を除けば」という仮説付きの系として残した。
+- [x] 新しく述べられるようになったことを2本追加 — `oracle_alone_moves_redemption_price`(緊急フラグ無しで oracle 単独が1ステップで任意の非ゼロ価格を publish できる)、`rfq_payout_is_set_by_execution_timing`(同一の request に対し、即時実行なら 100 USDC、正直な oracle 更新1回のあとに実行すれば 50 USDC。どちらを選ぶかはカウンターパーティ側にあり、ユーザーに発言権が無い)。
 - [ ] 時計は S6(`caller_net_nonpositive`)のトレース閉包にも効く。`exchangeRate` が時間で動くので、レート移動を tick 数で量化した形が初めて**定式化できる**ようになる(証明が済むという意味ではない)。
 
 ### C. 実装照合(source-tracing)の修正

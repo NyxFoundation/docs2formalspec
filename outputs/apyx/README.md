@@ -184,7 +184,7 @@ The attacker is modeled as holding one or more role keys (`admin`, `oracle`, `pa
 |---|---|---|
 | `pauseController` | Freeze only — touches no balance | `pauser_trace_blast_radius` |
 | `yieldDistributor` | Can only donate into the vest pool; debits nothing | `yield_distributor_trace_blast_radius`, `distributor_compartmentalized` |
-| `oracle` | No balance movement; can only shift price parameters | `oracle_alone_preserves_balances` |
+| `oracle` | No balance movement, but writes **both** price fields — including the redemption price, with no floor, cap or delay | `oracle_alone_preserves_balances`, `oracle_alone_moves_redemption_price` |
 | `admin` | Cannot move any balance/supply field, only policy parameters | `admin_cannot_touch_balances` |
 | **all keys at once** | A passive, non-RFQ-targeted user loses nothing | `user_assets_immune_to_total_key_compromise`, `no_theft_ledger` |
 
@@ -197,7 +197,7 @@ Supporting theorems include the exact per-role effect frames (`admin_frame`, `or
 `yield_distributor_frame`, and the `step_*_exact` family), the non-custodial lemmas
 (`no_role_transfers_user_funds`, `no_role_burns_user_shares`, `no_role_debits_usdc`,
 `governance_token_balances_immutable`, `no_role_seizes_unlock_position`), and the extraction-channel
-characterizations (`redemption_price_admin_only`, `reserve_outflow_only_via_redemption`).
+characterizations (`redemption_price_writers`, `reserve_outflow_only_via_redemption`).
 
 **The one total-loss path is a two-key coalition** (`admin_rfq_coalition_drains`): the admin drives the
 redemption value to 0 via `catastrophicBackstop` (which has no lower bound in the model), after which an

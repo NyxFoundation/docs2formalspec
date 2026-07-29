@@ -526,7 +526,11 @@ inductive Op
   | voteBufferDeployment
   | submitRFQRequest (amount : Nat)
   | executeRFQRedemption (user : Address) (amount : Nat)
-  | updateRedemptionValue
+  /-- The oracle publishes a new per-apxUSD redemption price. Mirrors the deployed setters
+      (`ApxUSDRateOracle.setRate`, `RedemptionPoolV0.setExchangeRate`): role-gated, and the
+      only bound on the new value is that it be non-zero. No cap, no floor, no bounded
+      per-update move, no cadence. -/
+  | updateRedemptionValue (newValue : Nat)
   | handleStressEvent (amount : Nat)
   | catastrophicBackstop
   | setVestPeriod (p : Nat)
@@ -746,10 +750,14 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
           usdcBal := fun a => if a = user then s1.usdcBal a + usdcAmount else s1.usdcBal a
         }
         some s2
-  | Op.updateRedemptionValue =>
+  | Op.updateRedemptionValue newValue =>
+    -- On-chain both redemption-price setters are role-gated and reject only zero
+    -- (`ApxUSDRateOracle.setRate`, `RedemptionPoolV0.setExchangeRate`). Modelling this as a
+    -- no-op — as this case previously did — made `catastrophicBackstop` the sole writer of
+    -- `redemptionValue`, so an honest-operations price move was not expressible.
     if caller == s.oracle then
-      -- placeholder: in practice would fetch from oracle
-      some s
+      if newValue = 0 then none
+      else some { s with redemptionValue := newValue }
     else none
   | Op.handleStressEvent amount =>
     -- a stress loss reduces total collateral value; absorbed by the buffer, admin only
@@ -1287,8 +1295,8 @@ private theorem apyUSDBal_unchanged_of_non_share_op (s : State) (op : Op) (calle
     simp [burnApxUSD]
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; rfl)
         | exact absurd h_step (by simp)
@@ -1344,8 +1352,8 @@ private theorem step_unlockTokenOperator_unchanged (s : State) (op : Op) (caller
     simp [burnApxUSD]
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; rfl)
         | exact absurd h_step (by simp)
@@ -1401,8 +1409,8 @@ private theorem step_unlockTokenAddress_unchanged (s : State) (op : Op) (caller 
     simp [burnApxUSD]
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; rfl)
         | exact absurd h_step (by simp)
@@ -1916,8 +1924,8 @@ private theorem unlock_position_created_only_by_vault_ops (s : State) (op : Op) 
     simp [burnApxUSD, h_new] at h_now
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; simp_all)
         | exact absurd h_step (by simp)
@@ -2353,8 +2361,8 @@ theorem req_overcollateralization_limit (s : State) (op : Op) (caller : Address)
     omega
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; exact h_inv)
         | (cases Option.some.inj h_step; dsimp only; omega)
@@ -3627,8 +3635,8 @@ private theorem vaultApxUSDBal_unchanged_of_non_vault_op (s : State) (op : Op) (
     simp [burnApxUSD]
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; rfl)
         | exact absurd h_step (by simp)
@@ -3773,8 +3781,8 @@ theorem req_unlock_cannot_be_cancelled (s : State) (op : Op) (caller : Address) 
     simp [burnApxUSD, h_live] at h_gone
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step; simp_all)
         | exact absurd h_step (by simp)
@@ -3903,8 +3911,8 @@ theorem req_unlock_token_nontransferable (s : State) (op : Op) (caller : Address
       fun id owner h_own => Or.inl (by simpa [burnApxUSD] using h_own)⟩
   all_goals
     simp only [step] at h_step
-    -- `Op.tick` has no guard, so `split` finds nothing to case on there.
-    (try split at h_step) <;>
+    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
+    (repeat' split at h_step) <;>
       first
         | (cases Option.some.inj h_step;
            exact ⟨fun i hi => h_fresh i hi, fun id owner h_own => Or.inl h_own⟩)
