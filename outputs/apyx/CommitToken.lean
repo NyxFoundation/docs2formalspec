@@ -36,9 +36,28 @@ namespace CommitToken
 
 abbrev Address := Nat
 
-/-- Seconds in a day, and the deployed cooldown of CT-apxUSD. -/
 def day : Nat := 86400
-def liveUnlockingDelay : Nat := 14 * day
+
+/-- The four live instances of this contract, with the parameters read on-chain at
+    ≈ block 25,641,600. They differ only in the underlying asset, the cooldown and the supply
+    cap — all three of which are `State` fields here, so one model covers all four. -/
+structure Deployment where
+  symbol         : String
+  unlockingDelay : Nat
+  supplyCap      : Nat
+
+def ctApxUSD     : Deployment := ⟨"CT-apxUSD",     14 * day, 100000000 * 10 ^ 18⟩
+def ctApyUSDapx  : Deployment := ⟨"CT-apyUSDapx",  14 * day,  20000000 * 10 ^ 18⟩
+def ctApxUSDUSDC : Deployment := ⟨"CT-apxUSDUSDC", 14 * day,  50000000 * 10 ^ 18⟩
+/-- `UnlockToken`, the subclass `Apyx.lean` already models as `requestUnlock`/`claimUnlock`.
+    Its 20-day cooldown is `Apyx.cooldownPeriod`. -/
+def unlockToken  : Deployment := ⟨"apxUSD_unlock", 20 * day, 2 ^ 256 - 1⟩
+
+def liveDeployments : List Deployment :=
+  [ctApxUSD, ctApyUSDapx, ctApxUSDUSDC, unlockToken]
+
+/-- Kept as an abbreviation because the theorems below were first stated against CT-apxUSD. -/
+def liveUnlockingDelay : Nat := ctApxUSD.unlockingDelay
 
 /-- A pending redeem request. `assets` is omitted: the vault converts 1:1, so it is always equal
     to `shares`. -/
@@ -155,19 +174,32 @@ theorem now_moves_only_by_tick (s : State) (op : Op) (c : Address) (s' : State)
       | (cases Option.some.inj h; simp)
       | exact absurd h (by simp)
 
-/-- **The cycle closes.** Request, let the deployed 14-day delay elapse, claim — one trace. -/
-theorem cycle_closes_after_the_live_delay (s : State) (caller : Address) (shares : Nat)
-    (h_live : s.unlockingDelay = liveUnlockingDelay)
+/-- **The cycle closes**, at whatever cooldown the instance is configured with: request, let
+    `unlockingDelay` elapse, claim — one trace. Stated for an arbitrary delay so that it covers
+    every entry of `liveDeployments` rather than one of them. -/
+theorem cycle_closes_after_the_delay (s : State) (caller : Address) (shares : Nat)
     (h_up : s.paused = false) (h_ok : s.denied caller = false)
     (h_pos : shares ≠ 0) (h_fresh : s.req caller = none) (h_bal : shares ≤ s.bal caller) :
     ∃ s₁ s₂, step s (Op.requestRedeem shares) caller = some s₁ ∧
-      step s₁ (Op.tick liveUnlockingDelay) caller = some s₂ ∧
+      step s₁ (Op.tick s.unlockingDelay) caller = some s₂ ∧
       step s₂ (Op.redeem shares caller) caller ≠ none := by
   refine ⟨{ s with req := fun a => if a = caller
               then some { shares := reqShares s caller + shares, requestedAt := s.now }
               else s.req a }, _, ?_, rfl, ?_⟩
   · simp [step, h_up, h_ok, h_pos, reqShares, h_fresh, Nat.not_lt.mpr h_bal]
-  · simp [step, h_up, h_ok, reqShares, h_fresh, Claimable, h_live]
+  · simp [step, h_up, h_ok, reqShares, h_fresh, Claimable]
+
+/-- Instantiated at every live deployment: the cooldown any of the four is configured with is a
+    cooldown a trace can actually wait out. -/
+theorem cycle_closes_at_every_live_deployment (s : State) (caller : Address) (shares : Nat)
+    (d : Deployment) (h_mem : d ∈ liveDeployments) (h_cfg : s.unlockingDelay = d.unlockingDelay)
+    (h_up : s.paused = false) (h_ok : s.denied caller = false)
+    (h_pos : shares ≠ 0) (h_fresh : s.req caller = none) (h_bal : shares ≤ s.bal caller) :
+    ∃ s₁ s₂, step s (Op.requestRedeem shares) caller = some s₁ ∧
+      step s₁ (Op.tick d.unlockingDelay) caller = some s₂ ∧
+      step s₂ (Op.redeem shares caller) caller ≠ none := by
+  rw [← h_cfg]
+  exact cycle_closes_after_the_delay s caller shares h_up h_ok h_pos h_fresh h_bal
 
 /-! ## Three properties of the deployed contract that its holders should know
 
@@ -213,7 +245,7 @@ theorem topup_restarts_the_whole_cooldown :
       simp at hr'
       subst hr'
       refine ⟨?_, rfl⟩
-      simp [Claimable, liveUnlockingDelay, day]
+      simp [Claimable, liveUnlockingDelay, ctApxUSD, day]
 
 /-- **Claiming is all-or-nothing.** `redeem` reverts unless the amount equals the recorded request
     exactly, so a holder who has just restarted their own clock cannot take out the part that had
@@ -254,7 +286,7 @@ theorem raising_the_delay_unclaims_pending_requests :
                 unlockingDelay := 2 * liveUnlockingDelay
                 req := fun _ => some { shares := 100, requestedAt := 0 } }, ?_, rfl, ?_⟩
     · simp [step]
-    · simp [Claimable, liveUnlockingDelay, day]
+    · simp [Claimable, liveUnlockingDelay, ctApxUSD, day]
 
 /-- **The request does not escrow.** The owner's balance is untouched between filing and claiming —
     the contract's own docstring flags this as an ERC-7540 deviation ("shares not removed from

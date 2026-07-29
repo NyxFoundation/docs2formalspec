@@ -285,4 +285,35 @@ composition), and as configured it is tight.
 **Still unread.** Who the six owner EOAs are — all six are plain externally-owned accounts with no
 ENS name or public label, so the chain says nothing further. None is itself a multisig.
 
+---
+
+### 7. The two modules built from the deployment
+
+§6 is a snapshot of configuration. These two Lean modules are the parts of it that carry theorems,
+and they sit alongside `Apyx.lean` rather than inside it, because each models a contract the
+original documentation-derived scope did not include.
+
+**[`CommitToken.lean`](CommitToken.lean)** — the async-redemption vault. One model, four live
+instances (`liveDeployments`), differing only in asset, cooldown and supply cap:
+
+| Instance | Cooldown | Supply cap | Held |
+|---|---|---|---|
+| `CT-apxUSD` `0x17122d86…871e` | 14 days | 100M | 6,226,697 apxUSD |
+| `CT-apyUSDapx` `0x55095f69…4a60` | 14 days | 20M | 18.4 |
+| `CT-apxUSDUSDC` `0xdfc3cf7e…9375` | 14 days | 50M | 5,046 |
+| `UnlockToken` `0x93775E2d…F4e6` | 20 days | uncapped | 24,936 apxUSD |
+
+The last row is the one `Apyx.lean` already models as `requestUnlock`/`claimUnlock`, and its
+20-day cooldown is `Apyx.cooldownPeriod`. The first row holds 250× as much.
+
+**[`RedemptionOracle.lean`](RedemptionOracle.lean)** — the two-stage price pipeline. Models
+`ApyxCollateralRatioOracle.pushRound` (role 22, 4-hour scheduled) feeding
+`ApyxRedemptionOracle`'s `min(collateral ratio, cap)`. The point of modelling it is that it
+resolves §6's three corrections into proofs rather than prose: the cap holds along every trace and
+no operation moves it, so `h_rv` is enforced; and the floor genuinely does not exist, so
+`redemption_has_no_floor` stands.
+
+Neither module changes anything in `Apyx.lean`, `Safety.lean` or `BlastRadius.lean`. The 82
+requirement theorems and the blast-radius analysis are about the contracts they were always about.
+
 *All state transitions are atomic and protected by the Checks‑Effects‑Interactions pattern; re‑entrancy guards are applied to every external call.*

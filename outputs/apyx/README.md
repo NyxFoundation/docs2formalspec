@@ -265,6 +265,12 @@ holding 250× what the modelled unlock path holds (§6.4 #18). `CommitToken` "CT
 (`0x17122d86…871e`) is the contract `UnlockToken` subclasses; live parameters at the time of
 reading are a **14-day** `unlockingDelay`, a `1e26` supply cap, and 1:1 assets↔shares.
 
+**All four live instances are covered by this one model**, because they differ only in the
+underlying asset, the cooldown and the supply cap — all three of which are state fields:
+`CT-apxUSD` (14 d, 100M cap), `CT-apyUSDapx` (14 d, 20M), `CT-apxUSDUSDC` (14 d, 50M) and
+`UnlockToken` (20 d, uncapped), enumerated as `liveDeployments`.
+`cycle_closes_at_every_live_deployment` instantiates the liveness half at each.
+
 This is also the first time `docs/06` §7's async family is instantiated against a **real** target
 rather than the fictional `AsyncQueueVault` reference, and it needs the clock to say anything at
 all.
@@ -291,6 +297,29 @@ promises:
 `request_does_not_escrow` records the ERC-7540 deviation the contract's own docstring names —
 shares stay on the owner's balance between request and claim — and pairs it with the arithmetic
 check that makes that safe.
+
+### 4.5 The redemption-price pipeline (8 theorems, [`RedemptionOracle.lean`](RedemptionOracle.lean))
+
+`Apyx.lean` carries one `redemptionValue` field written by privileged operations. On-chain the
+price comes from two contracts and **neither has that setter**: `ApyxCollateralRatioOracle`
+(`pushRound`, role 22 — a 4-hour scheduled operation) feeds `ApyxRedemptionOracle`, a read-only
+aggregator publishing `min(collateral ratio, cap)` with no write functions at all. Live values:
+`cap() = 1.00` at 8 decimals, published answer 0.903659.
+
+This module settles the two parameter-bound findings of §9.1 in **opposite** directions, which is
+the reason it is worth having as proofs rather than prose:
+
+- **The cap is real.** `published_never_exceeds_par` — along every trace, with the deployed cap,
+  the published price is at most 1.00. `cap_immutable` / `cap_immutable_trace` show no operation
+  in the pipeline moves the cap (pattern I21 against a live contract; on-chain the contract simply
+  has no setter, and changing it needs a UUPS swap under role 24, 3 days). A hostile push is
+  clamped rather than rejected (`push_above_cap_is_clamped`).
+  This is also where `Safety.lean`'s `h_rv : redemptionValue ≤ ray` stops being a hypothesis: the
+  deployment enforces it.
+- **The floor is not.** `published_has_no_floor` — one push of `0` publishes `0`. There is no lower
+  clamp and no minimum move anywhere in the pipeline, and below the cap the published price is
+  exactly what was pushed (`published_tracks_the_push_below_cap`). So `redemption_has_no_floor`
+  survives contact with the deployment while `redeem_payout_has_no_cap` does not.
 
 ---
 
@@ -486,7 +515,8 @@ axioms of Lean's logic; none is an unproved assumption. Compile status is record
 | [`BlastRadius.lean`](BlastRadius.lean) | The 56 key-compromise blast-radius proofs and the defense wrappers |
 | [`Safety.lean`](Safety.lean) | The 30 design-safety proofs |
 | [`SpecDefects.lean`](SpecDefects.lean) | The spec-consistency and parameter-bound gap-witness proofs (§9) |
-| [`CommitToken.lean`](CommitToken.lean) | The deployed `CommitToken` "CT-apxUSD" async-redemption vault — 8 proofs (§4.4) |
+| [`CommitToken.lean`](CommitToken.lean) | The deployed `CommitToken` async-redemption vaults, all four instances — 9 proofs (§4.4) |
+| [`RedemptionOracle.lean`](RedemptionOracle.lean) | The deployed two-stage redemption-price pipeline — 8 proofs (§4.5) |
 | [`leancheck.json`](leancheck.json) | Build status: requirement theorems, `sorry` count, vacuous count |
 | [`corpus.md`](corpus.md) | The raw ingested source documentation |
 
@@ -507,14 +537,14 @@ in the model it is written by the admin — either loudly (`catastrophicBackstop
   not prevent.
 - **`BlastRadius.redeem_payout_has_no_cap`** — symmetrically, no upper bound on the payout exists.
 
-> **On-chain, the upper bound exists.** The deployed price source is `ApyxRedemptionOracle`
-> (`0x2037a5eb…23b4`), a read-only aggregator with **no setter at all**, publishing
-> `min(collateral ratio, cap)` with `cap() = 1.00`. So the no-cap finding describes the *design* —
-> nothing in the specification forces a bound — while the deployment supplies one outside the
-> modelled state. The same cap is what discharges `Safety.lean`'s `h_rv : redemptionValue ≤ ray`:
-> a hypothesis the proofs re-supply along the trace turns out to be a deployment invariant.
+> **On-chain the upper bound exists, and the lower one still does not — both are now proved.**
+> [`RedemptionOracle.lean`](RedemptionOracle.lean) (§4.5) models the deployed pipeline:
+> `published_never_exceeds_par` bounds the price at 1.00 along every trace, so the no-cap finding
+> describes the *design* while the deployment supplies a bound outside the modelled state, and
+> `Safety.lean`'s `h_rv : redemptionValue ≤ ray` is enforced rather than assumed.
+> `published_has_no_floor` shows the floor finding is untouched: one push of `0` publishes `0`.
 > `RedemptionPoolV0.setExchangeRate` and `ApxUSDRateOracle.setRate` appear nowhere in the live
-> authority table. Details and addresses: [`model.md`](model.md) §6.
+> authority table. Addresses and the snapshot: [`model.md`](model.md) §6.
 
 Together with the two-key coalition (§4.1), these are the concrete design weaknesses of the model. **Fix:** a
 redemption-price floor/clamp, a withdrawal rate limit, and an admin timelock (§5) — the same three defenses §5
