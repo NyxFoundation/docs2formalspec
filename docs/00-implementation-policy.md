@@ -77,8 +77,66 @@ Ingest(docs + ★Solidity 取得) → Extract/Specify → Model → 柱1(req_*)
   - **抽出欠陥1件を検出・修正**(buffer-non-decreasing の過剰一般化)、**設計の弱点を機械証明**(admin+RFQ 結託全損 / 償還価格にフロア・上限無し / timelock 無し)。
 - **sorry 方針の更新**: LLM 一発生成では `sorry` 許容だが、**相互改善ループを回した最終成果物は `sorry` 0 を目標**とする(Apyx で達成)。「形式化された要件」としての価値は残しつつ、機械証明を基準線に。
 
-## 残TODO(次段の改善)
-- [ ] **柱2–4 + source-tracing の自動化**: `gen_lean` が Step-0 プロファイルから `templates/{blast-radius,invariants}` をインスタンス化し、原典照合(corpus→Solidity)を LLM+SMT で回す(現状は human/agent 協働)。
+## 残TODO(2026-07-29 更新)
+
+A–D は Apyx の保証レベルを上げる作業、E は外部提案の取り込み、F はパイプライン自動化の継続。A が他の前提になる。
+
+### A. Apyx — 時計(`Op.tick`)の導入【最優先】
+
+現行モデルは `step`(`outputs/apyx/Apyx.lean:535–787`)の中で `now` を一度も更新しない。`State.now` は読まれるだけで、どのトレースでも時間が進まない。結果として **要件適合82本のうち32本が時計・期間の項を含むのに、時間が動く実行の上では1本も述べられていない**(82本すべて single-step、statement に `execTrace` を含むものは 0)。
+
+- [ ] `Op.tick` を追加(`now` のみを進め、値フィールドには触れない)。全op網羅の証明23箇所(`Apyx.lean` 13 / `Safety.lean` 3 / `BlastRadius.lean` 7)に枝が増えるが、`tick` は値を動かさないので大半は自明に閉じる。
+- [ ] statement が `now` に触れる全op網羅の6本を個別に確認 — `rounding_favors_protocol` / `no_role_seizes_unlock_position` / `apxUSD_credit_is_backed` / `unlock_position_created_only_by_vault_ops` / `req_singleton_unlock_token_instance` / `req_unlock_cannot_be_cancelled`。
+- [ ] **時計を1本に統一する**。`BlastRadius.lean` の `RLOp.advanceEpoch` / `TLOp.tick` は独立した時計なので、`epoch = now / epochLength` に導出して `advanceEpoch` を op から落とす。二重時計のままだと「100 epoch 経過したが `now` は不動」というトレースが書けてしまい、`rate_limit_linear_bound` の `cap × epochs` を経過時間(=1日あたりの被害)に翻訳できない。
+  - 段階移行する場合は、両フィールドを残したまま `epoch * epochLength ≤ now < (epoch+1) * epochLength` を1本証明して drift を止め、リファクタは後追いにする。
+- [ ] `solvency_preserved` の `h_excl` から `claimUnlock` / `flexibleClaimUnlock` を外す。現状は `cooldownEnd = now + 20日` かつ `now` 不動のため request と claim が同一トレース内で両立せず、除外がほぼ無コストになっている。`tick` 後は同じ除外が主要な償還フローを外すことになる。`requestUnlock` 側は `requestUnlock_backs_claim_by_burn`(S8)が押さえているので、書き足すのは claim 側。**ここが本作業の実質的な工数。**
+- [ ] 移行後、既存のトレース級定理21本(`Safety.lean` 4 / `BlastRadius.lean` 17)のうち何本が無修正で通るかを測り、`outputs/apyx/README.md` に載せる。この数字が現在の保証の頑健性の指標になる。
+
+### B. Apyx — `updateRedemptionValue` の実装
+
+`Op.updateRedemptionValue`(`Apyx.lean:742`)は oracle-gated だが本体が `some s` の placeholder。モデル上 `redemptionValue` を書き換える op は `catastrophicBackstop`(`emergencyFlag` 必須)だけになっており、**正直な運用の中でレートが動く状況が表現できない**。A の時計とセットで初めて意味を持つ。
+
+- [ ] `updateRedemptionValue` を実装する(placeholder が意図的だったかは実装側に確認中)。
+- [ ] 実装後に初めて問えるようになるもの:
+  1. 承認済み RFQ カウンターパーティが**単独で**、レート下落の瞬間を狙って `executeRFQRedemption` を実行して抜けられるか。既存 finding `admin_rfq_coalition_drains` は admin + counterparty の2鍵前提なので、成立すれば必要な鍵が1本少ない。
+  2. `executeRFQRedemption` を強制する仕組みが無いこと(決済期限の不在)。
+  3. `rfqRequests` / `unlockRequests` を未決済債務として保存する不変条件。
+- [ ] 時計は S6(`caller_net_nonpositive`)のトレース閉包にも効く。`exchangeRate` が時間で動くので、レート移動を tick 数で量化した形が初めて**定式化できる**ようになる(証明が済むという意味ではない)。
+
+### C. 実装照合(source-tracing)の修正
+
+`apyx-labs/evm-contracts` を読み直したところ、`model.md` の対応付けに誤りがある。
+
+- [ ] `model.md` L29 / L73 — `redemptionValue` の対応先は `ApxUSDRateOracle.rate` ではない。同 oracle は docstring どおり Curve Stableswap-NG 向けで、`src/` 配下に消費者がいない。償還の支払額を決めているのは `RedemptionPoolV0.exchangeRate`(`previewRedeem = assetsAmount * exchangeRate / 1e18 / decimalScalingFactor`、setter は `setExchangeRate`)。
+- [ ] スケールの記述を直す。実装は `ApxUSDRateOracle.rate` / `RedemptionPoolV0.exchangeRate` とも **1e18**、モデルは `ray = 1e27`。次元(per-unit)は一致するがスケールは一致しないので、「Matches the deployed ...」は書き換える。
+- [ ] オンチェーンには境界の無い価格が**2本**ある(Curve 向け `oracle.rate` / 償還向け `pool.exchangeRate`)。モデルは1本にまとめているので、2本が乖離したときの抽出面が表現できない。モデルを2本に割るか判断する。
+- [ ] `RedemptionPoolV0.withdrawTokens` が reserve を含む任意の ERC20 を `restricted` 一発で引き出せる。`outputs/apyx/README.md` の「total-loss path は admin + RFQ counterparty の2鍵」を見直す。モデルの op として起こすかも判断する(起こすと blast-radius の結論が変わる)。
+- [ ] 実装側に確認 — AccessManager のロール設定(`restricted` の実鍵数。外部のリスク評価では 4-of-6 Safe)/ `RedemptionPoolV0` がデプロイ済みで現行の償還経路か / `ApxUSDRateOracle` は UUPS で `_authorizeUpgrade` も `restricted`(実装差し替えは `setRate` より強い権限。`outputs/apyx/README.md` §12 で対象外扱いのままでよいか)。
+
+### D. 報告の正確さ(Phase 9)
+
+定理が通っていることと、**そのモデルが問題を表現できること**は別。後者が報告に出ていない。
+
+- [ ] `outputs/<name>/README.md` に「単発 `step` についての保証」と「トレース上の保証」の書き分けを入れる。Apyx では要件適合82本すべてが single-step、トレース級は `Safety.lean` 4 / `BlastRadius.lean` 17。
+- [ ] 仮説を持つ定理には、その仮説を満たす状態に到達するトレースを併記する(到達可能性を成果物にする)。現状 `req_unlock_claimable_after_3d` は `requestTime = now - minFlexibleClaim` という、どの操作列でも作れない状態を仮定している。
+- [ ] 「このモデルが反証できないこと」の一覧を README に置く — 時計なし / 符号なし台帳 / 集約台帳 / 単一価格 / oracle stub と、それぞれが何を述べられなくしているか。定理リストは「何を証明したか」に答えるが「何を反証できたか」に答えていない。
+- [ ] 補助関数についての補題を系の保証として数えない。`req_early_unlock_fee_linear_decline` は `flexibleUnlockFee` 単体の算術定理で、`step` に接続されていない。
+- [ ] 非同期償還の完了側(request → claim のサイクルが閉じること)は liveness なので本枠組みの対象外である旨を明記する。`req_redemption_async_process` が証明しているのは「即時 claim が必ず落ちる」= クールダウンの強制であって、サイクルの完了ではない。
+
+### E. PR #3(async / per-account の2族)の取り込み
+
+診断・テンプレート・適用ゲートとして取り込む。Tier 1.5 の Apyx 実証は A / B の後。
+
+- [ ] 取り込み時に I10 をリネームする(「決済タイミング中立」→ オプションの移転)。`settle` が `caller` を読まないので決済者の利得はモデルに存在せず、定理は払出規則についてのもの。`S10c`(決済期限の不在)/ `S10d`(取消・再申請による申請価格の吊り上げ)を I10 の射程を確定させる対として並べ直す。
+- [ ] `accrual_never_lowers_debt` の statement を pin する。現状は「`s.positions` のどこかに `q.debt` 以下の debt を持つ位置がある」という存在量化なので、`debt = 0` のポジションが1つでもあれば無条件に成立する。証明は `List.mem_map` の pre-image を取っているので強い形に差し替え可能。
+- [ ] PR 本文の Evidence 節の定理数を修正(15 / 37 → 実測 22 / 39、"three depend on none" → 6本)。
+- [ ] Step 0b / 0c のゲートを、アーキタイプ名ではなく**モデル特徴**(時計 / 二相 op / in-flight 状態 / 符号付き価値 / 有界共有キュー)を主、アーキタイプ一覧を例示として書き直す。製品カテゴリで判定すると新しい型が出るたびに更新が要る。
+- [ ] `Nat` 空虚性(`nat_solvency_is_vacuous` / `insolvency_witness`)は族の採否と独立に Step 0 プロファイルへ入れる。「純資産が負になりうるか」が Yes なら台帳を `Int` にする。
+- [ ] `I21`(不変パラメータの証明)を族と独立に柱3へ追加する。`cases op` 1回で書けて、将来 setter が生えればビルドが落ちる。
+
+### F. パイプライン自動化(継続)
+
+- [ ] **柱2–4 + source-tracing の自動化**: `gen_lean` が Step-0 プロファイルから `templates/{blast-radius,invariants}` をインスタンス化し、原典照合(corpus→Solidity)を LLM+SMT で回す(現状は human/agent 協働)。C の誤りは人手照合の取りこぼしなので、自動化の受け入れ条件に「モデルの各フィールドが実装のどの変数に対応するか」の明示を含める。
 - [ ] **相互改善ループの自動オーケストレーション**: 各フェーズ後の「build 緑・sorry 0・4ドキュメント整合」チェックを CI 化。
 - [ ] few-shot exemplar(AMM-in-Lean4イディオム)をモデル/定理プロンプトへ注入
 - [ ] モデル k-sample 選抜(プローブバッチ通過率でベスト採用)
