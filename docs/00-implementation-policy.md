@@ -145,8 +145,11 @@ A–D は Apyx の保証レベルを上げる作業、E は外部提案の取り
   - なお `pushRound(int256,uint80)` / `setUpstreamOracle` / `clearOverride` は現時点で **role 0(admin・無遅延)**のまま。上記キューはそれを塞ぐ方向の変更。
 - [x] Safe 6署名者は**全員が素の EOA**(ENS なし・public tag なし・いずれも multisig ではない)。チェーンからはこれ以上分からないので、実体の確認は実装側の質問として残る。
 - [x] **個人 EOA が無遅延の権限を2つ持っている**ことを確認。role 31(付与遅延0・実行遅延0)は Safe ではなく**署名者6名のうち5名 + デプロイヤ EOA に個別付与**されていて、`MinterV0.cancelMint`(ガーディアン停止、即時で妥当)と `OrderDelegate.transferToken` / `transfer`(`OrderDelegate` と**未検証コントラクト** `0xdbEF8322…20ef` 上)を覆う。読み取り時点で両者の残高は0なので現エクスポージャはゼロだが、能力としては Safe 閾値の外側で単独・無遅延。role 41(`batchLiquidate`)も同型の単独 keeper。
-- [x] **統治対象とモデル対象のズレを確定**。authority が統治する14コントラクトのうち、モデルが覆っていないのは `LiquidationBatcher`(清算機構そのものがモデルに無い)、`UnlockToken` 以外の **`CommitToken` 3インスタンス**、`OrderDelegate` と未検証の `0xdbEF8322…`、`MinterV0`、2段の価格パイプライン。前2者はスコープとして効く — **同じ鍵の下で清算経路と追加の非同期償還 vault が動いているのに、こちらの定理はどちらにも及んでいない**。`README.md` §6.4 に #18 として追加。
-- [ ] 次段: Step-0 プロファイルを**ドキュメントだけでなくオンチェーンの authority グラフから**起こす手順にする(F の自動化に組み込む)。
+- [x] **統治対象とモデル対象のズレを確定**(前回の記述を訂正済)。効くのは1点だけだった。
+  - **モデル化している unlock 経路(`UnlockToken`)の残高は 24,936 apxUSD。同じ authority 配下に、構造が同一の `CommitToken` "CT-apxUSD" があり、そちらは 6,226,697 apxUSD = 供給の1.90%、250倍。** 時計の導入で開いた非同期償還の議論は、2桁半小さいほうのインスタンスに向いていた。証明の誤りではなく Step-0 のスコープ誤り。`README.md` §6.4 #18 を書き直した。
+  - `LiquidationBatcher` は**前回の書き方が過大だった**。ソースを読むと **Morpho Blue** に対する清算バッチャーで、Apyx 内部の清算機構ではない(Apyx に口座別担保ポジションが無いので、そもそも欠けている内部機構は存在しない)。市場 allowlist はコンストラクタ固定で setter 無し、`withdrawTokens` は宛先引数を取らず不変の `WITHDRAW_DESTINATION`(運用 Safe)固定、pausable でも upgradeable でもない。**無遅延の role 41 keeper は構成によって「どの市場を清算できるか」「収益がどこへ行くか」の両方を縛られている**。README §6.4 #2(クロスプロトコル合成)の管轄で、設定としてはむしろ堅い。
+- [ ] 次段: Step-0 プロファイルを**ドキュメントだけでなくオンチェーンの authority グラフから**起こす手順にする(F の自動化に組み込む)。今回のスコープ誤りはこれが無かったことに起因する。
+- [ ] 次段: 非同期償還族(docs/06 §7)を **CT-apxUSD** に対してインスタンス化する。時計は入ったので表現力は足りている。
 - [x] 判明した対応関係は `model.md` §5 に表としてまとめた。償還が `ROLE_REDEEMER` ゲートであること、`redeem` に `minReserveAssetOut` があるので**ユーザー起点の経路は `redemption_has_no_floor` が示すより実際はマシ**であること(RFQ のようにユーザーが実行しない経路には効かない)、decimal スケーリングが未モデル化であることも記載。
 
 ### D. 報告の正確さ(Phase 9)

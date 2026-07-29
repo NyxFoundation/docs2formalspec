@@ -257,17 +257,30 @@ keeper role, rotated once on 2026-07-28.
 covers apxUSD, apyUSD, the unlock registry, vesting and yield distribution, and the deny list.
 It does **not** cover:
 
-| Governed, not modelled | What it is |
-|---|---|
-| `LiquidationBatcher` `0x4dB4D934…b732` | `batchLiquidate(...)`, an undelayed keeper role (41). The model has no liquidation mechanism at all |
-| Three further `CommitToken`s `0x17122d86…`, `0x55095f69…`, `0xdfc3cf7e…` | ERC-7540 async-redeem vaults. `UnlockToken` is one such instance and *is* modelled; these three are separate deployments |
-| `OrderDelegate` `0xcCa1AF4d…f7b8` and `0xdbEF8322…20ef` | Delegated signing / settlement helpers, holding the role-31 transfer powers above. The second is unverified |
-| `MinterV0` `0x2c36e1aD…a76e` | EIP-712 signed minting with a rate limit. The model abstracts mint authorization away (README §6.4 #11) |
-| `ApyxCollateralRatioOracle` / `ApyxRedemptionOracle` | The two-stage price pipeline; the model carries a single `redemptionValue` field |
+| Governed, not modelled | What it is | Weight |
+|---|---|---|
+| **`CommitToken` "CT-apxUSD"** `0x17122d86…871e` | An async-redeem vault over apxUSD — the same shape as the modelled `UnlockToken`, a separate deployment | **holds 6,226,697 apxUSD, 1.90% of supply** |
+| `CommitToken` "CT-apyUSDapx" `0x55095f69…4a60`, "CT-apxUSDUSDC" `0xdfc3cf7e…9375` | Async-redeem vaults over the two Curve LP tokens | 18.4 and 5,046 units |
+| `LiquidationBatcher` `0x4dB4D934…b732` | Batched liquidations **on Morpho Blue** (`0xBBBB…FFCb`) — an external-protocol operation, not an Apyx-internal mechanism | proceeds pinned to the ops Safe |
+| `OrderDelegate` `0xcCa1AF4d…f7b8` and `0xdbEF8322…20ef` | Delegated signing / settlement helpers, holding the role-31 transfer powers above. The second is unverified | 0 tokens held |
+| `MinterV0` `0x2c36e1aD…a76e` | EIP-712 signed minting with a rate limit. The model abstracts mint authorization away (README §6.4 #11) | |
+| `ApyxCollateralRatioOracle` / `ApyxRedemptionOracle` | The two-stage price pipeline; the model carries a single `redemptionValue` field | |
 
-The first two rows are the ones that matter for scope: a liquidation path and three additional
-async-redemption vaults are live under the same keys the report reasons about, and no theorem here
-ranges over either.
+**The first row is the finding.** The modelled unlock path (`UnlockToken`) holds **24,936 apxUSD**.
+`CT-apxUSD` holds **6,226,697** — **250× more**, and it is the same async request/cooldown/claim
+shape. So the report's async-redemption reasoning, including everything the clock work above
+unlocked, is aimed at the smaller of the two instances by two and a half orders of magnitude. That
+is a Step-0 scoping error, not a proof error: nothing proved here is wrong, it is pointed at 0.008%
+of supply when a structurally identical 1.90% sits beside it.
+
+**`LiquidationBatcher` is not the gap it first looked like, and the earlier note here overstated
+it.** Reading the source: it liquidates on **Morpho Blue**, not on Apyx state — Apyx has no
+per-account collateral positions, so there is no internal liquidation mechanism to be missing. Its
+market allowlist is fixed in the constructor with no setter, `withdrawTokens` takes no destination
+and always pays the immutable `WITHDRAW_DESTINATION` (the ops Safe), and it is neither pausable nor
+upgradeable. The undelayed role-41 keeper is therefore bounded by construction to *which* markets
+it may liquidate and *where* proceeds may go. It belongs under README §6.4 #2 (cross-protocol
+composition), and as configured it is tight.
 
 **Still unread.** Who the six owner EOAs are — all six are plain externally-owned accounts with no
 ENS name or public label, so the chain says nothing further. None is itself a multisig.
