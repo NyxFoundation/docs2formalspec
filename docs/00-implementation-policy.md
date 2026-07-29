@@ -77,6 +77,17 @@ Ingest(docs + ★Solidity 取得) → Extract/Specify → Model → 柱1(req_*)
   - **抽出欠陥1件を検出・修正**(buffer-non-decreasing の過剰一般化)、**設計の弱点を機械証明**(admin+RFQ 結託全損 / 償還価格にフロア・上限無し / timelock 無し)。
 - **sorry 方針の更新**: LLM 一発生成では `sorry` 許容だが、**相互改善ループを回した最終成果物は `sorry` 0 を目標**とする(Apyx で達成)。「形式化された要件」としての価値は残しつつ、機械証明を基準線に。
 
+## 到達点(2026-07-29 更新 — 時計の導入と実装照合のやり直し後)
+- **モデルに時計(`Op.tick`)を入れた**。それまで `step` は `now` を一度も書かず、どのトレースでも時間が進まなかった。要件定理82本のうち32本が時計・期間の項を持つのに、時間が動く実行の上では1本も述べられていない状態だった。
+  - **既存170定理は1本も書き換えずに通った**。必要だったのは `tick` 枝にガードが無いことによる `split` 失敗の吸収18箇所のみ。トレース級21本も全数無修正。値フィールドを動かさない op なので、保存則・solvency・blast-radius は時間経過に対して不変だった。
+  - 時計が入って初めて述べられるようになったことを実証: `redemption_cycle_closes_after_cooldown`(request → `tick` → claim が同一トレースで成立)、`flexible_fee_schedule_is_reachable`(3日待ちで手数料299bps・10日で180・20日で10、返却額 9701 / 9820 / 9990)。
+- **`updateRedemptionValue` を実装した**(旧: `some s` の placeholder)。stub 前提だった4定理を正確な形へ。`redemption_price_admin_only` は `redemption_price_writers` に一般化 — `redemptionValue` を書けるのは `catastrophicBackstop`(admin・緊急フラグ必須・値は公正 pro-rata・reserve と buffer を同時に0にする**騒がしい**書き込み)と `updateRedemptionValue`(oracle・任意の非ゼロ値・副作用なしの**静かな**書き込み)の2つだけ。
+  - `rfq_payout_is_set_by_execution_timing`: 同一 state・同一ユーザー・同一 request・同一カウンターパーティで、即時実行なら 100 USDC、正直な oracle 更新1回のあとなら 50 USDC。**`admin_rfq_coalition_drains` が2鍵の結託としてしか書けなかったのは、敵の強さの上界ではなくモデルの表現力の限界だった。**
+- **実装照合をやり直した**。`redemptionValue` の対応先は `ApxUSDRateOracle.rate` ではなく `RedemptionPoolV0.exchangeRate`(前者は Curve Stableswap-NG 向けで `src/` 配下に消費者がいない)。スケールも実装 1e18 / モデル `ray = 1e27` で不一致。`withdraw` / `withdrawTokens` は `ADMIN_ROLE` で償還を経ずに reserve を抜ける。→ `outputs/apyx/model.md` §5、`README.md` §6.4 の #16 / #17。
+- **報告の形を変えた**(`outputs/apyx/README.md` §6.0)。定理の本数ではなく **量化のスコープ**(トレース級は22本のみ、要件適合82本を含む残りは single-step)と **反証可能性**(符号なし台帳 / 集約台帳 / 単一価格が何を述べられなくしているか)を出す。解消済みの2件(時計なし・oracle stub)も、この問いを立てなかったコストの実例として残した。
+- **PR #3(async / per-account の2族)を取り込んだ**。診断・テンプレート・適用ゲートとして。I10 のリネーム、`accrual_never_lowers_debt` の pin、ゲートのモデル特徴化、`Nat` 空虚性の Step 0 への移動、I21 のコア昇格を適用済。
+- 現在: `outputs/apyx` 183定理 + テンプレート参照実装63定理、`lake build` 緑、`sorry` 0。
+
 ## 残TODO(2026-07-29 更新)
 
 A–D は Apyx の保証レベルを上げる作業、E は外部提案の取り込み、F はパイプライン自動化の継続。A が他の前提になる。
