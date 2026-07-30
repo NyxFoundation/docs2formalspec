@@ -287,3 +287,27 @@ corpus (`corpus.md:190`, `:667`) は「3 日後に請求可能、早期解除手
 
 また `ApyUSD.previewRedeem` は `super.previewRedeem(shares) - _feeOnTotal(assets, unlockingFee)`
 であり(検証済みソース `src/ApyUSD.sol` の当該箇所)、上の §1 で `_feeOnRaw` のみを引用していたのは不完全だった。
+
+### 7. AccessManager によるロール割り当て(2026-07-30 実測)
+
+3 コントラクトとも `authority()` は **`0xe167330e2eac88666de253e9607c6d9ae0ca2824`**(OZ AccessManager)。
+`getTargetFunctionRole(target, selector)` の結果:
+
+| 対象 | 関数 | role | 本レポートが別途記録している遅延 |
+|---|---|---:|---|
+| `UnlockReceipt` `0x9bf51f33…3237` | `setFeeCurve(...)` | **0** | admin、**遅延なし** |
+| `UnlockReceipt` | `setFeeWallet(address)` | **0** | admin、**遅延なし** |
+| `LinearVestV0` `0x0d62b4cc…c99f` | `setBeneficiary(address)` | **24** | **3 日**スケジュール |
+| `ApyUSD` `0x38EEb52F…8a6A` | `setUnlockingFee(uint256)` | 23 | 未確定 |
+| `ApxUSD` `0x98a878b1…4665` | `setSupplyCap(uint256)` | 23 | 未確定 |
+
+**この読み取りで前セッションの記述を 1 件訂正する。** `setBeneficiary` を「timelock 無し」と
+書いていたが誤りで、role 24 = 3 日スケジュールが掛かっている。vesting プールの付け替えは
+即時ではなく 3 日前に公示される。深刻度はその分下がり、「即時ドレイン」ではなく
+「ガバナンス可視性の問題 + 払い先が固定アドレスでなく可変ポインタである設計」に位置づけ直す。
+
+逆に **`setFeeCurve` / `setFeeWallet` は role 0(遅延なし)** であり、こちらが即時性を持つ。
+`UnlockReceipt` は曲線をライブ参照するので、遅延なしの 1 呼び出しで発行済み receipt が
+再ロックかつ最大 5% まで値上げされる(`admin_curve_change_relocks_and_reprices`)。
+
+role 23 の実行遅延は、公開 RPC がアーカイブ照会を拒否したため本セッションでは確定できなかった。

@@ -582,10 +582,12 @@ not at time 1 under `curveAfter`. Nothing about the receipt changed: `UnlockRece
 
 **What is not proved here.** There is no `setFeeCurve` operation, no admin, no role and no
 timelock anywhere in this file, and no state transition connecting the two curves. That a single
-admin call performs this swap is read off the source — `setFeeCurve` is `restricted` with
-`requireValid` as its only check — and both curves passing `requireValid` (proved above) is what
-makes the swap ordinary configuration rather than a misconfiguration. Lean shows the two curves
-differ in effect; the reachability of the swap is prose. -/
+admin call performs this swap is read off the source and the AccessManager: `setFeeCurve` is
+`restricted` with `requireValid` as its only check, and the manager assigns it to **role 0**, the
+admin role — *not* one of the scheduled roles (22 = 4-hour, 24 = 3-day) that gate the protocol's
+other privileged setters. Both curves passing `requireValid` (proved above) is what makes the
+swap ordinary configuration rather than a misconfiguration. Lean shows the two curves differ in
+effect; the reachability of the swap is prose. -/
 theorem receipt_relocked_by_curve_change :
     ({ assets := 1000, createdAt := 0 } : Receipt).isClaimable curveBefore 1 = true ∧
     ({ assets := 1000, createdAt := 0 } : Receipt).isClaimable curveAfter 1 = false ∧

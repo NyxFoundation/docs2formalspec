@@ -8,13 +8,18 @@ against mainnet, formalize what the documentation corpus never mentioned. Source
 `src/ApxUSD.sol` (impl `0xdd71fd677fde2ed2579a3c45204f41a11016ccb4`) and `src/LinearVestV0.sol`
 (`0x0d62b4cc02b4b51ed19ddf41d7a7979cf394c99f`, not behind a proxy).
 
-**§A. `LinearVestV0.setBeneficiary` — a single admin key drains the whole vesting pool.**
-`pullVestedYield()` is `onlyBeneficiary` and pays `vestedAmount()` **to the beneficiary**. The
-beneficiary is admin-settable with no timelock and no consent from the vault. So one compromised
-admin key redirects every accrued-but-unpulled unit of yield to an address of its choosing. Live
-read: `vestedAmount() = 122,187.95…` apxUSD sitting pullable right now. The model has no
-`setBeneficiary` operation at all, so `BlastRadius.lean`'s "admin alone cannot touch balances"
-result is silent about this channel rather than covering it.
+**§A. `LinearVestV0.setBeneficiary` redirects the whole vesting pool — behind a 3-day schedule.**
+`pullVestedYield()` is `onlyBeneficiary` and pays `vestedAmount()` **to the beneficiary**, so
+whoever the beneficiary is can take the accrued pool, and the vault is never consulted. Two calls
+therefore move it. **The mitigating fact, read from the AccessManager:**
+`setBeneficiary(address)` on `0x0d62b4cc…c99f` resolves to **role 24**, which this report has
+elsewhere recorded as a 3-day scheduled operation (`CommitToken.lean`, `MinterRateLimit.lean`), so
+the retarget is pre-announced on chain rather than instant. That is a real defence and it is why
+this is a governance-visibility item, not an instant-drain item. What remains is the *design*:
+the payee is a mutable pointer rather than a fixed vault address, and a live read put
+`vestedAmount()` at 122,187.95 apxUSD. The model has no `setBeneficiary` operation at all, so
+`BlastRadius.lean`'s "admin alone cannot touch balances" is silent about this channel rather than
+covering it.
 
 **§B. `ApxUSD` has a supply cap; the model does not — and the admin can lift it.**
 `mint` reverts unless `totalSupply() + amount <= supplyCap` (live: cap `750,000,000e18` against a
@@ -40,10 +45,11 @@ namespace Apyx
 A miniature of `LinearVestV0` in the style of the wrapper machines in `BlastRadius.lean`: only
 the fields the drain depends on. It carries the deployment's `onlyBeneficiary` guard, which is the
 one the attack turns on. It deliberately does **not** carry `setBeneficiary`'s `restricted`
-modifier — there is no caller argument and no role anywhere in this section, because the premise
-is that the admin key is already compromised. So "admin" below names the threat model, not
-anything Lean checks. And whether these definitions match the Solidity is a reading, not a
-theorem.
+modifier — there is no caller argument, no role and no scheduling anywhere in this section,
+because the premise is that the role-24 key is already compromised and the 3-day window has
+elapsed. So "admin" below names the threat model, not anything Lean checks, and the theorems say
+nothing about how long the retarget takes to become executable. Whether these definitions match
+the Solidity is likewise a reading, not a theorem.
 -/
 
 /-- `LinearVestV0`'s state, restricted to what `pullVestedYield` reads and writes. -/
@@ -112,9 +118,10 @@ the `fullyVested` accumulator.
 has no `setBeneficiary` operation.
 
 *Outside Lean*: the sourcify-verified `LinearVestV0` has `pullVestedYield` gated `onlyBeneficiary`
-and paying `beneficiary`, and `setBeneficiary` as a `restricted` call with no timelock, so the
-same two steps take one admin key on chain; a live read put `vestedAmount()` at roughly 122k
-apxUSD. Neither of those is established by the theorem below. -/
+and paying `beneficiary`, and `setBeneficiary` as a `restricted` call — which the AccessManager
+assigns to **role 24**, the 3-day scheduled role, so the retarget is announced three days ahead
+rather than executed on the spot. A live read put `vestedAmount()` at roughly 122k apxUSD. None
+of that is established by the theorem below, which is arithmetic over a hand-written state. -/
 theorem admin_alone_redirects_vested_yield :
     ∃ (v v1 v2 : VestState) (vault attacker : Address),
       v.beneficiary = vault ∧
