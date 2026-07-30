@@ -29,19 +29,26 @@ namespace Apyx
 
 /-- Witness state for the buffer/backstop contradiction: a positive overcollateralization
 buffer, with `totalSupply_apxUSD = ray` so that the redemption total equals the redemption
-value. Everything else is at defaults; the buffer is `totalCollateralValue - redemptionTotal
-= 1 - 0 = 1`. -/
+value. The governance `emergencyFlag` is pre-set, since the document-faithful backstop only
+fires once the flag is already up (raised by the stress pathway `handleStressEvent`; see the
+guard on `step … Op.catastrophicBackstop`). Everything else is at defaults; the buffer is
+`totalCollateralValue - redemptionTotal = 1 - 0 = 1`. -/
 private def bufWitness : State :=
   { (default : State) with
+      emergencyFlag := true,
       totalSupply_apxUSD := ray, totalCollateralValue := 1, redemptionValue := 0 }
 
 /-- The post-state of the mandated `catastrophicBackstop` step on `bufWitness`: exactly the
-model's per-unit effect (`redemptionValue := totalCollateralValue * ray / totalSupply_apxUSD`,
-`emergencyFlag := true`). On `bufWitness` (TCV = 1, supply = ray) this evaluates to `1`. -/
+model's effect — the per-unit `redemptionValue := totalCollateralValue * ray / totalSupply_apxUSD`
+(on `bufWitness`, TCV = 1, supply = ray, this evaluates to `1`), the pro-rata reserve credit, and
+the recorded `overcollateralizationBuffer` field driven to `0`. -/
 private def bufWitness' : State :=
   { bufWitness with
       redemptionValue := bufWitness.totalCollateralValue * ray / bufWitness.totalSupply_apxUSD,
-      emergencyFlag := true }
+      usdcBal := fun a =>
+        bufWitness.usdcBal a + (bufWitness.usdcReserve * bufWitness.apxUSDBal a) / bufWitness.totalSupply_apxUSD,
+      usdcReserve := 0,
+      overcollateralizationBuffer := 0 }
 
 /-- **`req_catastrophic_backstop_distributes_buffer`** (docs/07 candidate 1, resolved): the
 machine-checked *catastrophic exception* to buffer preservation. On a catastrophic backstop the
@@ -74,8 +81,11 @@ theorem req_catastrophic_backstop_distributes_buffer :
   refine ⟨bufWitness, bufWitness', ?_, ?_, ?_, ?_⟩
   · -- buffer bufWitness = 1 - 0 = 1 > 0
     simp [overcollateralizationBuffer, bufWitness]
-  · -- the step: caller = admin, so it succeeds with the per-unit redemptionValue
+  · -- the step: caller = admin and the emergency flag is up, so it succeeds with the
+    -- per-unit redemptionValue and the buffer-distributing reserve payout
     simp [step, bufWitness']
+    show bufWitness.emergencyFlag = true
+    rfl
   · -- the per-unit redemption value on the result
     rfl
   · -- buffer after = 0 (redemptionTotal = ray·(1)/ray = 1 = TCV), buffer before = 1

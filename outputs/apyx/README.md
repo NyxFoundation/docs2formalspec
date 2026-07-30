@@ -184,8 +184,8 @@ The attacker is modeled as holding one or more role keys (`admin`, `oracle`, `pa
 |---|---|---|
 | `pauseController` | Freeze only — touches no balance | `pauser_trace_blast_radius` |
 | `yieldDistributor` | Can only donate into the vest pool; debits nothing | `yield_distributor_trace_blast_radius`, `distributor_compartmentalized` |
-| `oracle` | No balance movement; can only shift price parameters | `oracle_alone_preserves_balances` |
-| `admin` | Cannot move any balance/supply field, only policy parameters | `admin_cannot_touch_balances` |
+| `oracle` | No balance movement; publishes the reported market price only. The **redemption** price is an admin capability, not an oracle one (`Roles.assignAdminTargetsFor`) | `oracle_alone_preserves_balances` |
+| `admin` | Cannot debit any balance or supply, but **publishes the redemption price with no floor, cap or delay, and can move the reserve to a named address without any redemption** | `admin_cannot_touch_balances`, `admin_alone_moves_redemption_price`, `admin_alone_drains_reserve` |
 | **all keys at once** | A passive, non-RFQ-targeted user loses nothing | `user_assets_immune_to_total_key_compromise`, `no_theft_ledger` |
 
 The non-custodial headline (`user_assets_immune_to_total_key_compromise`) is the machine-checked form of
@@ -197,14 +197,34 @@ Supporting theorems include the exact per-role effect frames (`admin_frame`, `or
 `yield_distributor_frame`, and the `step_*_exact` family), the non-custodial lemmas
 (`no_role_transfers_user_funds`, `no_role_burns_user_shares`, `no_role_debits_usdc`,
 `governance_token_balances_immutable`, `no_role_seizes_unlock_position`), and the extraction-channel
-characterizations (`redemption_price_admin_only`, `reserve_outflow_only_via_redemption`).
+characterizations (`redemption_price_writers`, `reserve_outflow_only_via_redemption`).
 
-**The one total-loss path is a two-key coalition** (`admin_rfq_coalition_drains`): the admin drives the
-redemption value to 0 via `catastrophicBackstop` (which has no lower bound in the model), after which an
-approved RFQ counterparty's `executeRFQRedemption` burns a victim's apxUSD for **0 USDC**. The redemption
-payout is exactly `amount × redemptionValue / ray` with no cap on `redemptionValue`
-(`redeem_payout_formula`, `redeem_payout_has_no_cap`) — so the loss is unbounded. This directly motivates
-the recommendations in §5.
+**The admin key alone is a total-loss path.** This report used to headline a two-key coalition
+(`admin_rfq_coalition_drains`: the admin crashes the redemption value via `catastrophicBackstop`, then an
+approved RFQ counterparty settles a victim's request at the crashed price for **0 USDC**). That coalition
+is still real and still proved, but it is no longer the cheapest route, and the reason it read as the
+cheapest was a gap in the model rather than a property of the protocol. Two operations now carry what the
+deployment carries:
+
+- **`admin_alone_drains_reserve`** — `withdrawReserve` moves the reserve to an address the admin names,
+  with nothing burned and no claim settled. It mirrors `RedemptionPoolV0.withdraw` / `withdrawTokens`,
+  which `Roles.assignAdminTargetsFor` assigns to `ADMIN_ROLE` and the deployment's own
+  `RedemptionPool/Access.t.sol` tests as admin-only. No second key, no emergency flag.
+- **`admin_alone_moves_redemption_price`** — the *quiet* write to `redemptionValue`: any non-zero value,
+  one step, no side effect anywhere else in the state. `catastrophicBackstop` is the loud write; only the
+  loud one is visible to a monitor watching protocol state. Both are the same key
+  (`redemption_price_writers`).
+
+The payout is exactly `amount × redemptionValue / ray` with no cap on `redemptionValue`
+(`redeem_payout_formula`, `redeem_payout_has_no_cap`), so the loss on the pricing route is unbounded. This
+sharpens rather than replaces the §5 recommendations: a price floor and a bounded per-update move now
+matter against a *single* key, and the reserve wants a rate limit of its own.
+
+**And the counterparty does not need the admin key at all, only the clock.**
+`rfq_payout_is_set_by_execution_timing` runs the same user, the same 100-apxUSD request and the same
+counterparty twice: settled immediately the user is paid 100, settled after one *honest* price update the
+user is paid 50. Both traces are permitted, both consume the request, and the counterparty picks — with no
+emergency and no compromised admin.
 
 ### 4.2 Design safety — honest-actor attacks (30 theorems, [`Safety.lean`](Safety.lean))
 
@@ -238,6 +258,94 @@ design is correct on this point.**
 
 ---
 
+### 4.4 The other async-redemption vault (8 theorems, [`CommitToken.lean`](CommitToken.lean))
+
+Added after reading the deployed authority graph, which turned up a second async-redemption vault
+holding 250× what the modelled unlock path holds (§6.4 #18). `CommitToken` "CT-apxUSD"
+(`0x17122d86…871e`) is the contract `UnlockToken` subclasses; live parameters at the time of
+reading are a **14-day** `unlockingDelay`, a `1e26` supply cap, and 1:1 assets↔shares.
+
+**All four live instances are covered by this one model**, because they differ only in the
+underlying asset, the cooldown and the supply cap — all three of which are state fields:
+`CT-apxUSD` (14 d, 100M cap), `CT-apyUSDapx` (14 d, 20M), `CT-apxUSDUSDC` (14 d, 50M) and
+`UnlockToken` (20 d, uncapped), enumerated as `liveDeployments`.
+`cycle_closes_at_every_live_deployment` instantiates the liveness half at each.
+
+This is also the first time `docs/06` §7's async family is instantiated against a **real** target
+rather than the fictional `AsyncQueueVault` reference, and it needs the clock to say anything at
+all.
+
+Three properties hold and are worth having: `cycle_closes_after_the_live_delay` (request, wait the
+deployed 14 days, claim — in one trace), `claim_conserves` (a claim burns exactly what it pays),
+and `commitment_is_bounded_by_balance` (a holder can never be committed to more than they hold).
+
+Three describe behaviour a holder should know about, none of which violates anything the code
+promises:
+
+- **`topup_restarts_the_whole_cooldown`** — `_requestRedeem` does `request.shares += shares;
+  request.requestedAt = block.timestamp`, with no tranches. Adding one unit to a request that has
+  already served its 14 days makes the **entire** position unclaimable for another 14.
+- **`no_partial_claim`** — `redeem` reverts unless the amount equals the request exactly. Composed
+  with the above, a position can only be exited whole, so a holder who tops up cannot take out the
+  part that had matured.
+- **`raising_the_delay_unclaims_pending_requests`** — `_cooldownRemaining` reads `unlockingDelay`
+  from storage rather than snapshotting it at request time, so lengthening it pushes out every
+  outstanding request, including ones claimable a moment earlier. Bounded by governance rather
+  than by the contract: `setUnlockingDelay` is role 24 on-chain, a 3-day scheduled operation
+  ([`model.md`](model.md) §6).
+
+`request_does_not_escrow` records the ERC-7540 deviation the contract's own docstring names —
+shares stay on the owner's balance between request and claim — and pairs it with the arithmetic
+check that makes that safe.
+
+### 4.5 The redemption-price pipeline (8 theorems, [`RedemptionOracle.lean`](RedemptionOracle.lean))
+
+`Apyx.lean` carries one `redemptionValue` field written by privileged operations. On-chain the
+price comes from two contracts and **neither has that setter**: `ApyxCollateralRatioOracle`
+(`pushRound`, role 22 — a 4-hour scheduled operation) feeds `ApyxRedemptionOracle`, a read-only
+aggregator publishing `min(collateral ratio, cap)` with no write functions at all. Live values:
+`cap() = 1.00` at 8 decimals, published answer 0.903659.
+
+This module settles the two parameter-bound findings of §9.1 in **opposite** directions, which is
+the reason it is worth having as proofs rather than prose:
+
+- **The cap is real.** `published_never_exceeds_par` — along every trace, with the deployed cap,
+  the published price is at most 1.00. `cap_immutable` / `cap_immutable_trace` show no operation
+  in the pipeline moves the cap (pattern I21 against a live contract; on-chain the contract simply
+  has no setter, and changing it needs a UUPS swap under role 24, 3 days). A hostile push is
+  clamped rather than rejected (`push_above_cap_is_clamped`).
+  This is also where `Safety.lean`'s `h_rv : redemptionValue ≤ ray` stops being a hypothesis: the
+  deployment enforces it.
+- **The floor is not.** `published_has_no_floor` — one push of `0` publishes `0`. There is no lower
+  clamp and no minimum move anywhere in the pipeline, and below the cap the published price is
+  exactly what was pushed (`published_tracks_the_push_below_cap`). So `redemption_has_no_floor`
+  survives contact with the deployment while `redeem_payout_has_no_cap` does not.
+
+### 4.6 The two operational contracts (9 theorems)
+
+**[`MinterRateLimit.lean`](MinterRateLimit.lean).** `Apyx.lean` mints at $1 with role and list
+checks and no volume bound; on-chain, minting goes through `MinterV0` and carries a sliding-window
+rate limit — live values **50,000,000 apxUSD per day**, with a 50× tightening to 1,000,000 sitting
+in the manager's queue. The guard is modelled and two consequences are stated:
+`tightening_does_not_unwind_the_window` (reducing the ceiling does not claw back what the window
+already holds, so `available` simply pins at 0 until the window rolls — the mirror image of
+`CommitToken.raising_the_delay_unclaims_pending_requests`), and `window_frees_in_one_step` (a
+record leaves the window the instant `now` passes it; there is no smoothing, so a full window
+restores its entire allowance in one block). The trace-level "damage is linear in time" statement
+is not re-proved here — `BlastRadius.rate_limit_linear_bound` already has that shape generically,
+and what was missing was the tie to a real contract's guard.
+
+**[`LiquidationBatcher.lean`](LiquidationBatcher.lean).** Role 41 carries no execution delay and is
+held by a single EOA, which is what makes it worth modelling; reading the contract is what makes
+the answer reassuring. It liquidates on Morpho Blue, not on Apyx state, and two construction-time
+pins bound it: `allowlist_immutable` and `destination_immutable` (neither has a setter),
+`withdraw_credits_only_the_pinned_destination` (`withdrawTokens` takes no destination argument),
+and `unlisted_market_reverts_the_batch` (fail-closed, so an unlisted ticket cannot ride along
+inside a large batch). `role41_trace_blast_radius` lifts the two pins to whole traces:
+**undelayed, but not unbounded.**
+
+---
+
 ## 5. Design recommendations for Apyx
 
 These follow directly from the proofs above. Items 1–3 are the defenses whose *absence* is the reason the
@@ -256,8 +364,14 @@ guarantee is cited.
 3. **Add a timelock on privileged admin changes.** The base model is proved to have **no exit window** —
    admin changes take effect in the same block (`base_model_has_no_timelock`,
    `catastrophicBackstop_is_instantaneous`). A delay queue is formalized and proved to give users a
-   guaranteed window to exit before any queued change lands (`timelock_escape_guarantee`). (This mirrors the
-   external observation that `ApxUSDRateOracle.setRate` currently sits behind a 0-second timelock.)
+   guaranteed window to exit before any queued change lands (`timelock_escape_guarantee`).
+   **Largely already met on-chain, and this recommendation was written against a stale
+   observation.** The deployed `AccessManager` (`0xe167330E…2824`) runs a graded delay ladder —
+   0 for `pause()`, 4h for the price push, 24h for privileged token withdrawal, 3 days for
+   `upgradeToAndCall`, 7 days for `setAuthority` — with a 5-day minimum setback on any reduction
+   and a 7-day grant delay on `ADMIN_ROLE` itself. What still carries **no** delay is `ADMIN_ROLE`,
+   held by a single Safe. See [`model.md`](model.md) §6 for the snapshot and the addresses; the
+   residual recommendation is about that one role, not about the scheme.
 
 4. **Minimize trust in the RFQ counterparty set.** With defenses 1–3 in place, user-fund safety against a
    compromised admin still depends on the honesty of approved RFQ counterparties (they are the second key in
@@ -281,6 +395,46 @@ guarantee is cited.
 
 Reported honestly so the boundary of these guarantees is clear.
 
+### 6.0 How to read a theorem count — quantifier scope, and what the model can refute
+
+Two questions decide what a machine-checked theorem is worth, and neither is answered by the
+count. **Over what does it quantify?** and **could the model have exhibited its failure?**
+
+**Quantifier scope.** **22 theorems quantify over an arbitrary operation sequence**
+(`execTrace`) — 4 in [`Safety.lean`](Safety.lean), 18 in
+[`BlastRadius.lean`](BlastRadius.lean). Those are the ones that rule out multi-step attacks.
+Every other theorem, **including all 82 requirement-conformance theorems**, is single-step: it
+says what one operation does from an arbitrary state satisfying its hypotheses. That is the
+right shape for most requirements — "`depositUSDC` mints apxUSD" is a single-step claim — but a
+single-step theorem cannot exclude a sequence, and citing one as if it could overstates it.
+Anywhere this report says "no operation can …" the statement is exhaustive over `Op` at one
+step; anywhere it says "no trace can …", it is the stronger claim.
+
+**Refutability.** A theorem is bounded above by whether its state space can express the failure
+it denies. This model has three known blind spots of that kind, all recorded below and in
+[`model.md`](model.md) §5:
+
+| The model cannot express | So these say less than they appear to |
+|---|---|
+| **Negative net value** — every balance is `Nat`, and `x - y` truncates at 0 | Any "never underwater" reading of `solvency_preserved` / `req_overcollateralization_limit`. Insolvency is not false here, it is unrepresentable |
+| **Per-holder totals** — the ledger is `Address → Nat` with no `Σ` | §6.2; the aggregate conservation clause of the backstop |
+| **A second, independent price** — one `redemptionValue`, where the deployment has a redemption price and a Curve-facing oracle price with nothing tying them together | Divergence between the two. See item #17 in §6.4 |
+
+Two blind spots that **used to be here and no longer are**, recorded because they show the cost
+of not asking this question: until `Op.tick` existed no trace advanced `now`, so every
+cooldown, vesting and settlement-timing requirement was stated about hand-supplied states; and
+until `updateRedemptionValue` wrote anything, `catastrophicBackstop` was the only writer of
+`redemptionValue`, which is the sole reason the worst coalition in §4.1 reads as needing two
+keys. Neither was a wrong theorem. Both were questions the model could not be asked.
+
+**Reachability is now carried, not assumed.** `flexible_fee_schedule_is_reachable` reaches the
+matured states the fee requirements assume — file, wait, claim — and pins the fee actually
+charged at 299 bps after 3 days, 180 after 10, 10 after the full cooldown.
+`redemption_cycle_closes_after_cooldown` does the same for the standard unlock. Their
+counterpart `req_redemption_async_process` proves only that an *immediate* claim reverts; the
+positive half is a **liveness** property, and liveness in general stays out of scope — nothing
+here forces any party to act (§6.3).
+
 ### 6.1 Off-chain or UI behavior (not attempted)
 Five requirements describe processes outside on-chain state and were flagged as such at extraction:
 treasury capital allocation (`offchain-allocation`), third-party custody attestations (`custody-attestation`),
@@ -293,10 +447,13 @@ than an explicit gap:
 
 - **`catastrophic-backstop`, second clause** — "distribute the entire reserve pro-rata to remaining
   holders." The first clause (setting the per-unit redemption value to `totalCollateralValue / totalSupply`,
-  matching the deployed `ApxUSDRateOracle`) **is** proved (`req_catastrophic_backstop`), and the resulting
-  buffer-to-zero effect is proved in `SpecDefects`; a genuine *per-holder* pro-rata split requires a
-  `Σ_holder reserve · balance/totalSupply` over the holder set, but balances are aggregate `Address → Nat`
-  maps with no summation structure — the same
+  matching the deployed `ApxUSDRateOracle`) **is** proved (`req_catastrophic_backstop`), as is the
+  *per-address* pro-rata credit itself — every holder `a` is shown to be credited exactly
+  `usdcReserve · apxUSDBal(a) / totalSupply` with the reserve and the buffer both driven to zero
+  (`req_catastrophic_backstop` clauses (3)–(4), and the buffer-to-zero effect restated in `SpecDefects`).
+  What remains unformalized is only the *aggregate conservation* of that split — that `Σ_holder` of the
+  credits exactly equals the drained reserve — which needs a `Σ` over the holder set the aggregate
+  `Address → Nat` ledger has no summation structure for; the same
   limitation that makes `solvency_preserved` take well-formedness as a hypothesis.
 - **`caller_net_nonpositive`, trace-level closure** — the value-weighted no-free-money property is proved
   single-step at a fixed reference rate; extending it to arbitrary traces under a *moving* exchange rate is a
@@ -326,13 +483,16 @@ Halmos, hevm; **Fuzz** = Echidna, Medusa, Foundry invariant; **Config** = role-g
 | 6 | **ERC-20/4626 ledger identity** `Σ balances = totalSupply` — the model *assumes* it (`solvency_preserved`/`req_overcollateralization_limit` take `WellFormed` as a hypothesis) | Balances are bare `Address → Nat` with no summation structure | SMT invariant on the deployed token/vault |
 | 7 | **ERC-4626 inflation defense in the real vault** — the Lean proves donation-immunity of the *abstract* model; the Solidity must actually use virtual-shares/offset (or a seed deposit) so `totalAssets` isn't donatable | Model has no raw-transfer sink; the real `balanceOf`-based `totalAssets` might | SMT (share-price manipulation rule) + Fuzz |
 | 8 | **Vesting timestamp detail** — `LinearVestV0` separates `lastDepositTimestamp`/`lastTransferTimestamp`; the model collapses to a single `vestStart` (documented simplification), so a pull can shift the vesting end | Model has one clock anchor | SMT/Fuzz on `LinearVestV0` |
-| 9 | **Per-holder pro-rata distribution** (catastrophic-backstop 2nd clause) | Needs `Σ_holder reserve·balance/totalSupply`; aggregate ledger can't express it (§6.2) | Implementation audit + SMT |
+| 9 | **Aggregate conservation of the pro-rata split** (catastrophic-backstop 2nd clause) | The *per-address* credit `reserve·balance/totalSupply` is proved (`req_catastrophic_backstop`); only `Σ_holder` of the credits = drained reserve is left, needing a `Σ` the aggregate ledger can't express (§6.2) | Implementation audit + SMT |
 | 10 | **Access-control configuration** — the OZ `AccessManager` role graph and the **actual per-function delays** (the 0-second-timelock risk Yearn flagged; the model proves `base_model_has_no_timelock`), plus `MinterV0` rate-limit params | Model abstracts roles to `caller = admin/oracle/…`; it does not carry the deployed authority wiring or delay values | **Config review** + Static |
 | 11 | **Signature handling** in `MinterV0` — EIP-712 order signing and ERC-1271 contract signatures: replay, malleability, nonce/expiry, domain separator | The model has no signatures; mint authorization is abstracted away | Static + SMT (signature-replay rules) |
 | 12 | **Upgradeability** — the UUPS oracles (`ApxUSDRateOracle`, `ApyUSDRateOracle`): `_authorizeUpgrade` gating, initializer protection, and **ERC-7201 storage-layout** stability across upgrades | Model has no proxies, no storage layout, no upgrade op | Static (upgradeability) + OZ upgrades plugin + storage-layout diff |
 | 13 | **Gas / DoS** — e.g. `MinterV0`'s `mintHistory` `DoubleEndedQueue` growth and any unbounded loops | Model has no gas metering or loop cost | Static + gas profiling + Fuzz |
 | 14 | **Cross-chain** — `BridgedApyxToken` / `CCIPBridge` in the repo | Out of the single-chain state machine entirely | Separate bridge audit |
 | 15 | **Off-chain processes** — USD collection & the mint/redeem **spread** (`price-may-include-spreads`, applied off-chain — §6.3), treasury custody, attestations, and the oracle **price-setting process** feeding `setRate` | Not on-chain state | Operational / process audit |
+| 16 | ~~Privileged reserve withdrawal~~ — **now modelled** as `Op.withdrawReserve`; `reserve_outflow_only_via_redemption` carries it as an explicit third exit and `solvency_preserved` names it as an exclusion. What remains out of scope is the **authority behind it**: who actually holds `ADMIN_ROLE` on the deployed `AccessManager`, and with what delay | The model abstracts roles to `caller = admin`; it does not carry the deployed authority wiring | Config review |
+| 18 | **The larger async-redemption vault is outside the model.** The modelled unlock path (`UnlockToken`) holds **24,936 apxUSD**; a structurally identical `CommitToken` "CT-apxUSD" (`0x17122d86…871e`), governed by the same authority, holds **6,226,697 — 1.90% of supply, 250× more**. Two further `CommitToken`s wrap the Curve LP tokens | The model was scoped from the documentation, which describes the unlock path; these are separate deployments visible only in the on-chain authority graph | Derive the Step-0 profile from the authority graph as well as the docs, then instantiate the async family (docs/06 §7) against the larger vault — see [`model.md`](model.md) §6 |
+| 17 | **Redemption-price source** — `RedemptionPoolV0.exchangeRate` (what a redeemer is paid) and `ApxUSDRateOracle.rate` (what the Curve pool reads) are two independent unbounded values with nothing tying them together | The model carries a single `redemptionValue`; the second price has no consumer inside the modeled system | SMT/Fuzz across the pool boundary + Config review |
 
 **Priority within this list:** #3 (bytecode⊨model) and #7 (real-vault inflation defense) are the highest-value
 SMT targets — they directly re-check, at the implementation level, the two guarantees this report proves
@@ -351,8 +511,13 @@ curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf 
 
 # 2. Build — elan reads lean-toolchain (Lean 4.31.0) and fetches it automatically
 cd lean
-lake build
+lake build D2fsSpecs
 ```
+
+`D2fsSpecs` is the library of analyzed systems; naming it explicitly compiles exactly the four
+Apyx modules below and nothing else. (A bare `lake build` additionally compiles
+`TemplateExamples`, a fictional model that regression-tests the reusable proof templates in
+`templates/`; it is unrelated to Apyx.)
 
 `lake build` exiting `0` with no `sorry` warnings **is** the proof-checking event: the Lean kernel
 re-verifies every theorem from source. Every theorem depends only on Lean's standard `propext` and
@@ -373,6 +538,10 @@ axioms of Lean's logic; none is an unproved assumption. Compile status is record
 | [`BlastRadius.lean`](BlastRadius.lean) | The 56 key-compromise blast-radius proofs and the defense wrappers |
 | [`Safety.lean`](Safety.lean) | The 30 design-safety proofs |
 | [`SpecDefects.lean`](SpecDefects.lean) | The spec-consistency and parameter-bound gap-witness proofs (§9) |
+| [`CommitToken.lean`](CommitToken.lean) | The deployed `CommitToken` async-redemption vaults, all four instances — 9 proofs (§4.4) |
+| [`RedemptionOracle.lean`](RedemptionOracle.lean) | The deployed two-stage redemption-price pipeline — 8 proofs (§4.5) |
+| [`MinterRateLimit.lean`](MinterRateLimit.lean) | `MinterV0`'s sliding-window mint rate limit — 4 proofs (§4.6) |
+| [`LiquidationBatcher.lean`](LiquidationBatcher.lean) | The construction-time bounds on the one undelayed keyed role — 5 proofs (§4.6) |
 | [`leancheck.json`](leancheck.json) | Build status: requirement theorems, `sorry` count, vacuous count |
 | [`corpus.md`](corpus.md) | The raw ingested source documentation |
 
@@ -384,14 +553,23 @@ This group turns the lens on the requirement set itself and on the economic para
 
 ### 9.1 A machine-checked parameter gap — the redemption price has no floor or cap
 
-The redemption price (`redemptionValue`) has **no enforced floor and no enforced cap** in the design, and it
-is written by the admin (`catastrophicBackstop`; on-chain, the `ApxUSDRateOracle`, gated only by `> 0`). Two
-witnesses prove the consequences:
+The redemption price (`redemptionValue`) has **no enforced floor and no enforced cap** in the design, and
+in the model it is written by the admin — either loudly (`catastrophicBackstop`) or quietly
+(`updateRedemptionValue`); see `redemption_price_writers`. Two witnesses prove the consequences:
 
 - **`redemption_has_no_floor`** — there is a reachable state (`redemptionValue = 0`) in which a whitelisted
   holder's `redeemApxUSD` **succeeds** yet pays **0 USDC** for the apxUSD it burns: a total loss the guards do
   not prevent.
 - **`BlastRadius.redeem_payout_has_no_cap`** — symmetrically, no upper bound on the payout exists.
+
+> **On-chain the upper bound exists, and the lower one still does not — both are now proved.**
+> [`RedemptionOracle.lean`](RedemptionOracle.lean) (§4.5) models the deployed pipeline:
+> `published_never_exceeds_par` bounds the price at 1.00 along every trace, so the no-cap finding
+> describes the *design* while the deployment supplies a bound outside the modelled state, and
+> `Safety.lean`'s `h_rv : redemptionValue ≤ ray` is enforced rather than assumed.
+> `published_has_no_floor` shows the floor finding is untouched: one push of `0` publishes `0`.
+> `RedemptionPoolV0.setExchangeRate` and `ApxUSDRateOracle.setRate` appear nowhere in the live
+> authority table. Addresses and the snapshot: [`model.md`](model.md) §6.
 
 Together with the two-key coalition (§4.1), these are the concrete design weaknesses of the model. **Fix:** a
 redemption-price floor/clamp, a withdrawal rate limit, and an admin timelock (§5) — the same three defenses §5

@@ -95,7 +95,7 @@ Trail of Bits の **invariant-driven development**[^idd] は、設計欠陥(busi
 **是正(完了)**:
 - `requirements.json` / `SPEC.md` の `buffer-non-decreasing` を原典どおり「**catastrophic を除き、routine/stress 下で** MUST NOT decrease」に修正済み。
 - Lean モデルの `req_buffer_non_decreasing` は元から routine op 限定で**修正仕様と整合**(モデルは正しかった)。docstring を修正仕様に更新。
-- SpecDefects の定理を `req_catastrophic_backstop_distributes_buffer` に改名し、**catastrophic 例外の肯定的言明**(backstop が buffer を 0 にする=修正済み要件が除外する挙動)として保持。`README` §6.2 の「catastrophic 第2節が未モデル化」ギャップを部分的に closing(buffer→0 を証明。per-holder 按分は集約台帳の表現限界で残置)。
+- SpecDefects の定理を `req_catastrophic_backstop_distributes_buffer` に改名し、**catastrophic 例外の肯定的言明**(backstop が buffer を 0 にする=修正済み要件が除外する挙動)として保持。`README` §6.2 の「catastrophic 第2節が未モデル化」ギャップを大きく closing(buffer→0 に加え、**各アドレスへの pro-rata クレジット `usdcReserve·apxUSDBal(a)/totalSupply` 自体を `req_catastrophic_backstop` で証明**。残るのは Σ 総和保存=分配総額と drained reserve の一致のみで、これが集約台帳の表現限界)。なお `catastrophicBackstop` は model.md の "Governance emergency flag set" ガードに忠実に `emergencyFlag == true` 前提で発火する(フラグは stress 経路 `handleStressEvent` が立てる)。
 - **Apyx 側の修正は不要。** これはツール(抽出パイプライン)の欠陥だった。
 - `buffer-non-decreasing`: 「overcollateralization buffer は **MUST NOT decrease**」
 - `buffer-growth-stress`: 「ストレス事象では **むしろ増加** すべき(drain されない)」

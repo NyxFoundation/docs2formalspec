@@ -337,6 +337,68 @@ The following terms have the meanings defined below. The definitions use the key
 
 ---
 
+## 10a. Deployment‑Derived Requirements (provenance: on‑chain, not documentation)
+
+Sections 1–10 are extracted from the sources in §11. This section is not: every requirement below
+was read from the **deployed contracts and their `AccessManager` configuration** at ≈ block
+25,641,600 on 2026‑07‑30, and each is realised in Lean by the module named against it. They are
+kept separate because the rest of this document is traceable to a `source_quote` and these are
+traceable to chain state, which can change — see `model.md` §6 for the snapshot and §7 for the
+modules.
+
+### 10a.1 Asynchronous redemption vaults (`CommitToken.lean`)
+
+Four live instances of one contract; `apxUSD_unlock` is the subclass §7 already specifies.
+
+| # | Requirement | Level |
+|---|---|---|
+| DR‑1 | A redeem request SHALL become claimable once `unlockingDelay` has elapsed since it was filed, and a trace SHALL exist that files, waits and claims. | MUST |
+| DR‑2 | A claim SHALL burn exactly the recorded share amount and credit the receiver exactly that amount (assets and shares convert 1:1). | MUST |
+| DR‑3 | A holder SHALL NOT be committed to more shares than they hold. | MUST |
+| DR‑4 | Adding to an existing request SHALL reset the cooldown for the **entire** position; the contract keeps no tranches. | Documented behaviour |
+| DR‑5 | A claim SHALL be rejected unless its amount equals the recorded request exactly; partial claims are not supported. | Documented behaviour |
+| DR‑6 | Claimability SHALL be evaluated against the current `unlockingDelay`, so raising it applies to requests already pending. Governed by role 24, a 3‑day scheduled operation. | Documented behaviour |
+| DR‑7 | A request SHALL NOT escrow the shares; they remain on the owner's balance until the claim. (An explicit ERC‑7540 deviation, noted in the contract.) | Documented behaviour |
+
+DR‑4 to DR‑7 are recorded as behaviour rather than as guarantees: they are consequences of the
+book‑keeping, not promises the contract makes, and each is a theorem in `CommitToken.lean` rather
+than a defect.
+
+### 10a.2 Redemption‑price pipeline (`RedemptionOracle.lean`)
+
+| # | Requirement | Level |
+|---|---|---|
+| DR‑8 | The published redemption ratio SHALL be `min(collateral ratio, cap)` and SHALL NOT exceed `cap` on any trace. | MUST |
+| DR‑9 | No operation of the pipeline SHALL modify `cap`; moving it requires replacing the implementation (role 24, 3‑day scheduled). | MUST |
+| DR‑10 | A push above the cap SHALL be clamped rather than rejected. | MUST |
+| DR‑11 | Below the cap the published ratio SHALL equal the pushed value; **no lower bound is enforced**, and a push of `0` publishes `0`. | Documented gap |
+
+DR‑8 supersedes, for the deployment, the §8 assumption that the redemption value is merely
+"tracked": it is bounded above at par. DR‑11 is the surviving half of §9.1's parameter‑bound
+finding — `redemption_has_no_floor` still holds on‑chain.
+
+### 10a.3 Mint rate limit (`MinterRateLimit.lean`)
+
+| # | Requirement | Level |
+|---|---|---|
+| DR‑12 | A mint request SHALL be rejected when it exceeds `rateLimitAmount` minus the volume already recorded inside `rateLimitPeriod`. | MUST |
+| DR‑13 | A successful mint SHALL record its amount at the current timestamp. | MUST |
+| DR‑14 | Reducing `rateLimitAmount` SHALL NOT unwind volume already inside the window; available capacity pins at zero until the window rolls. | Documented behaviour |
+| DR‑15 | A record SHALL leave the window the moment `rateLimitPeriod` has elapsed since it was made; capacity is restored in one step, not smoothly. | Documented behaviour |
+
+### 10a.4 Liquidation batcher (`LiquidationBatcher.lean`)
+
+| # | Requirement | Level |
+|---|---|---|
+| DR‑16 | The market allowlist SHALL be fixed at construction; no operation may widen it. | MUST |
+| DR‑17 | Withdrawals SHALL transfer only to the immutable construction‑time destination; the caller SHALL NOT choose a recipient. | MUST |
+| DR‑18 | A batch naming any market outside the allowlist SHALL revert in full. | MUST |
+
+DR‑16 to DR‑18 are what make role 41 — which carries no execution delay — bounded rather than
+open: it can choose neither which markets it touches nor where proceeds go.
+
+---
+
 ## 11. References  
 
 | # | URL |

@@ -8,6 +8,13 @@ Part B) — for *any* protocol modeled in this tool's style: a `State` record, a
 This directory holds the **generic template** only. Instantiated, app-specific proofs live in that app's
 output directory (e.g. `outputs/apyx/Safety.lean`), never in `lean/`.
 
+[`examples/`](examples/) holds the files here that compile — *fictional* protocols, not analyzed
+apps, because a reference nobody can check is worth little. They live in their **own lake library**,
+`TemplateExamples`, symlinked from `lean/TemplateExamples/`, deliberately *not* inside `D2fsSpecs`:
+
+- `lake build D2fsSpecs` → exactly the analyzed systems (what an audit report tells its reader to run)
+- `lake build` → those plus this example, so the template keeps a regression test
+
 ## Why these invariants, and why this shape
 
 Part A of `docs/08` ranks the loss patterns; four invariants, proved over the **closed `Op` type by
@@ -21,6 +28,40 @@ exhaustive case analysis**, cover the bulk of them across Lending / Vault / AMM 
 | **I4 Rounding favors the protocol** | **C** (rounding leak) | `rounding_favors_protocol`, `withdrawShares_rounds_up` |
 | **I5 Donation-immunity** | **B** (the root of inflation attacks) | `donation_free`, `no_inflation_attack` |
 | **G Parameter-bound gap-witness** | **G** (unbounded params) | `redeem_payout_has_no_cap`, `admin_rfq_coalition_drains` |
+| **I21 Immutable-parameter proof** | **the dual of G** — a parameter *claimed* fixed | see Step 2m; `cases op`, one tactic block |
+
+Those five assume an **atomic, single-venue, non-negative-valued** transition system. When the app
+breaks that assumption — two-phase (request/settle) operations, a shared bounded queue, value
+spread across venues with transfer latency, or a net position that can go negative — a second
+family applies (`docs/06` §7, `docs/08` §A.6/§B.2 Tier 1.5). Step 0 below decides which of these
+are even stateable for your app:
+
+| Invariant | Catches (docs/08 pattern) | Worked reference |
+|---|---|---|
+| **I10 Payout not raisable by timing** | **J** (timing option for the settler) | [`examples/AsyncQueueVault.lean`](examples/AsyncQueueVault.lean) |
+| **I11 Queue liveness / capacity griefing** | **K** (starvation, occupancy DoS) | same (gap-witness form) |
+| **I12 In-flight conservation** | D, async accounting | same |
+| **I13 Cross-venue conservation** | D across venues | *schema only — no worked reference yet* |
+| **I14 Intent-vs-realized drift bound** | **L** | *schema only — no worked reference yet* |
+| **I15 Signed net value** | E with liabilities; the `Nat` vacuity trap | [`examples/AsyncQueueVault.lean`](examples/AsyncQueueVault.lean) |
+
+And a third family when solvency is **per account** rather than pooled — collateralized debt
+positions, borrow/lend markets (`docs/06` §8, `docs/08` §A.7 / §B.2 Tier 1-C):
+
+| Invariant | Catches (docs/08 pattern) | Worked reference |
+|---|---|---|
+| **I16 Health on every path** | **E**, per account | [`examples/CollateralizedDebt.lean`](examples/CollateralizedDebt.lean) |
+| **I17 Liquidation reduces risk** | **F** | same |
+| **I18 Priority-order integrity** | **M** (advertised order is skippable) | same |
+| **I19 Accrual monotone** | **I**, per account | same |
+| **I20 Socialized-loss pool conserves** | D, per account | *schema only — no worked reference yet* |
+| **I21 Immutable-parameter proof** | **the dual of G** | [`examples/CollateralizedDebt.lean`](examples/CollateralizedDebt.lean) |
+
+> **I21 is listed here for completeness but belongs to the core set above.** Pattern G says: no
+> enforced bound, so witness the bad state. Its dual applies to every parameter a deployment calls
+> immutable, in any protocol, whether or not solvency is per account — so it is not gated on Step 0c.
+> Prove no mutation path exists, `cases op`, one tactic block. A deployment comment becomes a
+> theorem, and a setter added later breaks the build.
 
 **The structural advantage.** Because `step` is total over a *closed* `Op`, proving `Inv s → Inv s'` for
 every op is a `cases op` whose branches must *all* discharge before the file compiles. So "no operation
@@ -47,6 +88,66 @@ README is the fill-in guide; `outputs/apyx/Safety.lean` is the worked reference 
 
 The last two rows decide which invariants are *provably true* (accounted-mint-only ⇒ I5 holds) and which
 become **gap-witnesses** (an unbounded param ⇒ prove a bad state is reachable, §Step 2f).
+
+### Step 0b — does redemption settle in one transaction? (five questions that gate I10–I15)
+
+**Answer the five questions from `Op` and `State`** — not from what the protocol calls itself. A
+single **yes** means the Tier-1 invariants alone will pass while leaving most of the attack surface
+unexamined. The gate is deliberately keyed to model features rather than to product categories: a
+category list needs updating every time a new one appears, and it answers "no" to a protocol that
+has the same shape under a different name.
+
+The archetypes are the *illustration*, not the test. If you want to know which of them tend to trip
+which question — async / RWA vaults (ERC-7540), LST and LRT unstaking queues, queued-withdrawal
+vaults, delayed-redemption stablecoins, multi-venue (delta-neutral) books, anything whose net
+position can go negative — `docs/08` §A.6 has the map. Skip the whole section only when all five
+answers are no, which is the case for a protocol where deposit and redemption both complete
+atomically.
+
+| Question | If yes | Model extension needed |
+|---|---|---|
+| **Clock** — does any op advance a block / settlement-round counter? | I10–I12 become stateable at all. If **no**, every trace is same-instant and async properties cannot even be *written* | **E1**: add `Op.tick` |
+| **Two-phase ops** — is any user operation split into `request` then `settle`, executed by a different caller? | The settler holds a free timing option ⇒ **I10** | **E2**: `Request` with a price snapshot |
+| **In-flight state** — is there state meaning "sent but not yet acknowledged"? | Conservation must count it ⇒ **I12**. Make delivery an *argument*, never hard-wire full delivery | **E1** + explicit `delivered` |
+| **Signed value** — can any tracked net position go negative? | A `Nat` ledger makes the solvency claim **vacuously true** ⇒ **I15** | **E3**: `Int` ledger |
+| **Shared bounded queue** — do ops compete for a capacity-limited resource? | Starvation / occupancy ⇒ **I11**, gap-witness by default | **E4**: `pending : List Request` + capacity |
+
+> **The `Nat` trap belongs in Step 0, not here — it is not part of this family.** If net value can
+> go negative and the ledger is `Nat`, then `0 ≤ netValue` is true *by typing* and proves nothing
+> about the protocol. That is a question about the **model's ability to represent the bad state**,
+> and it applies to a synchronous single-venue protocol exactly as much as to an async one, so the
+> Step-0 profile above should carry the row "can any tracked net position go negative?" whether or
+> not this family is taken. The worked reference makes it concrete: `nat_solvency_is_vacuous` (true
+> for free) alongside `insolvency_witness` (a reachable state the unsigned reading reports as
+> solvent).
+>
+> It generalizes past `Nat`. Before writing an invariant, ask what the state space *cannot* express
+> — no clock means no timing property is falsifiable, an aggregate ledger means per-account
+> insolvency is not falsifiable, a single price field means source-selection is not falsifiable.
+> A theorem is bounded above by whether the model can exhibit its failure, and that bound belongs
+> in the report next to the theorem list. `outputs/apyx/README.md` §6.0 is the worked example.
+
+### Step 0c — is solvency per account? (four questions that gate I16–I21)
+
+Independent of Step 0b: a synchronous CDP needs this and not that; an async pooled vault the
+reverse; a design with both needs both.
+
+Keyed to features, not to "is this a CDP". What actually changes between pooled and per-account
+solvency is the **quantifier structure** of the invariant — `Σ claims ≤ Σ backing` is one
+inequality, `∀ p ∈ book, Healthy p` is a universal over a collection the operations mutate — and
+that is what makes the proof burden different (the membership and monotonicity lemmas in Step 2l
+are the price). Anything holding per-user records inherits it: staking positions, vesting
+schedules, NFT-collateralized loans, not only borrow/lend markets. It is also the shape that
+produces the characteristic bug — proving a lemma about the list helper and never carrying it
+across `step` (see `sorted_preserved` and `accrual_never_lowers_debt` in the worked reference,
+where it happened twice).
+
+| Question | If yes |
+|---|---|
+| **Per-account positions** — do users hold individual collateral/debt positions with a liquidation threshold? | **I16** — and it is the highest-value theorem in this document, because it is the Euler shape |
+| **Advertised ordering** — does the protocol promise an order for liquidation, redemption or queue service? | **I18**. An order nobody proved is an order nobody enforces |
+| **Accrual** — does a time-based index change position health without anyone transacting? | **I19**, and it becomes the *named exclusion* in I16 |
+| **"Immutable" parameters** — does any doc or comment claim a parameter cannot change? | **I21**, near-free — but take it whatever this gate says; it is in the core set above |
 
 ## Step 1 — infrastructure (copy near-verbatim)
 
@@ -94,6 +195,62 @@ ops that re-mint against an untracked obligation) — and document why, as `solv
 - This turns "we couldn't prove safety" into a **machine-checked vulnerability**, the asymmetric strength of
   this method. Report it with the recommended fix (a floor/cap/rate-limit).
 
+**g. I10 Payout not raisable by timing.** *(only if Step 0b says two-phase)* The payout of a request
+settled at round `n` must not exceed the entitlement at the filing quote **nor** the entitlement at
+the settlement-time price — i.e. the rule takes the protocol-favourable side of the two.
+- Prove the step-level credit equals `min` of the two readings, then the two `≤` corollaries fall out.
+- Also witness the **contrast**: honouring the filing quote alone overpays whenever the price fell.
+  That single witness is what makes the `min` a requirement rather than a preference.
+- **Do not call this neutrality, and pair it with the two witnesses that fix its scope.** The `min`
+  rule removes the settler's *upside*; it does not remove the option, it moves the cost. Because the
+  payout is the lower of the two readings, delay is paid for by the filer (I10c), and because
+  cancellation is equally untimed the filer holds the mirror-image option (I10d). Whether the
+  settler *profits* is a claim about a P&L this schema does not model — the vault ledger has no
+  settler-side entry — so a bare "no timing gain" reading is not falsifiable here. State the ledger
+  fact, then state both witnesses.
+
+**h. I11 Queue liveness / capacity griefing.** *(only if Step 0b says bounded queue)* Default to the
+**gap-witness** form; the positive form is rarely true of a real queue. Two distinct mechanisms —
+witness both, they need different fixes:
+- *Capacity occupancy*: a reachable state where **every** honest enqueue is rejected. Pair it with a
+  control clause showing the same enqueue succeeds against a free queue, or the witness does not
+  identify capacity as the cause. Then show zero cost: the attacker's cancel-then-refile cycle
+  returns him to his starting holdings with the queue just as full — cost-free recyclability is what
+  turns a capacity bound into a DoS.
+- *Head-of-line starvation*: an unsettleable head freezes everything behind it. The witness is
+  strongest when it shows a queued request that the reserve **could** cover and still cannot settle,
+  plus a monotonicity lemma (the reserve never grows) proving the block cannot resolve itself.
+- If the design *does* guarantee progress, prove `∀ pending r, ∃ τ, Claimed (execTrace s τ) r`.
+
+**i. I12 In-flight conservation.** *(only if Step 0b says in-flight state)*
+- `settled + inflight` is preserved by every non-accounted op — `cases op`, exhaustive.
+- **Model the delivered amount as an argument to the clock op.** Then conservation holds
+  unconditionally and only "in-flight drops to zero" needs the honesty hypothesis. Prove both halves
+  and a residue lemma showing the hypothesis is load-bearing. Hard-wiring full delivery into `step`
+  assumes the settlement layer's correctness instead of recording it — the single most common way
+  an async model quietly lies.
+
+**j. I15 Signed net value.** *(only if Step 0b says signed)* Move the ledger to `Int` **first**, then
+either prove `0 ≤ netValue` over traces or witness a reachable negative. Keep the vacuity pair in the
+output so a reviewer can see why the unsigned reading was rejected.
+
+**l. I16 Health on every path.** *(only if Step 0c says per-account)* State it **book-wide**, not
+just for the touched position: `AllHealthy s → AllHealthy s'`, `cases op`, every branch discharged.
+The per-op guard lemmas are a stepping stone, not the deliverable — a guard proof says the op you
+looked at is safe, and the Euler defect is always in the op you did not look at.
+- Name the excluded ops (price updates, accrual) and prove which direction they move health in.
+- You will need three small list lemmas (membership through update / drop / insert) and two
+  monotonicity lemmas (more collateral and less debt never hurt). Budget for them.
+
+**m. I21 Immutable-parameter proof.** *(whenever any parameter is called immutable)* `∀ op c s',
+step s op c = some s' → s'.param = s.param`, exhaustive. Cheapest theorem in this document and it
+keeps working: a setter added in a later version breaks the build rather than the invariant.
+
+**k. I13 / I14** — cross-venue conservation and intent-vs-realized drift are **schema only**: no
+worked reference exists yet. I13 needs an explicit in-transit bucket so `Σ(venues) + in-transit` is
+preserved by internal moves; I14 follows the pattern-G recipe exactly (bound it, or witness that no
+bound exists). Do not report either as covered until instantiated.
+
 ## Step 3 — reporting
 
 Tag each theorem by provenance in `review.json` so the audit is traceable:
@@ -106,3 +263,10 @@ reported as a protocol design flaw.
 
 This template + the blast-radius template + the `docs/07` spec-consistency layer together address the six
 highest-value invariants of `docs/08` §A.5. See the pattern→guarantee matrix in `docs/08` §B.4.
+
+**Honest status of the second family.** I10/I11/I12/I15 are proved in
+[`examples/AsyncQueueVault.lean`](examples/AsyncQueueVault.lean) — a *fictional* minimal protocol,
+not a real one. That file compiles as part of `lake build` (`sorry`-free, axioms `propext`/`Quot.sound`
+only) and doubles as the template's regression test, but it is **not** the same class of evidence as
+`outputs/apyx/Safety.lean`: no real protocol has been instantiated against I10–I15 yet, and I13/I14
+have no reference at all. Say so in any audit that cites them.
