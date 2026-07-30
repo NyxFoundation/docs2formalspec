@@ -321,6 +321,29 @@ the reason it is worth having as proofs rather than prose:
   exactly what was pushed (`published_tracks_the_push_below_cap`). So `redemption_has_no_floor`
   survives contact with the deployment while `redeem_payout_has_no_cap` does not.
 
+### 4.6 The two operational contracts (9 theorems)
+
+**[`MinterRateLimit.lean`](MinterRateLimit.lean).** `Apyx.lean` mints at $1 with role and list
+checks and no volume bound; on-chain, minting goes through `MinterV0` and carries a sliding-window
+rate limit — live values **50,000,000 apxUSD per day**, with a 50× tightening to 1,000,000 sitting
+in the manager's queue. The guard is modelled and two consequences are stated:
+`tightening_does_not_unwind_the_window` (reducing the ceiling does not claw back what the window
+already holds, so `available` simply pins at 0 until the window rolls — the mirror image of
+`CommitToken.raising_the_delay_unclaims_pending_requests`), and `window_frees_in_one_step` (a
+record leaves the window the instant `now` passes it; there is no smoothing, so a full window
+restores its entire allowance in one block). The trace-level "damage is linear in time" statement
+is not re-proved here — `BlastRadius.rate_limit_linear_bound` already has that shape generically,
+and what was missing was the tie to a real contract's guard.
+
+**[`LiquidationBatcher.lean`](LiquidationBatcher.lean).** Role 41 carries no execution delay and is
+held by a single EOA, which is what makes it worth modelling; reading the contract is what makes
+the answer reassuring. It liquidates on Morpho Blue, not on Apyx state, and two construction-time
+pins bound it: `allowlist_immutable` and `destination_immutable` (neither has a setter),
+`withdraw_credits_only_the_pinned_destination` (`withdrawTokens` takes no destination argument),
+and `unlisted_market_reverts_the_batch` (fail-closed, so an unlisted ticket cannot ride along
+inside a large batch). `role41_trace_blast_radius` lifts the two pins to whole traces:
+**undelayed, but not unbounded.**
+
 ---
 
 ## 5. Design recommendations for Apyx
@@ -517,6 +540,8 @@ axioms of Lean's logic; none is an unproved assumption. Compile status is record
 | [`SpecDefects.lean`](SpecDefects.lean) | The spec-consistency and parameter-bound gap-witness proofs (§9) |
 | [`CommitToken.lean`](CommitToken.lean) | The deployed `CommitToken` async-redemption vaults, all four instances — 9 proofs (§4.4) |
 | [`RedemptionOracle.lean`](RedemptionOracle.lean) | The deployed two-stage redemption-price pipeline — 8 proofs (§4.5) |
+| [`MinterRateLimit.lean`](MinterRateLimit.lean) | `MinterV0`'s sliding-window mint rate limit — 4 proofs (§4.6) |
+| [`LiquidationBatcher.lean`](LiquidationBatcher.lean) | The construction-time bounds on the one undelayed keyed role — 5 proofs (§4.6) |
 | [`leancheck.json`](leancheck.json) | Build status: requirement theorems, `sorry` count, vacuous count |
 | [`corpus.md`](corpus.md) | The raw ingested source documentation |
 

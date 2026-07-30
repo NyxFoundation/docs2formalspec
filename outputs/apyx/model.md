@@ -313,7 +313,21 @@ resolves §6's three corrections into proofs rather than prose: the cap holds al
 no operation moves it, so `h_rv` is enforced; and the floor genuinely does not exist, so
 `redemption_has_no_floor` stands.
 
-Neither module changes anything in `Apyx.lean`, `Safety.lean` or `BlastRadius.lean`. The 82
-requirement theorems and the blast-radius analysis are about the contracts they were always about.
+**[`MinterRateLimit.lean`](MinterRateLimit.lean)** — `MinterV0`'s sliding-window mint limit
+(live: 50,000,000 apxUSD/day; a 50× tightening to 1,000,000 is queued). Models the guard and the
+two ways it is weaker than it reads: a reduction does not unwind the window, and the window frees
+its whole allowance in one step rather than smoothly.
+
+**[`LiquidationBatcher.lean`](LiquidationBatcher.lean)** — the construction-time bounds on role 41,
+the one undelayed keyed role. Immutable market allowlist, immutable withdrawal destination,
+fail-closed batching. Undelayed, but not unbounded.
+
+**Still not modelled, deliberately.** `OrderDelegate` (`0xcCa1AF4d…f7b8`) and `0xdbEF8322…20ef`:
+the first is a delegated-signing helper holding no tokens, the second is **unverified**, so there
+is no source to be faithful to. Both carry role-31 transfer powers, recorded in §6.
+
+None of these four modules changes anything in `Apyx.lean`, `Safety.lean` or `BlastRadius.lean`.
+The 82 requirement theorems and the blast-radius analysis are about the contracts they were always
+about.
 
 *All state transitions are atomic and protected by the Checks‑Effects‑Interactions pattern; re‑entrancy guards are applied to every external call.*

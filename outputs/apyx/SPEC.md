@@ -377,6 +377,26 @@ DR‑8 supersedes, for the deployment, the §8 assumption that the redemption va
 "tracked": it is bounded above at par. DR‑11 is the surviving half of §9.1's parameter‑bound
 finding — `redemption_has_no_floor` still holds on‑chain.
 
+### 10a.3 Mint rate limit (`MinterRateLimit.lean`)
+
+| # | Requirement | Level |
+|---|---|---|
+| DR‑12 | A mint request SHALL be rejected when it exceeds `rateLimitAmount` minus the volume already recorded inside `rateLimitPeriod`. | MUST |
+| DR‑13 | A successful mint SHALL record its amount at the current timestamp. | MUST |
+| DR‑14 | Reducing `rateLimitAmount` SHALL NOT unwind volume already inside the window; available capacity pins at zero until the window rolls. | Documented behaviour |
+| DR‑15 | A record SHALL leave the window the moment `rateLimitPeriod` has elapsed since it was made; capacity is restored in one step, not smoothly. | Documented behaviour |
+
+### 10a.4 Liquidation batcher (`LiquidationBatcher.lean`)
+
+| # | Requirement | Level |
+|---|---|---|
+| DR‑16 | The market allowlist SHALL be fixed at construction; no operation may widen it. | MUST |
+| DR‑17 | Withdrawals SHALL transfer only to the immutable construction‑time destination; the caller SHALL NOT choose a recipient. | MUST |
+| DR‑18 | A batch naming any market outside the allowlist SHALL revert in full. | MUST |
+
+DR‑16 to DR‑18 are what make role 41 — which carries no execution delay — bounded rather than
+open: it can choose neither which markets it touches nor where proceeds go.
+
 ---
 
 ## 11. References  

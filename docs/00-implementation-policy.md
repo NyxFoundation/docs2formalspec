@@ -153,7 +153,11 @@ A–D は Apyx の保証レベルを上げる作業、E は外部提案の取り
 - [x] **償還価格パイプラインをモデル化** — `outputs/apyx/RedemptionOracle.lean`(8定理)。`ApyxCollateralRatioOracle.pushRound`(role 22・4時間予約)→ `ApyxRedemptionOracle` の `min(担保比率, cap)`。§6 で散文として書いた訂正が定理になった。
   - `published_never_exceeds_par` / `cap_immutable(_trace)` — 全トレースで cap 以下、かつパイプラインのどの操作も cap を動かさない(I21 を実デプロイに適用した形)。**`Safety.lean` の `h_rv : redemptionValue ≤ ray` はこれで仮定ではなく強制になる。**
   - `published_has_no_floor` — 0 を push すれば 0 が publish される。**§9.1 の2つの finding のうち、cap 側はデプロイが答え、floor 側は生き残る**、が証明で分かれた。
-- [x] **3ドキュメントを同期**。`README.md`(§4.4 を4インスタンスに、§4.5 を新設、§9.1 と artifact map を追随)、`model.md`(§7 新設 — 2モジュールとインスタンス表)、`SPEC.md`(§10a 新設。**由来がドキュメントではなくチェーン**であることを明示し、DR-1〜DR-11 として分離)。
+- [x] **`MinterV0` のレート制限と `LiquidationBatcher` もモデル化** — `MinterRateLimit.lean`(4定理)/ `LiquidationBatcher.lean`(5定理)。
+  - Minter: live は 50,000,000 apxUSD/日、キューに 1,000,000 への **50倍の引き締め**が入っている。`tightening_does_not_unwind_the_window`(上限を下げても窓の中身は巻き戻らず `available` が0で張り付く。`CommitToken` の遅延延長の鏡像)/ `window_frees_in_one_step`(平滑化が無く、窓は1ステップで全枠を回復)。トレース級の線形上界は `BlastRadius.rate_limit_linear_bound` が汎用に持っているので再証明せず、実契約のガードとの接続だけを足した。
+  - Batcher: 無遅延の role 41 を**構成で縛れていること**を定理化。allowlist と withdraw 先がどちらも不変、`withdrawTokens` に宛先引数が無い、allowlist 外を含むバッチは全体 revert(fail-closed)、そしてこれらをトレースに持ち上げた `role41_trace_blast_radius`。**無遅延だが無制限ではない。**
+  - `OrderDelegate` と `0xdbEF8322…20ef` は**意図的に未モデル化**。前者はトークンを保持しない委任署名ヘルパ、後者は**未検証**でソースが無い。`model.md` §7 に理由付きで記載。
+- [x] **3ドキュメントを同期**。`README.md`(§4.4 を4インスタンスに、§4.5 を新設、§9.1 と artifact map を追随)、`model.md`(§7 新設 — 2モジュールとインスタンス表)、`SPEC.md`(§10a 新設。**由来がドキュメントではなくチェーン**であることを明示し、DR-1〜DR-18 として分離)。
 - [x] **非同期償還族を CT-apxUSD に対してインスタンス化した** — `outputs/apyx/CommitToken.lean`(8定理・`lake build` 緑・`sorry` 0・公理は `propext`/`Quot.sound`)。`docs/06` §7 が「実プロトコルの worked reference は一つも無い」としていた状態を解消。
   - 成立するもの: `cycle_closes_after_the_live_delay`(実デプロイの14日を待って claim が同一トレースで成立)/ `claim_conserves`(焼いた分ちょうどを払う)/ `commitment_is_bounded_by_balance`(保有以上にコミットできない)。
   - 保有者が知っておくべき挙動3件(いずれもコードの約束には違反しない): **`topup_restarts_the_whole_cooldown`**(トランシェが無く `requestedAt` を丸ごと上書きするので、14日経過済みの請求に1単位足すと全額がもう14日ロックされる)/ **`no_partial_claim`**(`redeem` は完全一致のみ。上と合成すると、積み増した保有者は満期済み部分だけ引き出すことができない)/ **`raising_the_delay_unclaims_pending_requests`**(`_cooldownRemaining` が storage の現在値を読むため、遅延の延長が**未決済の請求すべてに遡及**する。`setUnlockingDelay` は role 24 = 3日の予約実行なので、契約ではなくガバナンスで縛られている)。
