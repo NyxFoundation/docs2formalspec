@@ -340,4 +340,56 @@ example : b0.usdcReserve
           / rl0.window + 1) :=
   rate_limit_linear_bound rl0 _ (by decide)
 
+/-! ## R9 — the timelock window is real elapsed time, and the escape is usable
+
+`code_review_lean.md` §1.2 recorded two defects in this wrapper. It carried its own clock
+field advanced by a free `TLOp.tick`, unrelated to `base.now`, so the guarantee counted
+wrapper tokens rather than time. And `queue` accepted *any* operation while `execute` was the
+only route to the base state, so a user wanting to exit had to queue their own redemption and
+wait the same `delay` — the window its name promised did not exist.
+
+Now the clock **is** `base.now`, moved only through the base `step`, and `direct` runs
+non-privileged operations immediately while refusing every `AdminOp`.
+-/
+
+def tb : State :=
+  { (default : State) with
+      globalPause := false, emergencyFlag := true, admin := 7,
+      totalSupply_apxUSD := ray, totalCollateralValue := 1, redemptionValue := 0,
+      whitelist := fun _ => true, apxUSDBal := fun a => if a = 1 then 100 else 0,
+      now := 1000 }
+
+/-- Timelock of 500 clock units, empty queue. -/
+def tl0 : TLState := ⟨tb, [], 500⟩
+
+/-- **Privileged operations cannot bypass the queue.** -/
+example : step2tl tl0 (TLOp.direct Op.catastrophicBackstop 7) = none := by decide
+
+/-- Queueing announces without applying: the base state is bitwise untouched. -/
+def q : TLState := execTraceTL tl0 [TLOp.queue Op.catastrophicBackstop 7]
+
+example : q.base.redemptionValue = 0 ∧ q.base.now = 1000 ∧ q.pending.length = 1 := by decide
+
+/-- **The window is measured on the base clock.** One unit short and the change does not land. -/
+example : (execTraceTL q [TLOp.direct (Op.tick 499) 0, TLOp.execute 0]).base.redemptionValue = 0
+        ∧ (execTraceTL q [TLOp.direct (Op.tick 499) 0, TLOp.execute 0]).pending.length = 1 := by
+  decide
+
+/-- At the full delay it lands — so the guarantee is not achieved by making `execute`
+    unsatisfiable. -/
+example : (execTraceTL q [TLOp.direct (Op.tick 500) 0, TLOp.execute 0]).base.redemptionValue = 1
+        ∧ (execTraceTL q [TLOp.direct (Op.tick 500) 0, TLOp.execute 0]).pending.length = 0 := by
+  decide
+
+/-- **And the escape actually works.** Mid-window a holder exits through `direct` — no queueing,
+    no waiting — while the queued change is still pending and the old parameters are still in
+    force. This is what the wrapper previously could not do. -/
+example :
+    (execTraceTL q [TLOp.direct (Op.tick 100) 0, TLOp.direct (Op.requestUnlock 100) 1]).base.apxUSDBal 1
+        = 0
+      ∧ (execTraceTL q [TLOp.direct (Op.tick 100) 0,
+          TLOp.direct (Op.requestUnlock 100) 1]).base.redemptionValue = 0
+      ∧ (execTraceTL q [TLOp.direct (Op.tick 100) 0,
+          TLOp.direct (Op.requestUnlock 100) 1]).pending.length = 1 := by decide
+
 end Apyx

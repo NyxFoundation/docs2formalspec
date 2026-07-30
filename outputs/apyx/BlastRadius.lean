@@ -84,6 +84,31 @@ def AdminOp (op : Op) : Prop :=
   op = Op.catastrophicBackstop ∨ (∃ p, op = Op.setVestPeriod p) ∨
   (∃ v, op = Op.updateRedemptionValue v) ∨ (∃ amt r, op = Op.withdrawReserve amt r)
 
+/-- Decidable mirror of `AdminOp`, for use in the `step2tl` guard. `AdminOp` is a disjunction of
+existentials, so it carries no `Decidable` instance; this matches on the constructor instead. -/
+def isAdminOp : Op → Bool
+  | Op.addToWhitelist _ => true
+  | Op.removeFromWhitelist _ => true
+  | Op.addToDenylist _ => true
+  | Op.removeFromDenylist _ => true
+  | Op.setYieldRate _ => true
+  | Op.handleStressEvent _ => true
+  | Op.catastrophicBackstop => true
+  | Op.setVestPeriod _ => true
+  | Op.updateRedemptionValue _ => true
+  | Op.withdrawReserve _ _ => true
+  | _ => false
+
+/-- The mirror agrees with the predicate, in both directions. -/
+theorem isAdminOp_iff (op : Op) : isAdminOp op = true ↔ AdminOp op := by
+  constructor
+  · intro h
+    cases op <;> simp only [isAdminOp] at h <;> unfold AdminOp <;> simp_all
+  · intro h
+    unfold AdminOp at h
+    rcases h with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | rfl
+      | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, rfl⟩ <;> rfl
+
 /-! ## Local frame lemmas for `pullVestedYield`
 
 (Re-derived: the equivalents in `Apyx.lean` are `private`.) -/
@@ -2413,52 +2438,74 @@ current protocol.
 The wrapper adds no field to `State` (mirroring T7's `RLState`): `TLState` layers a
 wrapper clock, a pending queue, and a fixed `delay` policy parameter over the
 untouched base state. Privileged operations enter through `queue`, which only
-*records* `(op, caller, tl.now)` — the base state is untouched, so users can still
-transact (in particular exit) against the old parameters. `tick` advances the
-wrapper clock by one. `execute i` runs the stored base operation via the unmodified
-base `step`, and **reverts unless the entry's queue timestamp is at least `delay`
-old** (`t₀ + delay ≤ now`).
+*records* `(op, caller, tl.base.now)` — the base state is untouched, so users can still
+transact (in particular exit) against the old parameters. `direct` runs a
+**non-privileged** operation immediately, bypassing the queue: that is what makes the
+escape window usable, and it is also the only way the clock moves, because `Op.tick`
+is not an `AdminOp`. `execute i` runs the stored base operation via the unmodified base
+`step`, and **reverts unless the entry's stamp is at least `delay` old on the base
+clock** (`t₀ + delay ≤ base.now`).
 
-Headline (`timelock_escape_guarantee`): if an operation queued at the current
-instant is later executed — after any further wrapper trace `τ` the attacker
-likes — then `τ` contains at least `delay` `tick` actions. Since the wrapper clock
-moves only via `tick` (`execTraceTL_now`), this is exactly "a guaranteed
-`delay`-tick-long window elapses between the announcement and the effect," the
-escape hatch of Eyal & Sirer / the memo's T8. -/
+Two defects of the earlier version are what this shape fixes
+(`code_review_lean.md` §1.2):
 
-/-- Timelocked wrapper state: the untouched base `State`, a wrapper clock, the
-queue of pending privileged operations — each entry `(op, caller, queuedAt)`
-records the wrapper time at which it was queued — and the fixed timelock length
-`delay` (a policy parameter; `step2tl` never changes it). -/
+* it carried its **own** clock field, advanced by a free `TLOp.tick` with no relation
+  to `base.now` or `Op.tick`, so the guarantee counted wrapper tokens rather than
+  elapsed time;
+* `queue` accepted **any** operation and `execute` was the only route to the base
+  state, so a user wanting to exit had to queue their own redemption and wait the same
+  `delay` — by which time the attacker's earlier-queued change had already matured.
+  The wrapper therefore did not provide the window its name claimed.
+
+Headline (`timelock_escape_guarantee`): if an operation queued at the current instant
+is later executed — after any further wrapper trace `τ` the attacker likes — then the
+**base clock has advanced by at least `delay`** since the stamp. Since only `direct`
+touches the base state before that point, and `direct` admits no privileged operation,
+the pre-change parameters really are the ones in force throughout the window. -/
+
+/-- Timelocked wrapper state: the untouched base `State` (whose `now` **is** the
+wrapper's clock — there is no second one), the queue of pending privileged operations
+— each entry `(op, caller, queuedAt)` stamped with the base clock reading at which it
+was queued — and the fixed timelock length `delay` (a policy parameter; `step2tl` never
+changes it). -/
 structure TLState where
   base : State
-  now : Nat
   pending : List (Op × Address × Nat)
   delay : Nat
 
-/-- Operations of the timelocked wrapper: `queue` announces a privileged base
-operation (recording it without running it), `tick` advances the wrapper clock by
-one, and `execute i` attempts to run the `i`-th pending entry. -/
+/-- Operations of the timelocked wrapper.
+
+`queue` announces a privileged base operation (recording it without running it).
+`direct op caller` runs a **non-privileged** operation at once — user traffic, and in
+particular `Op.tick`, so the clock advances through the base `step` like everywhere
+else. `execute i` attempts to run the `i`-th pending entry. -/
 inductive TLOp
   | queue (op : Op) (caller : Address)
-  | tick
+  | direct (op : Op) (caller : Address)
   | execute (i : Nat)
 
-/-- Timelocked step. `queue` appends `(op, caller, tl.now)` — stamped with the
-*current* wrapper time — and does **not** run the operation; `tick` advances the
-clock; `execute i` looks up the `i`-th pending entry and reverts (`none`) unless
-its timelock has fully elapsed (`queuedAt + delay ≤ now`), in which case it runs
-the unmodified base `step` and removes the entry. -/
+/-- Timelocked step.
+
+`queue` appends `(op, caller, tl.base.now)` and does **not** run the operation.
+`direct op caller` reverts if `op` is an `AdminOp` — privileged changes must go through
+the queue — and otherwise runs the unmodified base `step`. `execute i` looks up the
+`i`-th pending entry and reverts unless its stamp is at least `delay` old **on the base
+clock** (`queuedAt + delay ≤ base.now`), in which case it runs the base `step` and
+removes the entry. -/
 def step2tl (tl : TLState) : TLOp → Option TLState
   | TLOp.queue op caller =>
-    some { tl with pending := tl.pending ++ [(op, caller, tl.now)] }
-  | TLOp.tick =>
-    some { tl with now := tl.now + 1 }
+    some { tl with pending := tl.pending ++ [(op, caller, tl.base.now)] }
+  | TLOp.direct op caller =>
+    if isAdminOp op then none
+    else
+      match step tl.base op caller with
+      | none => none
+      | some b' => some { tl with base := b' }
   | TLOp.execute i =>
     match tl.pending[i]? with
     | none => none
     | some (op, caller, t₀) =>
-      if t₀ + tl.delay ≤ tl.now then
+      if t₀ + tl.delay ≤ tl.base.now then
         match step tl.base op caller with
         | none => none
         | some b' => some { tl with base := b', pending := tl.pending.eraseIdx i }
@@ -2473,34 +2520,33 @@ def execTraceTL (tl : TLState) : List TLOp → TLState
     | some tl' => execTraceTL tl' τ
     | none => execTraceTL tl τ
 
-/-- Number of `tick` clock actions in a wrapper trace — the wrapper time the trace
-makes elapse. -/
-def countTicks : List TLOp → Nat
-  | [] => 0
-  | TLOp.tick :: τ => countTicks τ + 1
-  | TLOp.queue _ _ :: τ => countTicks τ
-  | TLOp.execute _ :: τ => countTicks τ
-
 /-- Exact effect of `queue`: it always succeeds, appends the entry stamped with the
-current wrapper time, and touches nothing else — in particular the **base state is
-bitwise unchanged**: announcing a privileged change does not yet apply any of it. -/
+current **base** clock reading, and touches nothing else — in particular the base state
+is bitwise unchanged, so announcing a privileged change applies none of it. -/
 theorem step2tl_queue_exact (tl : TLState) (op : Op) (caller : Address) :
     step2tl tl (TLOp.queue op caller)
-      = some { tl with pending := tl.pending ++ [(op, caller, tl.now)] } := rfl
+      = some { tl with pending := tl.pending ++ [(op, caller, tl.base.now)] } := rfl
 
-/-- Exact effect of `tick`: the wrapper clock advances by one and nothing else
-changes — in particular the base state is bitwise unchanged. -/
-theorem step2tl_tick_exact (tl : TLState) :
-    step2tl tl TLOp.tick = some { tl with now := tl.now + 1 } := rfl
+/-- `direct` refuses privileged operations: the queue is the only route for those. -/
+theorem step2tl_direct_rejects_privileged (tl : TLState) (op : Op) (caller : Address)
+    (h : AdminOp op) : step2tl tl (TLOp.direct op caller) = none := by
+  simp only [step2tl, (isAdminOp_iff op).mpr h, if_true]
 
-/-- Inversion for a successful `execute`: the entry exists, its timelock has fully
-elapsed, the base `step` succeeded on the stored operation, and the successor is
-exactly the base successor with that entry removed. -/
+/-- The clock advances through the base `step`, exactly as in the unwrapped model:
+`Op.tick` is not privileged, so it is available via `direct`, and its effect is the
+base one. -/
+theorem step2tl_direct_tick (tl : TLState) (dt : Nat) (caller : Address) :
+    step2tl tl (TLOp.direct (Op.tick dt) caller)
+      = some { tl with base := { tl.base with now := tl.base.now + dt } } := by
+  have hna : isAdminOp (Op.tick dt) = false := rfl
+  simp only [step2tl, hna, if_false, step]
+  rfl
+
 private theorem inv_step2tl_execute (tl : TLState) (i : Nat) (tl' : TLState)
     (h : step2tl tl (TLOp.execute i) = some tl') :
     ∃ op caller t₀ b',
       tl.pending[i]? = some (op, caller, t₀) ∧
-      t₀ + tl.delay ≤ tl.now ∧
+      t₀ + tl.delay ≤ tl.base.now ∧
       step tl.base op caller = some b' ∧
       tl' = { tl with base := b', pending := tl.pending.eraseIdx i } := by
   simp only [step2tl] at h
@@ -2508,35 +2554,18 @@ private theorem inv_step2tl_execute (tl : TLState) (i : Nat) (tl' : TLState)
   · exact absurd h (by simp)
   · rename_i op caller t₀ heq
     split at h
-    · rename_i hdelay
+    · rename_i ht
       split at h
       · exact absurd h (by simp)
       · rename_i b' hb
-        exact ⟨op, caller, t₀, b', heq, hdelay, hb, (Option.some.inj h).symm⟩
+        exact ⟨op, caller, t₀, b', heq, ht, hb, (Option.some.inj h).symm⟩
     · exact absurd h (by simp)
 
-/-- In the timelocked wrapper, the base protocol state changes **only** through
-`execute` of a matured entry: any accepted wrapper step that changed `base` was an
-`execute i` whose entry's timelock had fully elapsed, and the base transition is
-exactly the stored operation run through the unmodified base `step`. (`queue` and
-`tick` leave `base` bitwise unchanged.) -/
-theorem tl_base_changes_only_via_execute (tl : TLState) (o : TLOp) (tl' : TLState)
-    (h : step2tl tl o = some tl') (h_changed : tl'.base ≠ tl.base) :
-    ∃ i op caller t₀,
-      o = TLOp.execute i ∧
-      tl.pending[i]? = some (op, caller, t₀) ∧
-      t₀ + tl.delay ≤ tl.now ∧
-      step tl.base op caller = some tl'.base := by
-  cases o with
-  | queue op caller =>
-    cases Option.some.inj h
-    exact absurd rfl h_changed
-  | tick =>
-    cases Option.some.inj h
-    exact absurd rfl h_changed
-  | execute i =>
-    obtain ⟨op, caller, t₀, b', heq, hdelay, hb, rfl⟩ := inv_step2tl_execute tl i tl' h
-    exact ⟨i, op, caller, t₀, rfl, heq, hdelay, hb⟩
+/-- The base state moves only via `execute` and `direct`; `queue` never touches it. -/
+theorem tl_base_untouched_by_queue (tl : TLState) (op : Op) (caller : Address)
+    (tl' : TLState) (h : step2tl tl (TLOp.queue op caller) = some tl') :
+    tl'.base = tl.base := by
+  cases Option.some.inj (h.symm.trans (step2tl_queue_exact tl op caller)); rfl
 
 private theorem execTraceTL_cons_some (tl tl' : TLState) (o : TLOp) (τ : List TLOp)
     (h : step2tl tl o = some tl') : execTraceTL tl (o :: τ) = execTraceTL tl' τ := by
@@ -2546,135 +2575,102 @@ private theorem execTraceTL_cons_none (tl : TLState) (o : TLOp) (τ : List TLOp)
     (h : step2tl tl o = none) : execTraceTL tl (o :: τ) = execTraceTL tl τ := by
   simp [execTraceTL, h]
 
-/-- The wrapper clock is exactly the tick count: across any wrapper trace (accepted
-and reverted steps alike), `now` grows by precisely the number of `tick` actions.
-So "`delay` wrapper-time units" and "`delay` `tick` actions" are interchangeable. -/
-theorem execTraceTL_now (tl : TLState) (τ : List TLOp) :
-    (execTraceTL tl τ).now = tl.now + countTicks τ := by
-  induction τ generalizing tl with
-  | nil => simp [execTraceTL, countTicks]
-  | cons o τ ih =>
-    cases o with
-    | queue op caller =>
-      rw [execTraceTL_cons_some tl { tl with pending := tl.pending ++ [(op, caller, tl.now)] }
-        _ τ rfl]
-      have h := ih { tl with pending := tl.pending ++ [(op, caller, tl.now)] }
-      dsimp only at h
-      rw [h]
-      rfl
-    | tick =>
-      rw [execTraceTL_cons_some tl { tl with now := tl.now + 1 } _ τ rfl]
-      have h := ih { tl with now := tl.now + 1 }
-      dsimp only at h
-      rw [h]
-      show tl.now + 1 + countTicks τ = tl.now + (countTicks τ + 1)
-      omega
-    | execute i =>
-      cases h : step2tl tl (TLOp.execute i) with
-      | none =>
-        rw [execTraceTL_cons_none tl _ τ h, ih tl]
-        rfl
-      | some tl' =>
-        obtain ⟨op, caller, t₀, b', -, -, -, rfl⟩ := inv_step2tl_execute tl i tl' h
-        rw [execTraceTL_cons_some tl _ _ τ h]
-        have h2 := ih { tl with base := b', pending := tl.pending.eraseIdx i }
-        dsimp only at h2
-        rw [h2]
-        rfl
-
-/-- The timelock length is a constant of the wrapper: no wrapper operation ever
-changes `delay`. -/
+/-- The timelock length is a constant of the wrapper: no wrapper operation changes
+`delay`. -/
 theorem execTraceTL_delay (tl : TLState) (τ : List TLOp) :
     (execTraceTL tl τ).delay = tl.delay := by
   induction τ generalizing tl with
   | nil => rfl
   | cons o τ ih =>
-    cases o with
-    | queue op caller =>
-      rw [execTraceTL_cons_some tl { tl with pending := tl.pending ++ [(op, caller, tl.now)] }
-        _ τ rfl]
-      exact ih { tl with pending := tl.pending ++ [(op, caller, tl.now)] }
-    | tick =>
-      rw [execTraceTL_cons_some tl { tl with now := tl.now + 1 } _ τ rfl]
-      exact ih { tl with now := tl.now + 1 }
-    | execute i =>
-      cases h : step2tl tl (TLOp.execute i) with
-      | none =>
-        rw [execTraceTL_cons_none tl _ τ h]
-        exact ih tl
-      | some tl' =>
-        obtain ⟨op, caller, t₀, b', -, -, -, rfl⟩ := inv_step2tl_execute tl i tl' h
-        rw [execTraceTL_cons_some tl _ _ τ h]
-        exact ih { tl with base := b', pending := tl.pending.eraseIdx i }
+    cases h : step2tl tl o with
+    | none => rw [execTraceTL_cons_none tl o τ h]; exact ih tl
+    | some tl1 =>
+      rw [execTraceTL_cons_some tl tl1 o τ h]
+      have hd : tl1.delay = tl.delay := by
+        cases o with
+        | queue op caller =>
+          cases Option.some.inj (h.symm.trans (step2tl_queue_exact tl op caller)); rfl
+        | direct op caller =>
+          simp only [step2tl] at h
+          split at h
+          · exact absurd h (by simp)
+          · split at h
+            · exact absurd h (by simp)
+            · cases Option.some.inj h; rfl
+        | execute i =>
+          obtain ⟨-, -, -, -, -, -, -, rfl⟩ := inv_step2tl_execute tl i tl1 h
+          rfl
+      exact (ih tl1).trans hd
 
-/-- T8 Half 2, single-step form: **`execute` cannot land early.** If the `i`-th
-pending entry carries queue timestamp `t₀` and `execute i` succeeds, the wrapper
-clock has already reached `t₀ + delay`. (The contrapositive is the operational
-reading: at any instant `now < t₀ + delay` the execution reverts, so the queued
-change is provably not yet in force.) -/
+/-- **`execute` cannot land early**, measured on the base clock. If the `i`-th pending
+entry carries stamp `t₀` and its `execute` succeeds, then `t₀ + delay ≤ base.now`. -/
 theorem tl_execute_requires_delay (tl : TLState) (i : Nat) (tl' : TLState)
-    (op : Op) (caller : Address) (t₀ : Nat)
-    (h_entry : tl.pending[i]? = some (op, caller, t₀))
-    (h : step2tl tl (TLOp.execute i) = some tl') :
-    t₀ + tl.delay ≤ tl.now := by
-  obtain ⟨op', caller', t₀', b', heq, hdelay, -, -⟩ := inv_step2tl_execute tl i tl' h
+    (op : Op) (c : Address) (t₀ : Nat)
+    (h_entry : tl.pending[i]? = some (op, c, t₀))
+    (h_exec : step2tl tl (TLOp.execute i) = some tl') :
+    t₀ + tl.delay ≤ tl.base.now := by
+  obtain ⟨op', c', t₀', -, heq, ht, -, -⟩ := inv_step2tl_execute tl i tl' h_exec
   rw [h_entry] at heq
-  have h3 : op = op' ∧ caller = caller' ∧ t₀ = t₀' := by simpa using heq
+  have h3 : op = op' ∧ c = c' ∧ t₀ = t₀' := by simpa using heq
   obtain ⟨-, -, h4⟩ := h3
   omega
 
-/-- T8 `timelock_escape_guarantee` (docs/05-blast-radius.md, Tier 3) — **the
-timelock wrapper provably guarantees a `delay`-long exit window.**
+/-- T8 `timelock_escape_guarantee` (docs/05-blast-radius.md, Tier 3) — **the timelock
+wrapper provably gives a `delay`-long window of real elapsed time.**
 
-DESIGN theorem: the base Apyx model has no timelock (`base_model_has_no_timelock`
-— privileged repricing is instantaneous); this theorem proves what adding the
-queue mechanism would buy.
+DESIGN theorem: the base Apyx model has no timelock (`base_model_has_no_timelock` —
+privileged repricing is instantaneous); this proves what adding the queue would buy.
 
-Threat model: the attacker holds every key. At some reachable wrapper state `tl`
-they `queue` a privileged base operation `op` (e.g. `catastrophicBackstop`,
-stamped with the current wrapper time `tl.now`), then submit **any** further
-wrapper trace `τ` — more queues, ticks, and executes in any pattern — after which
-an `execute` that consumes an entry carrying that stamp succeeds.
+Threat model: the attacker holds every key. At some reachable wrapper state they
+`queue` a privileged base operation (e.g. `catastrophicBackstop`, stamped with the
+current base clock reading), then submit **any** further wrapper trace `τ` — more
+queues, direct user traffic, ticks and executes in any pattern — after which an
+`execute` consuming that entry succeeds.
 
-Claim: `τ` contains at least `delay` `tick` actions. Since the wrapper clock
-advances only via `tick` (`execTraceTL_now`) and `queue` leaves the base state
-bitwise untouched (`step2tl_queue_exact`), a full `delay` units of wrapper time
-provably separate the public announcement of the change from the earliest instant
-it can take effect — and throughout that window the queued operation has
-contributed nothing to the base state (`tl_base_changes_only_via_execute`), so
-users can still exit against the pre-change parameters. This is the memo's
-"escape hatch" guarantee; contrast Half 1, where the window has length 0. -/
+Claim: the base clock at that moment is at least `delay` past the stamp. Because the
+clock lives in the base state and moves only through the base `step` (reached via
+`direct`, which refuses every `AdminOp`), this is elapsed protocol time, not a count
+of wrapper tokens. And `queue` leaves the base state bitwise unchanged
+(`step2tl_queue_exact`, `tl_base_untouched_by_queue`), so throughout the window the
+queued operation has contributed nothing — users transacting via `direct` are still
+facing the pre-change parameters. Contrast Half 1, where the window has length 0. -/
 theorem timelock_escape_guarantee (tl : TLState) (op : Op) (c : Address)
     (τ : List TLOp) (i : Nat) (tl' : TLState)
-    (h_entry : (execTraceTL { tl with pending := tl.pending ++ [(op, c, tl.now)] } τ).pending[i]?
-        = some (op, c, tl.now))
-    (h_exec : step2tl (execTraceTL { tl with pending := tl.pending ++ [(op, c, tl.now)] } τ)
+    (h_entry : (execTraceTL { tl with pending := tl.pending ++ [(op, c, tl.base.now)] } τ).pending[i]?
+        = some (op, c, tl.base.now))
+    (h_exec : step2tl (execTraceTL { tl with pending := tl.pending ++ [(op, c, tl.base.now)] } τ)
         (TLOp.execute i) = some tl') :
-    tl.delay ≤ countTicks τ := by
-  have h1 := tl_execute_requires_delay _ i tl' op c tl.now h_entry h_exec
-  have h2 := execTraceTL_now { tl with pending := tl.pending ++ [(op, c, tl.now)] } τ
-  have h3 := execTraceTL_delay { tl with pending := tl.pending ++ [(op, c, tl.now)] } τ
-  dsimp only at h2 h3
+    tl.base.now + tl.delay
+      ≤ (execTraceTL { tl with pending := tl.pending ++ [(op, c, tl.base.now)] } τ).base.now := by
+  have h1 := tl_execute_requires_delay _ i tl' op c tl.base.now h_entry h_exec
+  have h3 := execTraceTL_delay { tl with pending := tl.pending ++ [(op, c, tl.base.now)] } τ
+  dsimp only at h3
   omega
 
-/-- Non-vacuity of the wrapper (liveness witness): the escape guarantee above is
-not achieved by making `execute` unsatisfiable. A concrete run — queue the admin's
-`catastrophicBackstop`, let exactly `delay` ticks pass, then execute — succeeds
-and actually changes the base redemption price. The timelock delays privileged
-changes; it does not block them. -/
+/-- Non-vacuity of the wrapper: the escape guarantee is not achieved by making
+`execute` unsatisfiable. A concrete run — queue the admin's `catastrophicBackstop`,
+let `delay` of **base** time pass through `direct (Op.tick delay)`, then execute —
+succeeds and actually changes the base redemption price. The timelock delays
+privileged changes; it does not block them. -/
 theorem timelock_wrapper_is_live :
     ∃ (tl : TLState) (τ : List TLOp),
-      countTicks τ = tl.delay ∧
+      (execTraceTL tl τ).base.now = tl.base.now + tl.delay ∧
       (execTraceTL tl τ).base.redemptionValue ≠ tl.base.redemptionValue := by
   -- Document-faithful backstop fires only with the emergency flag already up (see
   -- `base_model_has_no_timelock`); the witness pre-sets it. `totalSupply_apxUSD := ray`
-  -- keeps the moved price at `1 * ray / ray = 1 ≠ 0`.
-  refine ⟨⟨{ (default : State) with
-              emergencyFlag := true
-              totalCollateralValue := 1
-              totalSupply_apxUSD := ray }, 0, [], 1⟩,
-    [TLOp.queue Op.catastrophicBackstop 0, TLOp.tick, TLOp.execute 0], rfl, ?_⟩
-  decide
+  -- makes the per-unit price land on `totalCollateralValue`, here 1.
+  refine ⟨{ base := { (default : State) with
+                        emergencyFlag := true
+                        admin := 7
+                        totalSupply_apxUSD := ray
+                        totalCollateralValue := 1
+                        redemptionValue := 0 }
+            pending := []
+            delay := 1 },
+          [TLOp.queue Op.catastrophicBackstop 7, TLOp.direct (Op.tick 1) 0,
+            TLOp.execute 0], ?_, ?_⟩
+  · decide
+  · decide
 
 /-! ## T9 `compartmentalization` — a role compromise's footprint is confined to its subsystem
 
