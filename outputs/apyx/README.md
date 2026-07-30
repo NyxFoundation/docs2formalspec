@@ -5,8 +5,9 @@
 | **Subject** | Apyx (apyx.fi) — the apxUSD / apyUSD dividend-backed stablecoin protocol |
 | **Contracts** (Ethereum mainnet, per the ingested documentation) | apxUSD [`0x98A8…4665`](https://etherscan.io/address/0x98A878b1Cd98131B271883B390f68D2c90674665) · apyUSD [`0x38EE…8a6A`](https://etherscan.io/address/0x38EEb52F0771140d10c4E9A9a72349A329Fe8a6A) · UnlockToken [`0x9377…BF4e6`](https://etherscan.io/address/0x93775E2dFa4e716c361A1f53F212c7AE031BF4e6) |
 | **Method** | RFC 2119 specification → Lean 4 state-machine model → machine-checked theorems |
-| **Result** | 170 theorems proved, 0 `sorry`, kernel-verified (`lake build`, Lean 4.31.0). No internal *contradiction* was found in Apyx's specification, but the analysis machine-proved concrete design *weaknesses* — a two-key (admin + RFQ) total-loss path, and the absence of a redemption-price floor/cap and an admin timelock (§4.1, §5). |
-| **Date** | 2026-07-07 |
+| **Result** | 0 `sorry`, kernel-verified (`lake build D2fsSpecs`, Lean 4.31.0). No internal *contradiction* was found in Apyx's specification. The analysis machine-proved concrete design weaknesses — a single-key (`ADMIN_ROLE`) reserve-drain and unbounded repricing path, and the absence of a redemption-price floor (§4.1, §5, §9.1) — and, in a self-review of this report's own model, found and fixed four defects in the **formalization** (§9.3). |
+| **Date** | 2026-07-07, revised 2026-07-30 (§9.3) |
+| **Self-review** | This report has been reviewed against its own Lean source; findings and fixes are in [`code_review_lean.md`](code_review_lean.md) and §9.3. Regression tests: [`review_witnesses/`](review_witnesses/). Deployment reads that ground the fixes: [`deployment_ground_truth.md`](deployment_ground_truth.md). |
 
 ---
 
@@ -26,18 +27,34 @@ source by the Lean kernel, in four groups:
 
 Headline findings for Apyx:
 
-- **Non-custodial guarantee holds.** Even with *every* operator key stolen simultaneously, a user who
-  signs nothing and is not targeted by an approved RFQ counterparty cannot lose any balance (§4.2).
-- **One structural total-loss path exists** — and it requires **two** roles colluding (admin + an approved
-  RFQ counterparty), because the model has no lower bound on the redemption price (§4.2, §5).
+- **No operator key can move a user's balance.** Even with *every* operator key stolen simultaneously, a
+  user who signs nothing and is not targeted by an approved RFQ counterparty keeps every unit of their
+  recorded `apxUSDBal` / `apyUSDBal` / `usdcBal` (§4.1). Read this as stated: it is a claim about
+  **nominal balances**, not about their value. The value claim is false, and the same file proves why —
+  see the next point.
+- **`ADMIN_ROLE` alone is a total-loss path.** `withdrawReserve` moves the entire USDC reserve to an
+  address the admin names, with nothing burned and no claim settled, and `updateRedemptionValue` reprices
+  redemptions to any value with no floor and no delay (`admin_alone_drains_reserve`,
+  `admin_alone_moves_redemption_price`). A user's balances survive both; their worth does not. The
+  two-key admin+RFQ coalition is still proved but is no longer the cheapest route (§4.1, §9.1).
 - **The vesting logic is correct.** Formalizing it prompted a close reading of `LinearVestV0.sol`, which
   confirmed the deployed two-accumulator vesting design does not forfeit accrued yield (§4.3).
 - **No contradiction in Apyx's own documentation.** A consistency search flagged an apparent conflict
   between two *extracted* requirements, but tracing it to the source docs showed the source is consistent —
-  the conflict was an artifact of our automated extraction over-generalizing one requirement (§9). No change
-  to Apyx's spec is warranted; the fix is in our tooling.
-- **Design recommendations** (a redemption-price floor, a withdrawal rate limit, and an admin timelock)
-  are backed by proof: §5 shows exactly what each would guarantee.
+  the conflict was an artifact of our automated extraction over-generalizing one requirement (§9.2). No
+  change to Apyx's spec is warranted; the fix was in our tooling.
+- **Four defects were found in *this report's own model*, and fixed** (§9.3). Three of them had been
+  reported here as protocol guarantees: the vault priced off a stale cached rate (so the no-dilution and
+  share-price-monotonicity rows were false), `x / 0 = 0` let a share-less address drain the vault, and
+  settling an unlock stranded the holder's next request. The fixes are grounded in the deployed contracts'
+  verified source and live reads, not in the documentation
+  ([`deployment_ground_truth.md`](deployment_ground_truth.md)).
+- **The ERC-4626 inflation attack is mitigated, not impossible.** This report previously claimed
+  immunity. `ApyUSD._decimalsOffset()` returns `0`, so the vault relies on OpenZeppelin's single virtual
+  share; §9.3 quantifies what that leaves open and §5 item 7 is the resulting recommendation.
+- **Design recommendations**: a redemption-price floor (§5 item 1) and the ERC-4626 offset decision
+  (§5 item 7) are backed by proof. The rate-limit and timelock items are design suggestions whose
+  formalized wrappers do not yet establish what their names claim (§5 items 2-3, §9.3).
 
 **Scope.** This verifies a hand-built abstract model of the protocol's *intended design*, not the deployed
 Solidity bytecode. It does not check gas, storage layout, upgradeability, reentrancy, or cross-protocol
@@ -138,7 +155,10 @@ Every requirement judged expressible as a state-machine property was formalized 
 `req_credit_preserves_accrued_vest`, `req_yield_rate_dollar_terms`, `req_exchange_rate_non_decreasing`,
 `req_token_no_rebase`, `req_total_assets_includes_vault_balance_and_vested`.
 
-- The apyUSD/apxUSD exchange rate is non-decreasing.
+- The apyUSD/apxUSD exchange rate is non-decreasing **in time** (`req_exchange_rate_non_decreasing`
+  quantifies over `now`, not over operations). Monotonicity across a deposit is the separate
+  `exchange_rate_monotone_deposit`; both are now about the live `computeExchangeRate` rather than a
+  stored field (§9.3).
 - Vesting is linear: nothing releases before the clock anchor, the released amount grows monotonically with
   time, never exceeds the pool, and equals the full pool once a period has elapsed.
 - Crediting new yield preserves already-accrued yield (`req_credit_preserves_accrued_vest`); the monthly
@@ -149,7 +169,9 @@ Every requirement judged expressible as a state-machine property was formalized 
 `req_buffer_not_consumed`, `req_catastrophic_backstop`.
 
 - The overcollateralization invariant is preserved across operations (under the stated well-formedness
-  conditions; the solvency-breaking operations are explicitly excluded and documented).
+  conditions; the solvency-breaking operations are explicitly excluded and documented). The invariant is
+  `totalSupply_apxUSD ≤ totalCollateralValue + usdcReserve`; it no longer carries a "required margin"
+  term, which was identically zero on every reachable trace (§9.3).
 - Routine redemptions never reduce the overcollateralization buffer.
 
 ### ERC-4626 vault surface
@@ -234,17 +256,19 @@ extract value using only legitimate operations.
 | Property | Guarantee | Theorem |
 |---|---|---|
 | No free value | No operation sequence lets any address mint apxUSD from nothing | `no_free_value_trace` |
-| Solvency preserved | Minted apxUSD never exceeds collateral across any trace (under stated well-formedness) | `solvency_preserved` |
+| Solvency preserved | Minted apxUSD never exceeds the collateral basket plus the USDC reserve across any trace (under stated well-formedness, and excluding the operations listed in §6.2) | `solvency_preserved` |
 | Rounding favors the protocol | Conversions never credit the user free value; withdrawals round up in shares | `rounding_favors_protocol`, `withdrawShares_rounds_up` |
-| No dilution | A deposit by someone else never lowers an existing holder's redeemable value | `no_dilution` |
-| Inflation-attack immunity | The ERC-4626 first-depositor / donation attack is structurally impossible — there is no raw donation primitive; every vault-asset increase is matched by a share mint | `donation_free`, `no_inflation_attack` |
-| No free extraction | A caller cannot end richer than they started (single-step, fixed reference rate) | `caller_net_nonpositive`, and the `caller_value_*` family |
+| No dilution | A deposit by someone else never lowers an existing holder's redeemable value, measured at the **live** per-share price. Unconditional — no backing or non-zero-supply side condition, so the first depositor is covered too | `no_dilution` |
+| No raw donation primitive | Every increase in vault custody is one of the three accounted channels; there is no transfer-into-custody operation | `donation_free`, `no_inflation_attack` |
+| Inflation attack: **mitigated, not impossible** | A deposit below the current share price still rounds partly into the pool. The deployment's only structural defence is OpenZeppelin's single virtual share (`_decimalsOffset() = 0`), which the model now carries; §9.3 quantifies the residue | `Regression.lean` §R3 |
+| No free extraction | A caller cannot end richer than they started (single-step, at the live rate) | `caller_net_nonpositive`, and the `caller_value_*` family |
 | No early yield drain | Vested yield cannot be pulled forward faster than its linear schedule | `vest_no_early_drain` |
 | Vesting conservation | Both crediting new yield and reconfiguring the vesting period preserve already-accrued yield | `creditYield_preserves_accrued_vest`, `setVestPeriod_preserves_accrued_vest` |
 | No peg-spread round trip | The arbitrage mint (needs price > $1) and arbitrage redeem (needs price < $1) require opposite price regimes, so no single state enables both | `no_same_state_arbitrage_round_trip` |
 | Redemption request is backed | A redemption request burns exactly the requested apxUSD and leaves the caller one tracked position — the obligation exactly equals the burn (no free claim) | `requestUnlock_backs_claim_by_burn` |
 | No free extraction (trace) | Over arbitrary traces of non-share operations, no address's fixed-rate holdings can increase — no free money through the redemption / RFQ / request channels at any length (the share-op + live-rate closure is left open, see §6.2) | `caller_net_nonpositive_trace` |
-| Share-price monotonicity | A new deposit never dilutes the exchange rate, and crediting yield preserves it (raising it only as yield vests over time) — the ERC-4626 dilution invariant | `exchange_rate_monotone_deposit`, `exchange_rate_monotone_creditYield`, `req_exchange_rate_non_decreasing` |
+| Share-price monotonicity | A new deposit never lowers the **live** per-share price, and crediting yield preserves it (raising it only as yield vests over time) — the ERC-4626 dilution invariant | `exchange_rate_monotone_deposit`, `exchange_rate_monotone_creditYield`, `req_exchange_rate_non_decreasing` |
+| Vault pricing is live | Conversions and every `step` branch price off `computeExchangeRate`, never off a stored field — matching the deployment, which has no stored rate | §9.3, `Regression.lean` §R1/R2 |
 
 ### 4.3 The vesting cross-check (a positive finding)
 
@@ -357,14 +381,23 @@ guarantee is cited.
    removes the total-loss outcome of the admin + RFQ coalition.
 
 2. **Add a withdrawal / redemption rate limit** (ERC-7265-style circuit breaker). Formalized as a wrapper
-   over the model and proved to bound cumulative reserve loss to `≤ cap × (epochs elapsed + 1)` — i.e.
-   damage becomes at most **linear in time** regardless of how an all-keys attacker sequences operations
+   over the model and proved to bound cumulative reserve loss to `≤ cap × (epochs elapsed + 1)`
    (`rate_limit_linear_bound`).
+   **Read this as a design suggestion, not a quantified guarantee.** The wrapper's `advanceEpoch` is a
+   free, permissionless action with no relation to `Op.tick` or `base.now`, so the theorem counts epoch
+   markers the attacker put in their own trace rather than elapsed time; and the meter charges
+   `usdcReserve` outflow only, so a repricing-to-zero drain passes it unmetered. Both are recorded in
+   [`code_review_lean.md`](code_review_lean.md) §1.2 and are unfixed. The *recommendation* stands on its
+   own merits — a real ERC-7265 breaker is metered by the chain clock — but this report's theorem does
+   not currently establish it.
 
 3. **Add a timelock on privileged admin changes.** The base model is proved to have **no exit window** —
    admin changes take effect in the same block (`base_model_has_no_timelock`,
-   `catastrophicBackstop_is_instantaneous`). A delay queue is formalized and proved to give users a
-   guaranteed window to exit before any queued change lands (`timelock_escape_guarantee`).
+   `catastrophicBackstop_is_instantaneous`). That negative result is sound.
+   The positive half (`timelock_escape_guarantee`) carries the same caveat as item 2: its `tick` is a
+   free counter unrelated to the base clock, and the wrapper routes *every* operation through the
+   queue — including a user's own exit — so as modelled it does not actually provide the escape window
+   its name claims (`code_review_lean.md` §1.2). Unfixed.
    **Largely already met on-chain, and this recommendation was written against a stale
    observation.** The deployed `AccessManager` (`0xe167330E…2824`) runs a graded delay ladder —
    0 for `pause()`, 4h for the price push, 24h for privileged token withdrawal, 3 days for
@@ -386,7 +419,14 @@ guarantee is cited.
    The contract should maintain the same invariant (a user's pending-request pointer references only their
    own position).
 
-7. **Commission an implementation-level (bytecode) audit** for the classes this model cannot reach —
+7. **Decide on the ERC-4626 inflation-attack posture.** `ApyUSD._decimalsOffset()` returns `0`, so the
+   vault's only structural defence against share-price rounding is OpenZeppelin's single virtual share,
+   and `deposit()` does not revert on a zero-share result. At 128M outstanding shares this is not
+   economically live today, but it is the standard mitigation and it is currently declined. Either raise
+   `_decimalsOffset`, seed the vault permanently, or document the reliance on `depositForMinShares` for
+   integrators. Quantified in §9.3 and `Regression.lean` §R3.
+
+8. **Commission an implementation-level (bytecode) audit** for the classes this model cannot reach —
    reentrancy, flash-loan composition, gas/storage, and upgrade safety (§6).
 
 ---
@@ -478,10 +518,10 @@ Halmos, hevm; **Fuzz** = Echidna, Medusa, Foundry invariant; **Config** = role-g
 | 1 | **Reentrancy** (single-fn, cross-fn, and **read-only** — a view returning mid-update state) | `step` is atomic; there is no notion of an external call re-entering mid-transition | Static + SMT (reentrancy rules) + Fuzz |
 | 2 | **Cross-protocol / flash-loan composition** (e.g. manipulating an external pool the protocol reads) | The model has one protocol, one closed `Op`; no external mutable state | SMT with attacker harness + economic sim |
 | 3 | **Bytecode ⊨ model** — the model is a *hand-built interpretation* and can diverge from the contract (as the vesting and catastrophic-per-unit cases here showed) | Proofs are about the Lean model, not `ApxUSD`/`ApyUSD`/`RedemptionPoolV0`/`LinearVestV0` bytecode | **SMT (Certora/Halmos) on the actual contracts** — the primary complement |
-| 4 | **Fixed-point rounding & decimals** — the Lean `rounding_favors_protocol` is over abstract `Nat`; the Solidity `mulDiv`/round directions and USDC(6)↔apxUSD/apyUSD(18) scaling must match | Model uses ideal `Nat` division; no `uint256`/decimals semantics | SMT + Static |
+| 4 | **Fixed-point rounding & decimals** — **partly closed.** The four `previewX` rounding directions were read off the verified source and the model now matches them (`previewMint` was Floor and is now Ceil, §9.3). What remains is the USDC(6)↔apxUSD/apyUSD(18) scaling, which the model still treats as commensurate | Model uses ideal `Nat` division; no `uint256`/decimals semantics | SMT + Static |
 | 5 | **Overflow / unchecked / division-by-zero** — Lean `x/0 = 0` masks a Solidity revert; `unchecked{}` blocks | Nat arithmetic never overflows or reverts | Static + SMT |
 | 6 | **ERC-20/4626 ledger identity** `Σ balances = totalSupply` — the model *assumes* it (`solvency_preserved`/`req_overcollateralization_limit` take `WellFormed` as a hypothesis) | Balances are bare `Address → Nat` with no summation structure | SMT invariant on the deployed token/vault |
-| 7 | **ERC-4626 inflation defense in the real vault** — the Lean proves donation-immunity of the *abstract* model; the Solidity must actually use virtual-shares/offset (or a seed deposit) so `totalAssets` isn't donatable | Model has no raw-transfer sink; the real `balanceOf`-based `totalAssets` might | SMT (share-price manipulation rule) + Fuzz |
+| 7 | ~~**ERC-4626 inflation defense in the real vault**~~ — **answered, and the answer is negative.** `ApyUSD._decimalsOffset()` returns `0`, so the only structural defence is OpenZeppelin's single virtual share, and `deposit()` does not revert on zero shares. The model now carries the same `+1` and reports the residue rather than claiming immunity (§9.3, §4.2). Remaining implementation work is the decision itself: whether to raise `_decimalsOffset` or seed the vault | — | Protocol decision + Fuzz to size the exposure |
 | 8 | **Vesting timestamp detail** — `LinearVestV0` separates `lastDepositTimestamp`/`lastTransferTimestamp`; the model collapses to a single `vestStart` (documented simplification), so a pull can shift the vesting end | Model has one clock anchor | SMT/Fuzz on `LinearVestV0` |
 | 9 | **Aggregate conservation of the pro-rata split** (catastrophic-backstop 2nd clause) | The *per-address* credit `reserve·balance/totalSupply` is proved (`req_catastrophic_backstop`); only `Σ_holder` of the credits = drained reserve is left, needing a `Σ` the aggregate ledger can't express (§6.2) | Implementation audit + SMT |
 | 10 | **Access-control configuration** — the OZ `AccessManager` role graph and the **actual per-function delays** (the 0-second-timelock risk Yearn flagged; the model proves `base_model_has_no_timelock`), plus `MinterV0` rate-limit params | Model abstracts roles to `caller = admin/oracle/…`; it does not carry the deployed authority wiring or delay values | **Config review** + Static |
@@ -544,6 +584,9 @@ axioms of Lean's logic; none is an unproved assumption. Compile status is record
 | [`LiquidationBatcher.lean`](LiquidationBatcher.lean) | The construction-time bounds on the one undelayed keyed role — 5 proofs (§4.6) |
 | [`leancheck.json`](leancheck.json) | Build status: requirement theorems, `sorry` count, vacuous count |
 | [`corpus.md`](corpus.md) | The raw ingested source documentation |
+| [`code_review_lean.md`](code_review_lean.md) | Self-review of this report's Lean source — every finding, fixed and unfixed (§9.3) |
+| [`deployment_ground_truth.md`](deployment_ground_truth.md) | Verified-source and live-read facts the §9.3 fixes are grounded in |
+| [`review_witnesses/Regression.lean`](review_witnesses/Regression.lean) | Kernel-checked regression tests pinning each §9.3 fix |
 
 ---
 
@@ -603,6 +646,82 @@ clause). **No change to Apyx's specification or contracts was warranted.**
 The methodology, the source-tracing rule this exemplifies (corpus → Solidity), and four further candidate
 checks (all traced to the source and resolved — none a protocol defect) are in
 [`docs/07-spec-defects.md`](https://github.com/NyxFoundation/docs2formalspec/blob/main/docs/07-spec-defects.md).
+
+### 9.3 A self-review of this report's own model — four formalization defects, found and fixed
+
+The activities above turn the lens on Apyx's documentation. This one turns it on **our own Lean
+source**: are the theorems as strong as this report's prose says? Full findings are in
+[`code_review_lean.md`](code_review_lean.md); the four that were defects rather than wording are
+below. All four were **formalization** defects, not protocol defects — but the first three were
+being reported as *protocol guarantees*, which is the more serious kind of error for a report like
+this to make.
+
+The fixes are grounded in the deployed contracts rather than in the documentation. `ApyUSD`'s
+verified source (impl [`0xfd6165…b112`](https://etherscan.io/address/0xfd616567ecc1607f61073951a1e822f7315bb112),
+OpenZeppelin upgradeable 5.5.0) and live reads are recorded in
+[`deployment_ground_truth.md`](deployment_ground_truth.md).
+
+**1. The vault priced off a stale cache, and three §4.2 rows were false because of it.**
+The model stored `exchangeRate` as a field refreshed only inside vault operations, while
+`creditYield`, `tick` and vesting all move the true price without touching it. `lockApxUSD` then
+minted at the stale value. A fully honest trace — no compromised key — diluted an existing holder
+25% while `no_dilution`'s stale-rate measure reported an *increase*.
+
+The deployment has no stored rate at all: `totalAssets()` is a view returning
+`asset.balanceOf(this) + vesting.vestedAmount()`, and every conversion recomputes off it. Read at
+block ≈25,642,103, `convertToAssets(1e18)` matches `1e18 * totalAssets / totalSupply` exactly, and
+`totalAssets()` exceeds the vault's own apxUSD balance by the 94,044 apxUSD then vesting. So the
+cache was an artifact. `computeExchangeRate` is now the live
+`((totalAssets + 1) * ray) / (totalSupply_apyUSD + 1)`, every conversion and every `step` branch
+prices off it, and the field survives only as a published record. `no_dilution` and
+`exchange_rate_monotone_deposit` are now about the live price and are *stronger* — their backing
+and non-zero-supply side conditions are gone.
+
+**2. `x / 0 = 0` let an address with no shares drain the vault.** With `exchangeRate = 0` — the
+`default` value — `withdrawShares` returned 0, so the share-balance guard read `0 < 0` and passed.
+The `+ 1` terms above are OpenZeppelin's virtual share and virtual asset
+(`_convertToShares(a,r) = a.mulDiv(totalSupply() + 10**_decimalsOffset(), totalAssets() + 1, r)`
+with `_decimalsOffset() = 0`). Carrying them makes the denominator structurally non-zero, so the
+whole class is now unreachable rather than merely unwitnessed.
+
+**3. Settling a standard unlock stranded the next request.** `claimUnlock` burned the receipt but
+left `unlockRequests id` and `unlockRequestId owner` set. A later `requestUnlock` topped up the
+already-settled entry, and since the claim guard needs `unlockTokenOwner id = some owner` — which
+the burn had cleared — the topped-up amount became **permanently unclaimable**. The deployed
+`CommitToken.redeem` deletes the request in the same call that burns; the model now does too.
+
+**4. `creditYield` credited the same dollar twice**, to `usdcReserve` *and* the vest pool,
+inflating the collateral side of the solvency invariant for free. On-chain
+`IVesting.depositYield` moves apxUSD into the vesting contract and touches nothing else; the USDC
+redemption reserve is `RedemptionPoolV0`. Removing the double credit *strengthened* three
+blast-radius results: a compromised `yieldDistributor` is now proved unable to move the reserve at
+all, where before it was only proved unable to lower it.
+
+**What the residue looks like.** The ERC-4626 inflation attack is **mitigated but not eliminated**,
+and that is deliberate. `_decimalsOffset()` returns `0` — the deployment's own docstring calls it
+"the decimals offset for inflation-attack protection" — and `deposit()` does not revert on zero
+shares (`previewDeposit(1 wei) = 0`, read live). Modelling protection the chain does not have would
+be the wrong fix, so `Regression.lean` §R3 pins the exposure instead: a victim depositing below the
+share price now receives a share rather than none, but still puts in 150 and gets 117 back. The
+user-side defence is the real `depositForMinShares`; the protocol-side defence is a non-zero
+`_decimalsOffset`. At the vault's current 128M outstanding shares this path is not economically
+live; it matters for a fresh vault or a drained one.
+
+**Two claims withdrawn rather than fixed.** `Solvent` and `req_overcollateralization_limit`
+carried a "required overcollateralization margin" term that was the `State` *field*
+`overcollateralizationBuffer` — written only by `catastrophicBackstop`, and only to `0`. It was
+identically zero on every reachable trace, so the margin was rhetorical; both now state exactly
+what is proved. And `req_single_pending_redemption_per_user` proves the cooldown-*reset* half of
+its requirement, not uniqueness; its docstring says so now, and records that the vault path is
+deliberately multi-position because `withdrawForReceipt` mints a fresh receipt NFT per call.
+
+**Still open, and reported as open:** the two defense wrappers in
+[`BlastRadius.lean`](BlastRadius.lean) let the attacker supply their own clock —
+`rate_limit_linear_bound`'s `advanceEpoch` and `timelock_escape_guarantee`'s `tick` are free,
+permissionless counters with no relation to `Op.tick`, so neither theorem currently means "linear
+in elapsed time". Until that is repaired, §5 items 2 and 3 should be read as *design suggestions*
+rather than as quantified guarantees. The remaining items in
+[`code_review_lean.md`](code_review_lean.md) §1.2, §2.3 and §3 are also unfixed.
 
 ---
 

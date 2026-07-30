@@ -135,7 +135,7 @@ The following terms have the meanings defined below. The definitions use the key
 | **REQ‑flexible‑redemption‑multiple‑requests** | **The system MUST allow a user to have multiple concurrent flexible redemption unlock requests.** |
 | **REQ‑flexible‑redemption‑claim‑minimum** | **A flexible redemption claim MUST be executable only after a minimum of 3 days have elapsed since the request.** |
 | **REQ‑flexible‑redemption‑early‑fee** | **The early redemption fee applied to a flexible redemption claim MUST start at 3.5 % and decline linearly over time to a minimum of 0.1 %.** |
-| **REQ‑single‑pending‑redemption‑per‑user** | **Each user MUST have at most one pending redemption request; if the user adds assets to an existing request, the cooldown timer MUST reset to the time of the update.** |
+| **REQ‑single‑pending‑redemption‑per‑user** | **Each user MUST have at most one pending redemption request; if the user adds assets to an existing request, the cooldown timer MUST reset to the time of the update.** *(Scope, per DR‑23: this governs the unlock **request registry**, where a repeat request tops up the existing position. Vault `withdraw`/`redeem` mint a separate receipt per call and are outside it.)* |
 | **REQ‑redemption‑async‑process** | **Redemption requests MUST follow the three‑step asynchronous process of request, cooldown, and claim.** |
 | **REQ‑redemption‑cooldown‑period** | **After a redemption request is submitted, the system MUST enforce a cooldown period of approximately 20 days before a claim can be executed.** |
 | **REQ‑pay‑to‑non‑cooldown** | **Yield MUST be paid to all apyUSD tokens that are not currently undergoing cooldown.** |
@@ -143,7 +143,7 @@ The following terms have the meanings defined below. The definitions use the key
 | **REQ‑cooldown‑removal** | **When apyUSD enters the cooldown phase, it MUST be removed from the yield pool, causing remaining apyUSD to receive a higher percentage yield.** |
 | **REQ‑buffer‑not‑consumed** | **The system MUST NOT reduce the overcollateralization buffer as a result of routine redemption operations.** |
 | **REQ‑redemption‑value‑uniform** | **The system MUST apply the same Redemption Value to all participants regardless of market conditions.** |
-| **REQ‑overcollateralization‑limit** | **The system MUST ensure that the total amount of apxUSD minted never exceeds the market value of the collateral minus the required overcollateralization margin.** |
+| **REQ‑overcollateralization‑limit** | **The system MUST ensure that the total amount of apxUSD minted never exceeds the market value of the collateral minus the required overcollateralization margin.** *(The sources do not quantify the "required overcollateralization margin", so the Lean invariant is the unmargined `totalSupply_apxUSD ≤ totalCollateralValue + usdcReserve`. A margin term that was identically zero on every reachable trace was removed rather than left in place — `README` §9.3.)* |
 | **REQ‑buffer‑preservation** | **The system MUST preserve the overcollateralization buffer during routine redemption operations; the buffer MUST NOT be consumed.** |
 | **REQ‑unlock‑token‑redeemable‑1to1‑after‑20d** *(duplicate – same as above)* | **apxUSD_unlock tokens MUST be redeemable 1:1 for apxUSD after a 20‑day cooldown period.** |
 | **REQ‑unlock‑token‑nontransferable** *(duplicate – same as above)* | **apxUSD_unlock tokens MUST NOT be transferable.** |
@@ -258,7 +258,7 @@ The following terms have the meanings defined below. The definitions use the key
 | **REQ‑exchange‑rate‑non‑decreasing** *(already listed in Economic)* | **The exchange rate between apyUSD and apxUSD MUST be non‑decreasing over time.** |
 | **REQ‑redemption‑exchange‑rate‑multiplier** *(already listed in Economic)* | **When a user redeems apyUSD, the system MUST transfer an amount of apxUSD equal to the number of apyUSD redeemed multiplied by the current exchange rate, which MUST be greater than or equal to 1.** |
 | **REQ‑cooldown‑no‑yield** | **During a redemption cooldown, the exchange rate for the locked apyUSD MUST remain fixed and the user MUST NOT accrue additional yield on those tokens.** During the cooldown period, users will not receive yield on their apyUSD, with the apxUSD/apyUSD exchange rate being fixed. |
-| **REQ‑overcollateralization‑limit** *(already listed in State)* | **The system MUST ensure that the total amount of apxUSD minted never exceeds the market value of the collateral minus the required overcollateralization margin.** |
+| **REQ‑overcollateralization‑limit** *(already listed in State)* | **The system MUST ensure that the total amount of apxUSD minted never exceeds the market value of the collateral minus the required overcollateralization margin.** *(The sources do not quantify the "required overcollateralization margin", so the Lean invariant is the unmargined `totalSupply_apxUSD ≤ totalCollateralValue + usdcReserve`. A margin term that was identically zero on every reachable trace was removed rather than left in place — `README` §9.3.)* |
 | **REQ‑totalAssets‑includes‑vault‑balance‑and‑vested** | **The vault's totalAssets() function MUST include both the vault's apxUSD balance and the vestedAmount() reported by the LinearVestV0 contract.** |
 | **REQ‑buffer‑non‑decreasing** *(already listed in State)* | **Outside of a catastrophic backstop, the overcollateralization buffer — the gap between Total Collateral Value and Redemption Value — MUST NOT decrease during routine redemptions or stress events (and MAY grow via yield spreads and collateral appreciation). A catastrophic backstop is the sole exception and distributes the entire buffer (see REQ‑catastrophic‑backstop).** |
 | **REQ‑redemption‑exchange‑rate‑multiplier** *(duplicate – already listed)* | **When a user redeems apyUSD, the system MUST transfer an amount of apxUSD equal to the number of apyUSD redeemed multiplied by the current exchange rate, which MUST be greater than or equal to 1.** |
@@ -270,7 +270,7 @@ The following terms have the meanings defined below. The definitions use the key
 | **REQ‑redemption‑value‑uniform** *(duplicate – already listed)* | **The system MUST apply the same Redemption Value to all participants regardless of market conditions.** |
 | **REQ‑buffer‑non‑decreasing** *(duplicate – already listed)* | **Outside of a catastrophic backstop, the overcollateralization buffer — the gap between Total Collateral Value and Redemption Value — MUST NOT decrease during routine redemptions or stress events (and MAY grow via yield spreads and collateral appreciation). A catastrophic backstop is the sole exception and distributes the entire buffer (see REQ‑catastrophic‑backstop).** |
 | **REQ‑redemption‑exchange‑rate‑multiplier** *(duplicate – already listed)* | **When a user redeems apyUSD, the system MUST transfer an amount of apxUSD equal to the number of apyUSD redeemed multiplied by the current exchange rate, which MUST be greater than or equal to 1.** |
-| **REQ‑overcollateralization‑limit** *(duplicate – already listed)* | **The system MUST ensure that the total amount of apxUSD minted never exceeds the market value of the collateral minus the required overcollateralization margin.** |
+| **REQ‑overcollateralization‑limit** *(duplicate – already listed)* | **The system MUST ensure that the total amount of apxUSD minted never exceeds the market value of the collateral minus the required overcollateralization margin.** *(The sources do not quantify the "required overcollateralization margin", so the Lean invariant is the unmargined `totalSupply_apxUSD ≤ totalCollateralValue + usdcReserve`. A margin term that was identically zero on every reachable trace was removed rather than left in place — `README` §9.3.)* |
 | **REQ‑buffer‑preservation** *(duplicate – already listed)* | **The system MUST preserve the overcollateralization buffer during routine redemption operations; the buffer MUST NOT be consumed.** |
 | **REQ‑buffer‑non‑decreasing** *(duplicate – already listed)* | **Outside of a catastrophic backstop, the overcollateralization buffer — the gap between Total Collateral Value and Redemption Value — MUST NOT decrease during routine redemptions or stress events (and MAY grow via yield spreads and collateral appreciation). A catastrophic backstop is the sole exception and distributes the entire buffer (see REQ‑catastrophic‑backstop).** |
 | **REQ‑redemption‑exchange‑rate‑multiplier** *(duplicate – already listed)* | **When a user redeems apyUSD, the system MUST transfer an amount of apxUSD equal to the number of apyUSD redeemed multiplied by the current exchange rate, which MUST be greater than or equal to 1.** |
@@ -396,6 +396,34 @@ finding — `redemption_has_no_floor` still holds on‑chain.
 
 DR‑16 to DR‑18 are what make role 41 — which carries no execution delay — bounded rather than
 open: it can choose neither which markets it touches nor where proceeds go.
+
+### 10a.5 ERC‑4626 vault mechanics (`Apyx.lean`)
+
+Read from `ApyUSD`'s verified source — proxy `0x38EE…8a6A` over implementation
+`0xfd616567…b112`, OpenZeppelin upgradeable 5.5.0 — plus live reads at ≈ block 25,642,103. These
+supersede the model's earlier assumptions; see `README` §9.3 and `deployment_ground_truth.md`.
+
+| # | Requirement | Level |
+|---|---|---|
+| DR‑19 | The vault SHALL hold **no stored exchange rate**. `totalAssets()` SHALL be computed on read as `asset.balanceOf(vault) + vesting.vestedAmount()`, and every share/asset conversion SHALL be derived from it, so the per‑share price moves continuously as yield vests. | MUST |
+| DR‑20 | Conversions SHALL use OpenZeppelin's virtual share and virtual asset: `shares = assets · (totalSupply + 10^offset) / (totalAssets + 1)` and its inverse, with `offset = _decimalsOffset()`. Consequently every conversion denominator SHALL be at least 1. | MUST |
+| DR‑21 | Rounding SHALL favour the vault in all four directions: `previewDeposit` down, `previewMint` **up**, `previewWithdraw` up, `previewRedeem` down. | MUST |
+| DR‑22 | `withdraw` and `redeem` SHALL realise vested yield **before** pricing, so that liquid assets match `totalAssets()` at the moment of conversion. | MUST |
+| DR‑23 | Each `withdraw`/`redeem` SHALL open a **new** unlock receipt with its own token id. The one‑pending‑request rule of REQ‑single‑pending‑redemption‑per‑user applies to the `CommitToken`/`UnlockToken` request registry, **not** to vault receipts. | MUST |
+| DR‑24 | A settled unlock SHALL be retired in the same call that pays it out — the request entry and the owner's pending‑request pointer SHALL both be cleared, not only the receipt. | MUST |
+| DR‑25 | Crediting yield SHALL affect only the vesting contract. It SHALL NOT credit the USDC redemption reserve, which is held by a separate contract. | MUST |
+
+**Two deployment facts recorded as gaps rather than requirements.** Neither is derivable from the
+documentation, and the model deliberately does not assert a stronger property than the chain
+provides:
+
+- `_decimalsOffset()` returns **0**, and `deposit()` does not revert when the share result rounds to
+  zero (`previewDeposit(1 wei) = 0`, read live). The vault therefore relies on a single virtual share
+  for inflation‑attack resistance, and on callers using `depositForMinShares`. `README` §4.2 reports
+  the attack as *mitigated*, not impossible, and §5 item 7 is the resulting recommendation.
+- A vault‑side `unlockingFee` is charged upfront inside `_withdraw`; live value `1e15` = **10 bps**.
+  §7's early‑unlock fee schedule is the *receipt* fee and is a different charge. No requirement in
+  §1–10 covers the vault fee, and the model has no counterpart for it.
 
 ---
 

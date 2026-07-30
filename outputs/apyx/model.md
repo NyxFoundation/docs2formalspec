@@ -29,7 +29,7 @@
 | `redemptionValue` | `uint256` (ray, 1e27) | Per-apxUSD redemption price in USDC (`1e27` = $1.00); redeeming `amount` apxUSD pays `amount·redemptionValue/1e27` USDC. Corresponds to **`RedemptionPoolV0.exchangeRate`** — the value that actually prices a redemption (`previewRedeem = assetsAmount·exchangeRate/1e18/10^|assetDec−reserveDec|`). **Scale differs**: the contract is `1e18`, the model is `ray = 1e27`; only the dimension (per-unit, not aggregate) is shared. Not `ApxUSDRateOracle.rate` — see §5. |
 | `totalCollateralValue` | `uint256` | Full value of the reserve (collateral basket + buffer). |
 | `overcollateralizationBuffer` (derived) | `uint256` | `max(0, totalCollateralValue − totalSupply_apxUSD·redemptionValue/1e27)` — the excess of collateral over the outstanding redemption obligation. |
-| `exchangeRate` | `uint256` (ray, 1e27) | apyUSD → apxUSD conversion factor (≥ 1e27). |
+| `exchangeRate` | `uint256` (ray, 1e27) | **A published record, not a pricing input.** The deployed `ApyUSD` stores no rate: `totalAssets()` is a `view` returning `asset.balanceOf(this) + vesting.vestedAmount()` and every conversion recomputes off it. So the model prices everything off the derived `computeExchangeRate s = ((totalAssets s + 1) * ray) / (totalSupply_apyUSD + 1)`, and this field only records the last published value. The `+1` terms are OpenZeppelin's virtual share and virtual asset (`_decimalsOffset() = 0`); they also make the denominator structurally non-zero. See §5 and `README` §9.3. |
 | `cooldownEnd[user][requestId]` | `uint256` (timestamp) | Time after which the unlock token may be redeemed. |
 | `whitelist[address]` | `bool` | `true` ⇒ address may mint/redeem. |
 | `denylist[address]` | `bool` | `true` ⇒ address blocked from deposit/mint. |
@@ -53,19 +53,19 @@
 |-----------|--------|---------------------------|------------------------------------------|
 | **depositUSDC** *(standard mint pathway)* | `amount` (USDC) | `!globalPause` ∧ `whitelist[msg.sender]` ∧ `!denylist[msg.sender]` ∧ `amount > 0` | Off‑chain Treasury receives `amount`; `totalSupply_apxUSD += amount`; ERC‑20 `apxUSD.mint(msg.sender, amount)` at $1/unit, unconditionally (no market-price gate — see `mintApxUSD` for the separate arbitrage pathway). |
 | **mintApxUSD** *(arbitrage pathway)* | `to`, `amount` | `!globalPause` ∧ `whitelist[msg.sender]` ∧ `!denylist[msg.sender]` ∧ `!denylist[to]` ∧ **`apxUSDMarketPrice > 1e27`** (apxUSD trading above $1) ∧ `amount ≤ balanceUSDC(msg.sender)` | Transfer USDC to Treasury; `totalSupply_apxUSD += amount`; ERC‑20 `apxUSD.mint(to, amount)` at $1/unit. |
-| **lockApxUSD** | `amount` | `balanceOf_apxUSD(msg.sender) ≥ amount` ∧ `amount > 0` | `apxUSD.transferFrom(msg.sender, vault, amount)`; `shares = amount * 1e27 / exchangeRate`; `totalSupply_apyUSD += shares`; `apyUSD.mint(msg.sender, shares)`. |
+| **lockApxUSD** | `amount` | `balanceOf_apxUSD(msg.sender) ≥ amount` ∧ `amount > 0` | `apxUSD.transferFrom(msg.sender, vault, amount)`; `shares = amount * 1e27 / computeExchangeRate(s)` — the **live** rate, as the deployment's `previewDeposit` is; `totalSupply_apyUSD += shares`; `apyUSD.mint(msg.sender, shares)`. Floor rounding means a deposit below the current share price mints fewer shares than it pays for, matching `previewDeposit(1 wei) = 0` read on-chain (§5, `README` §9.3). |
 | **requestUnlock** *(standard redemption request)* | `amount` | `!globalPause` ∧ `balanceOf_apxUSD(msg.sender) ≥ amount` | Burn `amount` **apxUSD** from `msg.sender`; enforce **at most one pending standard request per user** — if the caller already has a pending standard position, top it up (`amount` added, cooldown reset); else open a fresh one. Cooldown `= now + 20 days`; mint/refresh the caller's `apxUSD_unlock` NFT. |
-| **claimUnlock** | `requestId` | `(msg.sender == owner(requestId)` **∨ `msg.sender == unlockTokenOperator`**`)` ∧ `block.timestamp ≥ cooldownEnd[requestId]` | Burn NFT; `apxUSD.mint(owner(requestId), amount)`; delete `requestId` entry. The vault (as configured operator) may trigger this on behalf of the owner. |
+| **claimUnlock** | `requestId` | `(msg.sender == owner(requestId)` **∨ `msg.sender == unlockTokenOperator`**`)` ∧ `block.timestamp ≥ cooldownEnd[requestId]` | Burn NFT; `apxUSD.mint(owner(requestId), amount)`; **retire the position** — clear `unlockRequests[requestId]` *and* the owner's `unlockRequestId` pointer (`retireStandardUnlock`), mirroring `CommitToken.redeem`'s `delete _requests[owner]`. Clearing only the NFT left the settled entry live and made the holder's next request permanently unclaimable (`README` §9.3). The vault (as configured operator) may trigger this on behalf of the owner. |
 | **redeemApxUSD** *(arbitrage redemption pathway)* | `amount` | `!globalPause` ∧ `whitelist[msg.sender]` ∧ **`apxUSDMarketPrice < 1e27`** (apxUSD trading below $1) ∧ `balanceOf_apxUSD(msg.sender) ≥ amount` ∧ `usdcReserve ≥ amount·redemptionValue/1e27` ∧ the step does not decrease the buffer | Burn `amount` apxUSD; `usdcReserve -= amount·redemptionValue/1e27`; `USDC.transfer(msg.sender, amount·redemptionValue/1e27)`; `totalSupply_apxUSD -= amount`. |
 | **withdraw** | `assets`, `receiver` | `balanceOf_apyUSD(msg.sender) ≥ assets / exchangeRate` | Pull vested yield from `LinearVestV0`; burn corresponding apyUSD shares; deposit `assets` into `UnlockToken` (creates unlock NFT with 20‑day cooldown). |
-| **redeem** | `shares`, `receiver` | `!globalPause` ∧ `balanceOf_apyUSD(msg.sender) ≥ shares` ∧ vault holds enough apxUSD after pulling vested yield | Pull vested yield; `assets = shares·exchangeRate/1e27`; burn `shares` apyUSD; `vaultApxUSDBal -= assets`; open a standard unlock position for `receiver` (`assets`, 20-day cooldown); recompute `exchangeRate`. |
+| **redeem** | `shares`, `receiver` | `!globalPause` ∧ `balanceOf_apyUSD(msg.sender) ≥ shares` ∧ vault holds enough apxUSD after pulling vested yield | Pull vested yield **first**, then price: `assets = shares·computeExchangeRate(pullVestedYield s)/1e27`. The deployment does the same, with the comment "Pull vested yield so liquid assets match `totalAssets()`". Burn `shares` apyUSD; `vaultApxUSDBal -= assets`; open a standard unlock position for `receiver` (`assets`, 20-day cooldown) — a **fresh** position per call, matching `redeemForReceipt`, which mints a new `UnlockReceipt` and returns its own `tokenId`. |
 | **flexibleRequestUnlock** | `amount` | `!globalPause` ∧ `balanceOf_apxUSD(msg.sender) ≥ amount` | Burn `amount` apxUSD; open a *flexible* unlock position (records `requestTime`); multiple concurrent flexible requests are allowed. |
 | **flexibleClaimUnlock** | `requestId` | (owner ∨ operator) ∧ `now ≥ requestTime + 3 days` | Burn the flexible NFT; `apxUSD.mint(owner, amount − fee)`, `fee = amount·feeBps/10000` with `feeBps` declining linearly from 3.5% to a 0.1% floor. |
 | **pause / unpause** | – | `msg.sender` has `PAUSE_ROLE` | Set `globalPause = true / false`. |
 | **addToWhitelist / removeFromWhitelist** | `addr` | `msg.sender` has `ADMIN_ROLE` | `whitelist[addr] = true / false`. |
 | **addToDenylist / removeFromDenylist** | `addr` | `msg.sender` has `ADMIN_ROLE` | `denylist[addr] = true / false`. |
 | **setYieldRate** | `bps` | `msg.sender == admin` ∧ `now ≥ lastRateSetTime + 30 days` (monthly cadence) ∧ `bps ≤ collateralYieldBase` (bounded by the prior month's collateral-derived yield) | `yieldRateMonth = bps`; `lastRateSetTime = now`; `collateralYieldBase` refreshed from the current collateral state (becomes next month's basis). |
-| **creditYield** | `amount` (USDC) | `msg.sender` == `YieldDistributor` | Accrue the already-vested portion first (`fullyVestedAmount += newlyVested`), then rebase the pool (`vestTotal := unvested + amount`) and reset `vestStart := now` — so previously accrued yield is **preserved**, not forfeited (REQ‑credit‑preserves‑accrued‑vest). Also `usdcReserve += amount`. |
+| **creditYield** | `amount` (apxUSD) | `msg.sender` == `YieldDistributor` | Accrue the already-vested portion first (`fullyVestedAmount += newlyVested`), then rebase the pool (`vestTotal := unvested + amount`) and reset `vestStart := now` — so previously accrued yield is **preserved**, not forfeited (REQ-credit-preserves-accrued-vest). **Does not touch `usdcReserve`**: `IVesting.depositYield` moves apxUSD into the vesting contract and nothing else, and the USDC redemption reserve is `RedemptionPoolV0`, a different contract. Crediting both inflated the collateral side of the solvency invariant for free (`README` §9.3). |
 | **setApxUSDMarketPrice** | `price` | `msg.sender == oracle` | `apxUSDMarketPrice = price`. Gates the `mintApxUSD` arbitrage pathway. |
 | **setVestPeriod** | `p` | `msg.sender == admin` | Accrue already-vested first (`fullyVestedAmount += newlyVested`), rebase `vestTotal := unvested`, reset `vestStart := now`, then `vestPeriod = p` — same preservation as creditYield (REQ‑credit‑preserves‑accrued‑vest). |
 | **voteBufferDeployment** | – | `msg.sender` holds governance tokens ≥ threshold | If the vote reaches the threshold, set `bufferDeployed = true` (governs intermediate-risk buffer deployment). |
@@ -107,6 +107,37 @@ The model's `redemptionValue` is the first. The second is out of scope: nothing 
 system reads it, so adding an inert second field would not buy a theorem. What *is* unmodelled
 is the **divergence** between the two — a redemption price and a pool price that no invariant
 ties together — and that surface belongs to the Curve pool, outside this state machine.
+
+**The ERC-4626 vault, read from verified source (2026-07-30).** `ApyUSD` is a UUPS proxy
+(`0x38EE…8a6A`) over implementation `0xfd616567…b112`, built on OpenZeppelin upgradeable **5.5.0**.
+Four facts here changed the model rather than merely annotating it; see `README` §9.3 and
+`deployment_ground_truth.md`.
+
+| On-chain | Model |
+|---|---|
+| `totalAssets()` is a `view`: `asset.balanceOf(this) + vesting.vestedAmount()`. There is **no stored exchange rate** — every conversion recomputes. `convertToAssets(1e18)` was checked to equal `1e18 * totalAssets / totalSupply` exactly | `totalAssets` has the same shape, and pricing now reads the derived `computeExchangeRate` at every site. The `exchangeRate` field is a published record only |
+| `_convertToShares(a,r) = a.mulDiv(totalSupply() + 10**_decimalsOffset(), totalAssets() + 1, r)`, with `_decimalsOffset() = 0` | `computeExchangeRate` carries the same `+1` virtual share and virtual asset, which is also what removes every division-by-zero path |
+| `previewDeposit` Floor, `previewMint` **Ceil**, `previewWithdraw` Ceil, `previewRedeem` Floor | Matched. `previewMint` was Floor and under-charged the minter; `redeemAssetsCeil` fixes it |
+| `withdraw`/`redeem` call `vesting.pullVestedYield()` **before** pricing ("so liquid assets match `totalAssets()`") | Matched — both branches price off `computeExchangeRate (pullVestedYield s)` |
+
+Two further facts are recorded but **not** modelled:
+
+- **`_decimalsOffset() = 0`**, and `deposit()` does not revert on a zero-share result. So the vault's
+  only structural inflation-attack defence is OpenZeppelin's single virtual share. The model carries
+  exactly that and no more, which is why `README` §4.2 reports the attack as *mitigated* rather than
+  impossible. `depositForMinShares` / `mintForMaxAssets` / `withdrawForMaxShares` /
+  `redeemForMinAssets` all exist as the user-side slippage guards.
+- **A vault-side `unlockingFee`** is charged upfront inside `_withdraw`, live value `1e15` = **10 bps**,
+  which is the production target named in the contract's own docstring. The model has no counterpart:
+  its only unlock fee is the flexible-redemption schedule, which belongs to the receipt. Any
+  fee-related theorem here is therefore about the receipt fee, not the vault fee.
+
+**Receipts are per-withdrawal, and the model matches.** `withdrawForReceipt` / `redeemForReceipt`
+return a fresh `tokenId` per call, so the vault path deliberately opens a *new* position each time.
+The single-pending-request rule belongs to the `CommitToken`/`UnlockToken` registry, whose
+`_requestRedeem` does `request.shares += shares`. `Apyx.lean` routes both mechanisms through one
+registry, so `req_single_pending_redemption_per_user` is scoped to the `requestUnlock` path and does
+not claim uniqueness — see its docstring.
 
 **Other differences, all in the direction of the model being narrower than the implementation:**
 
