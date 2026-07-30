@@ -593,17 +593,24 @@ cd lean
 lake build D2fsSpecs
 ```
 
-`D2fsSpecs` is the library of analyzed systems; naming it explicitly compiles the eight Apyx
+`D2fsSpecs` is the library of analyzed systems; naming it explicitly compiles the twelve Apyx
 modules below, plus the regression tests in
 [`review_witnesses/Regression.lean`](review_witnesses/Regression.lean), and nothing else. (A bare `lake build` additionally compiles
 `TemplateExamples`, a fictional model that regression-tests the reusable proof templates in
 `templates/`; it is unrelated to Apyx.)
 
-`lake build` exiting `0` with no `sorry` warnings **is** the proof-checking event: the Lean kernel
-re-verifies every theorem from source. Every theorem depends only on Lean's standard `propext` and
-`Quot.sound` axioms (one blast-radius theorem additionally uses `Classical.choice`) — all standard, trusted
-axioms of Lean's logic; none is an unproved assumption. Compile status is recorded in
-[`leancheck.json`](leancheck.json).
+`lake build` exiting `0` with **zero warnings** and no `sorry` is the proof-checking event: the
+Lean kernel re-verifies every theorem from source. A `#print axioms` sweep over all 270 public
+theorems in the tree finds only Lean's three standard axioms and no `sorryAx`: 48 depend on
+`propext` alone, 20 on nothing at all, 196 on `propext` and `Quot.sound`, and six additionally on
+`Classical.choice` — `req_flexible_redemption_multiple_requests` and
+`req_configurable_vesting_period` in [`Apyx.lean`](Apyx.lean), and
+`admin_alone_moves_redemption_price`, `admin_alone_drains_reserve`,
+`rfq_payout_is_set_by_execution_timing` and `pool_redeem_floor_is_the_redeemers` in
+[`BlastRadius.lean`](BlastRadius.lean). All three are standard, trusted axioms of Lean's logic;
+none is an unproved assumption about Apyx. Compile status for the requirement theorems is recorded
+in [`leancheck.json`](leancheck.json), whose counts cover §3 only, not the adversarial and
+deployment-gap modules.
 
 ---
 
