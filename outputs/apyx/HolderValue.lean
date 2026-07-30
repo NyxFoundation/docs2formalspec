@@ -35,30 +35,35 @@ namespace Apyx
 
 /-! ## The positions the old measure dropped -/
 
+/-- What id `i` contributes to `a`'s standard-position total: the amount if `a` owns the
+position there, otherwise nothing. -/
+def stdAmt (s : State) (a : Address) (i : Nat) : Nat :=
+  match s.unlockRequests i with
+  | some (o, amt, _) => if o = a then amt else 0
+  | none => 0
+
+/-- Same, for flexible positions. -/
+def flexAmt (s : State) (a : Address) (i : Nat) : Nat :=
+  match s.flexibleUnlockRequests i with
+  | some (o, amt, _, _) => if o = a then amt else 0
+  | none => 0
+
 /-- apxUSD held inside `a`'s pending **standard** unlock positions.
 
-Folded over `List.range s.nextUnlockId`: `createStandardUnlock` only ever allocates at the
+Summed over `List.range s.nextUnlockId`: `createStandardUnlock` only ever allocates at the
 current counter and then increments it, so every live position sits at an id strictly below it.
 That bound is what makes a `Σ` over positions available in a model whose registry is a bare
-function. -/
+function — the summation `docs/06` recorded as unavailable. -/
 def stdPositions (s : State) (a : Address) : Nat :=
-  (List.range s.nextUnlockId).foldl
-    (fun acc i =>
-      match s.unlockRequests i with
-      | some (o, amt, _) => if o = a then acc + amt else acc
-      | none => acc) 0
+  ((List.range s.nextUnlockId).map (stdAmt s a)).sum
 
-/-- apxUSD held inside `a`'s pending **flexible** unlock positions. Same fold, same bound. -/
+/-- apxUSD held inside `a`'s pending **flexible** unlock positions. Same sum, same bound. -/
 def flexPositions (s : State) (a : Address) : Nat :=
-  (List.range s.nextUnlockId).foldl
-    (fun acc i =>
-      match s.flexibleUnlockRequests i with
-      | some (o, amt, _, _) => if o = a then acc + amt else acc
-      | none => acc) 0
+  ((List.range s.nextUnlockId).map (flexAmt s a)).sum
 
 /-- Everything `a` owns, in apxUSD units, priced at the state's **live** rate.
 
-The four terms the old `valueAt` had, plus the two it dropped. apxUSD and USDC are both counted
+The three terms the old `valueAt` had, plus the two it dropped. apxUSD and USDC are both counted
 at par (the model treats them as commensurate — see `model.md` §5, "No decimal scaling"), apyUSD
 is converted through `redeemAssets` at `computeExchangeRate`, and pending positions are counted
 at face because that is what they settle to. -/
@@ -78,39 +83,131 @@ def netValue (s : State) (a : Address) : Int := (holderValue s a : Int)
 statement `Nat` could not make. -/
 def netDelta (s s' : State) (a : Address) : Int := netValue s' a - netValue s a
 
-/-! ## The fold, and what it counts -/
+/-! ## Making the position sum computable across a step
 
-/-- Folding an accumulator that only ever adds is monotone in the accumulator, and the fold
-splits off its seed. Stated as the shape both position sums need. -/
-private theorem foldl_add_seed (l : List Nat) (f : Nat → Nat) (z : Nat) :
-    l.foldl (fun acc i => acc + f i) z = z + l.foldl (fun acc i => acc + f i) 0 := by
-  induction l generalizing z with
-  | nil => simp
-  | cons i l ih =>
-    simp only [List.foldl_cons]
-    rw [ih (z + f i), ih (0 + f i)]
-    omega
+Two facts suffice: the sum splits over `++`, and it depends on the registry only at the ids it
+visits. `List.range_succ` then handles the one-id growth a fresh position causes.
+-/
 
-/-- An all-`none` registry contributes nothing to the fold, over any id list. -/
-private theorem foldl_positions_none (l : List Nat) (s : State) (a : Address)
-    (h : ∀ i ∈ l, s.unlockRequests i = none) :
-    l.foldl (fun acc i =>
-      match s.unlockRequests i with
-      | some (o, amt, _) => if o = a then acc + amt else acc
-      | none => acc) 0 = 0 := by
-  induction l with
-  | nil => rfl
-  | cons i l ih =>
-    have hi : s.unlockRequests i = none := h i List.mem_cons_self
-    simp only [List.foldl_cons, hi]
-    exact ih (fun j hj => h j (List.mem_cons_of_mem _ hj))
+/-- The sum only depends on the registry at the ids it visits. -/
+theorem stdPositions_congr_on (s s' : State) (a : Address) (n : Nat)
+    (hn : s.nextUnlockId = n) (hn' : s'.nextUnlockId = n)
+    (h : ∀ i, i < n → s.unlockRequests i = s'.unlockRequests i) :
+    stdPositions s a = stdPositions s' a := by
+  unfold stdPositions
+  rw [hn, hn']
+  congr 1
+  apply List.map_congr_left
+  intro i hi
+  simp only [stdAmt, h i (List.mem_range.mp hi)]
 
-/-- Positions at ids the fold does not reach contribute nothing: the sum only looks below
-`nextUnlockId`. -/
-theorem stdPositions_eq_zero_of_no_positions (s : State) (a : Address)
-    (h : ∀ i, i < s.nextUnlockId → s.unlockRequests i = none) :
-    stdPositions s a = 0 :=
-  foldl_positions_none _ s a (fun i hi => h i (List.mem_range.mp hi))
+/-- **Creating a fresh position adds exactly its amount to the owner's sum**, and nothing to
+anyone else's. This is the general form the module's witnesses were standing in for. -/
+theorem stdPositions_createStandardUnlock (s : State) (owner : Address) (amount : Nat)
+    (a : Address) :
+    stdPositions (createStandardUnlock s owner amount) a
+      = stdPositions s a + (if owner = a then amount else 0) := by
+  have hnext : (createStandardUnlock s owner amount).nextUnlockId = s.nextUnlockId + 1 := rfl
+  unfold stdPositions
+  rw [hnext, List.range_succ, List.map_append, List.sum_append]
+  have hagree : ((List.range s.nextUnlockId).map (stdAmt (createStandardUnlock s owner amount) a))
+      = (List.range s.nextUnlockId).map (stdAmt s a) := by
+    apply List.map_congr_left
+    intro i hi
+    have hne : i ≠ s.nextUnlockId := Nat.ne_of_lt (List.mem_range.mp hi)
+    simp [stdAmt, createStandardUnlock, hne]
+  rw [hagree]
+  congr 1
+  simp [stdAmt, createStandardUnlock]
+
+/-- A fresh standard position never touches the flexible sum: `createStandardUnlock` writes no
+flexible entry, and the one new id it opens carries none. -/
+theorem flexPositions_createStandardUnlock (s : State) (owner : Address) (amount : Nat)
+    (a : Address) (h_unalloc : s.flexibleUnlockRequests s.nextUnlockId = none) :
+    flexPositions (createStandardUnlock s owner amount) a = flexPositions s a := by
+  have hnext : (createStandardUnlock s owner amount).nextUnlockId = s.nextUnlockId + 1 := rfl
+  have hflex : (createStandardUnlock s owner amount).flexibleUnlockRequests
+      = s.flexibleUnlockRequests := rfl
+  unfold flexPositions
+  rw [hnext, List.range_succ, List.map_append, List.sum_append]
+  have hagree : ((List.range s.nextUnlockId).map (flexAmt (createStandardUnlock s owner amount) a))
+      = (List.range s.nextUnlockId).map (flexAmt s a) := by
+    apply List.map_congr_left
+    intro i _
+    simp [flexAmt, hflex]
+  have hlast : flexAmt (createStandardUnlock s owner amount) a s.nextUnlockId = 0 := by
+    simp [flexAmt, hflex, h_unalloc]
+  rw [hagree]
+  simp [hlast]
+
+/-! ## The holder-centric law, as a general theorem
+
+This is what the module exists for: under the *complete* measure, filing a standard redemption
+does not move the filer's value. `Safety.valueAt` reported a strict fall here, purely because the
+position the burn turns into was unmeasured.
+-/
+
+/-- **Filing a standard redemption is value-neutral for the filer**, under the complete measure.
+
+The fresh-position branch: the caller has no live standard position, so `requestUnlockStep` takes
+the `createStandardUnlock` route. The apxUSD leaves the balance and reappears in the position, at
+face, and every other term of `holderValue` is untouched — `requestUnlock` moves no shares, no
+USDC, and nothing the live rate depends on. -/
+theorem requestUnlock_holderValue_neutral (s : State) (amount : Nat) (caller : Address)
+    (s' : State)
+    (h_step : step s (Op.requestUnlock amount) caller = some s')
+    (h_fresh : s.unlockRequestId caller = none)
+    (h_unalloc_flex : s.flexibleUnlockRequests s.nextUnlockId = none)
+    (h_bal : amount ≤ s.apxUSDBal caller) :
+    holderValue s' caller = holderValue s caller := by
+  -- invert the `requestUnlock` branch locally (`Apyx.lean`'s inversion lemma is `private`)
+  have hs' : s' = requestUnlockStep s caller amount := by
+    simp only [step] at h_step
+    split at h_step
+    · exact absurd h_step (by simp)
+    · split at h_step
+      · exact absurd h_step (by simp)
+      · exact (Option.some.inj h_step).symm
+  subst hs'
+  have hstep_eq : requestUnlockStep s caller amount
+      = createStandardUnlock (burnApxUSD s caller amount) caller amount := by
+    unfold requestUnlockStep
+    simp [burnApxUSD, h_fresh]
+  rw [hstep_eq]
+  unfold holderValue
+  have hbal : (createStandardUnlock (burnApxUSD s caller amount) caller amount).apxUSDBal caller
+      = s.apxUSDBal caller - amount := by
+    simp [createStandardUnlock, burnApxUSD]
+  have hstd : stdPositions (createStandardUnlock (burnApxUSD s caller amount) caller amount) caller
+      = stdPositions s caller + amount := by
+    rw [stdPositions_createStandardUnlock, if_pos rfl]
+    congr 1
+  have hflex : flexPositions (createStandardUnlock (burnApxUSD s caller amount) caller amount) caller
+      = flexPositions s caller := by
+    rw [flexPositions_createStandardUnlock (burnApxUSD s caller amount) caller amount caller
+      h_unalloc_flex]
+    rfl
+  have hshares : (createStandardUnlock (burnApxUSD s caller amount) caller amount).apyUSDBal caller
+      = s.apyUSDBal caller := by simp [createStandardUnlock, burnApxUSD]
+  have husdc : (createStandardUnlock (burnApxUSD s caller amount) caller amount).usdcBal caller
+      = s.usdcBal caller := by simp [createStandardUnlock, burnApxUSD]
+  have hrate : computeExchangeRate (createStandardUnlock (burnApxUSD s caller amount) caller amount)
+      = computeExchangeRate s := by
+    simp [computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount, createStandardUnlock,
+      burnApxUSD]
+  rw [hbal, hstd, hflex, hshares, husdc, hrate]
+  omega
+
+/-- The signed form of the same statement. -/
+theorem requestUnlock_netDelta_zero (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.requestUnlock amount) caller = some s')
+    (h_fresh : s.unlockRequestId caller = none)
+    (h_unalloc_flex : s.flexibleUnlockRequests s.nextUnlockId = none)
+    (h_bal : amount ≤ s.apxUSDBal caller) :
+    netDelta s s' caller = 0 := by
+  unfold netDelta netValue
+  rw [requestUnlock_holderValue_neutral s amount caller s' h_step h_fresh h_unalloc_flex h_bal]
+  omega
 
 /-! ## The holder-centric laws
 
