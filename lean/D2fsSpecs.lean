@@ -7,6 +7,5 @@ import D2fsSpecs.LiquidationBatcher
 import D2fsSpecs.MinterRateLimit
 import D2fsSpecs.RedemptionOracle
 import D2fsSpecs.BlastRadius
-import D2fsSpecs.Japandefencemap
 import D2fsSpecs.Safety
 import D2fsSpecs.SpecDefects
