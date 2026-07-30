@@ -682,6 +682,8 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
       some s5
   | Op.requestUnlock amount =>
     if s.globalPause then none
+    -- burns the caller's apxUSD, so it passes the `_update` hook
+    else if s.denylist caller then none
     else if s.apxUSDBal caller < amount then none
     else some (requestUnlockStep s caller amount)
   | Op.claimUnlock requestId =>
@@ -699,6 +701,9 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
   | Op.redeemApxUSD amount =>
     -- arbitrage redemption pathway: only open while apxUSD trades below $1.00
     if s.globalPause then none
+    -- burns the caller's apxUSD, so it passes the deployment's ERC-20 `_update` hook, which
+    -- `ApyUSD` overrides against `ERC20DenyListUpgradable` — see `TokenMoveAllowed`
+    else if s.denylist caller then none
     else if ¬ s.whitelist caller then none
     else if ray ≤ s.apxUSDMarketPrice then none
     else if s.apxUSDBal caller < amount then none
@@ -761,6 +766,8 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
           some s6
   | Op.flexibleRequestUnlock amount =>
     if s.globalPause then none
+    -- burns the caller's apxUSD, so it passes the `_update` hook
+    else if s.denylist caller then none
     else if s.apxUSDBal caller < amount then none
     else
       let s1 := burnApxUSD s caller amount
@@ -1307,7 +1314,9 @@ private theorem step_requestUnlock_some (s : State) (amount : Nat) (caller : Add
   · exact absurd h (by simp)
   · split at h
     · exact absurd h (by simp)
-    · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+    · split at h
+      · exact absurd h (by simp)
+      · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
 
 private theorem step_flexibleRequestUnlock_some (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.flexibleRequestUnlock amount) caller = some s') :
@@ -1318,7 +1327,9 @@ private theorem step_flexibleRequestUnlock_some (s : State) (amount : Nat) (call
   · exact absurd h (by simp)
   · split at h
     · exact absurd h (by simp)
-    · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+    · split at h
+      · exact absurd h (by simp)
+      · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
 
 private theorem step_claimUnlock_some (s : State) (id : Nat) (caller : Address) (s' : State)
     (h : step s (Op.claimUnlock id) caller = some s') :
@@ -1385,7 +1396,10 @@ private theorem step_redeemApxUSD_some (s : State) (amount : Nat) (caller : Addr
           · exact absurd h (by simp)
           · split at h
             · exact absurd h (by simp)
-            · exact ⟨by simp_all, by simp_all, by omega, by omega, by omega, (Option.some.inj h).symm⟩
+            · split at h
+              · exact absurd h (by simp)
+              · exact ⟨by simp_all, by simp_all, by omega, by omega, by omega,
+                  (Option.some.inj h).symm⟩
 
 private theorem step_executeRFQRedemption_some (s : State) (user : Address) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.executeRFQRedemption user amount) caller = some s') :
@@ -1630,14 +1644,15 @@ a pending unlock whose cooldown deadline lies in the future, and claiming it in 
 instant reverts.) -/
 theorem req_redemption_async_process (s : State) (amount : Nat) (caller : Address)
     (h1 : s.globalPause = false) (h2 : amount ≤ s.apxUSDBal caller)
- :
+    -- the burn passes the ERC-20 `_update` hook, so a deny-listed caller reverts
+    (hd : s.denylist caller = false) :
     ∃ s' id amt, step s (Op.requestUnlock amount) caller = some s' ∧
       s'.unlockRequestId caller = some id ∧
       s'.unlockRequests id = some (caller, amt, s.now + cooldownPeriod) ∧
       step s' (Op.claimUnlock id) caller = none := by
   obtain ⟨id, amt, hptr, hreq⟩ := requestUnlockStep_caller_position s caller amount
   refine ⟨requestUnlockStep s caller amount, id, amt, ?_, hptr, hreq, ?_⟩
-  · simp [step, h1, Nat.not_lt.mpr h2]
+  · simp [step, h1, hd, Nat.not_lt.mpr h2]
   · have hnow := requestUnlockStep_now s caller amount
     simp only [step, hreq]
     have hlt : (requestUnlockStep s caller amount).now < s.now + cooldownPeriod := by
@@ -1656,13 +1671,15 @@ not merely unproved but **unstateable**. This is the positive half: request, let
 elapse, claim — all three inside one trace. -/
 theorem redemption_cycle_closes_after_cooldown (s : State) (amount : Nat) (caller : Address)
     (h1 : s.globalPause = false) (h2 : amount ≤ s.apxUSDBal caller)
-    (h3 : s.unlockRequestId caller = none) :
+    (h3 : s.unlockRequestId caller = none)
+    -- the burn passes the ERC-20 `_update` hook, so a deny-listed caller reverts
+    (hd : s.denylist caller = false) :
     ∃ s₁ s₂,
       step s (Op.requestUnlock amount) caller = some s₁ ∧
       step s₁ (Op.tick cooldownPeriod) caller = some s₂ ∧
       step s₂ (Op.claimUnlock s.nextUnlockId) caller ≠ none := by
   refine ⟨requestUnlockStep s caller amount, _, ?_, rfl, ?_⟩
-  · simp [step, h1, Nat.not_lt.mpr h2]
+  · simp [step, h1, hd, Nat.not_lt.mpr h2]
   · simp only [step, requestUnlockStep, burnApxUSD, h3, createStandardUnlock]
     simp [cooldownPeriod, day]
 
@@ -1750,25 +1767,28 @@ multiple concurrent flexible redemption unlock requests. (Model: two back-to-bac
 unlock requests both succeed and leave two distinct live requests owned by the caller.) -/
 theorem req_flexible_redemption_multiple_requests (s : State) (a1 a2 : Nat) (caller : Address)
     (h1 : s.globalPause = false) (h2 : a1 + a2 ≤ s.apxUSDBal caller)
- :
+    -- the burn passes the ERC-20 `_update` hook, so a deny-listed caller reverts
+    (hd : s.denylist caller = false) :
     ∃ s1 s2, step s (Op.flexibleRequestUnlock a1) caller = some s1 ∧
       step s1 (Op.flexibleRequestUnlock a2) caller = some s2 ∧
       (∃ rt1 ce1, s2.flexibleUnlockRequests s.nextUnlockId = some (caller, a1, rt1, ce1)) ∧
       (∃ rt2 ce2, s2.flexibleUnlockRequests (s.nextUnlockId + 1) = some (caller, a2, rt2, ce2)) := by
   have hs1 : step s (Op.flexibleRequestUnlock a1) caller
       = some (createFlexibleUnlock (burnApxUSD s caller a1) caller a1) := by
-    simp [step, h1, Nat.not_lt.mpr (by omega : a1 ≤ s.apxUSDBal caller)]
+    simp [step, h1, hd, Nat.not_lt.mpr (by omega : a1 ≤ s.apxUSDBal caller)]
   have hpause : (createFlexibleUnlock (burnApxUSD s caller a1) caller a1).globalPause = false := by
     simp [createFlexibleUnlock, burnApxUSD, h1]
   have hbal : ¬ ((createFlexibleUnlock (burnApxUSD s caller a1) caller a1).apxUSDBal caller < a2) := by
     simp [createFlexibleUnlock, burnApxUSD]
     omega
+  have hden : (createFlexibleUnlock (burnApxUSD s caller a1) caller a1).denylist caller = false := by
+    simp [createFlexibleUnlock, burnApxUSD, hd]
   refine ⟨createFlexibleUnlock (burnApxUSD s caller a1) caller a1,
           createFlexibleUnlock
             (burnApxUSD (createFlexibleUnlock (burnApxUSD s caller a1) caller a1) caller a2)
             caller a2,
           hs1, ?_, ?_, ?_⟩
-  · simp [step, hpause, hbal]
+  · simp [step, hpause, hbal, hden]
   · exact ⟨s.now, s.now + cooldownPeriod, by simp [createFlexibleUnlock, burnApxUSD]⟩
   · exact ⟨s.now, s.now + cooldownPeriod, by simp [createFlexibleUnlock, burnApxUSD]⟩
 
@@ -2728,7 +2748,9 @@ theorem req_redemption_value (s : State) (amount : Nat) (caller : Address)
     (h1 : s.globalPause = false) (h2 : s.whitelist caller = true)
     (h3 : s.apxUSDBal caller ≥ amount)
     (h4 : s.usdcReserve ≥ (amount * s.redemptionValue) / ray)
-    (h5 : s.apxUSDMarketPrice < ray) :
+    (h5 : s.apxUSDMarketPrice < ray)
+    -- the burn passes the ERC-20 `_update` hook, so a deny-listed redeemer reverts
+    (hd : s.denylist caller = false) :
     ∃ s', step s (Op.redeemApxUSD amount) caller = some s' := by
   have hbuf : overcollateralizationBuffer s ≤ overcollateralizationBuffer
       { burnApxUSD s caller amount with
@@ -2738,7 +2760,8 @@ theorem req_redemption_value (s : State) (amount : Nat) (caller : Address)
     overcollateralizationBuffer_mono _ _ (by simp [burnApxUSD]) (by simp [burnApxUSD])
       (by simp [burnApxUSD])
   rcases ho : step s (Op.redeemApxUSD amount) caller with _ | s'
-  · exact absurd ho (by simp [step, h1, h2, Nat.not_le.mpr h5, Nat.not_lt.mpr h3, Nat.not_lt.mpr h4, Nat.not_lt.mpr hbuf])
+  · exact absurd ho (by simp [step, h1, hd, h2, Nat.not_le.mpr h5, Nat.not_lt.mpr h3,
+      Nat.not_lt.mpr h4, Nat.not_lt.mpr hbuf])
   · exact ⟨s', rfl⟩
 
 

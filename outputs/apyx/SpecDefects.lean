@@ -104,6 +104,9 @@ theorem req_catastrophic_backstop_distributes_buffer :
 The redeem guards' fields are set explicitly (all to plausible values) so evaluation is closed. -/
 private def floorWitness : State :=
   { (default : State) with
+      -- set explicitly: `default` is not a reliable source for fields a
+      -- witness depends on (`Regression.lean` §R11)
+      denylist := fun _ => false,
       globalPause := false, whitelist := fun _ => true, apxUSDBal := fun _ => 1,
       redemptionValue := 0, apxUSDMarketPrice := 0, usdcReserve := 0,
       totalCollateralValue := 0, totalSupply_apxUSD := 1 }

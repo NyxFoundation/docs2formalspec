@@ -167,7 +167,9 @@ theorem requestUnlock_holderValue_neutral (s : State) (amount : Nat) (caller : A
     · exact absurd h_step (by simp)
     · split at h_step
       · exact absurd h_step (by simp)
-      · exact (Option.some.inj h_step).symm
+      · split at h_step
+        · exact absurd h_step (by simp)
+        · exact (Option.some.inj h_step).symm
   subst hs'
   have hstep_eq : requestUnlockStep s caller amount
       = createStandardUnlock (burnApxUSD s caller amount) caller amount := by

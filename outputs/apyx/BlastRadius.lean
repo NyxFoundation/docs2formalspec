@@ -261,7 +261,9 @@ private theorem inv_requestUnlock (s : State) (amount : Nat) (caller : Address) 
   · exact absurd h (by simp)
   · split at h
     · exact absurd h (by simp)
-    · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+    · split at h
+      · exact absurd h (by simp)
+      · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
 
 /-- A standard `requestUnlock` only ever assigns an unlock-token owner at the current
 registry counter; any other position keeps its owner. (Re-derived locally over
@@ -310,7 +312,9 @@ private theorem inv_flexibleRequestUnlock (s : State) (amount : Nat) (caller : A
   · exact absurd h (by simp)
   · split at h
     · exact absurd h (by simp)
-    · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+    · split at h
+      · exact absurd h (by simp)
+      · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
 
 private theorem inv_claimUnlock (s : State) (id : Nat) (caller : Address) (s' : State)
     (h : step s (Op.claimUnlock id) caller = some s') :
@@ -377,7 +381,10 @@ private theorem inv_redeemApxUSD (s : State) (amount : Nat) (caller : Address) (
           · exact absurd h (by simp)
           · split at h
             · exact absurd h (by simp)
-            · exact ⟨by simp_all, by simp_all, by omega, by omega, by omega, (Option.some.inj h).symm⟩
+            · split at h
+              · exact absurd h (by simp)
+              · exact ⟨by simp_all, by simp_all, by omega, by omega, by omega,
+                  (Option.some.inj h).symm⟩
 
 private theorem inv_withdraw (s : State) (assets : Nat) (receiver caller : Address) (s' : State)
     (h : step s (Op.withdraw assets receiver) caller = some s') :
@@ -1969,6 +1976,9 @@ of one apxUSD, a reserve of `N`, and a redemption price of `N * ray` (i.e. `N` d
 per apxUSD). One apxUSD redeems for `N` USDC. -/
 private def noCapWitness (N : Nat) : State :=
   { (default : State) with
+      -- set explicitly: `default` is not a reliable source for fields a
+      -- witness depends on (`Regression.lean` §R11)
+      denylist := fun _ => false,
       whitelist := fun _ => true
       apxUSDBal := fun _ => 1
       redemptionValue := N * ray

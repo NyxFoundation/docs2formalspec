@@ -128,7 +128,9 @@ private theorem inv_requestUnlock (s : State) (amount : Nat) (caller : Address) 
   · exact absurd h (by simp)
   · split at h
     · exact absurd h (by simp)
-    · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+    · split at h
+      · exact absurd h (by simp)
+      · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
 
 private theorem inv_flexibleRequestUnlock (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.flexibleRequestUnlock amount) caller = some s') :
@@ -139,7 +141,9 @@ private theorem inv_flexibleRequestUnlock (s : State) (amount : Nat) (caller : A
   · exact absurd h (by simp)
   · split at h
     · exact absurd h (by simp)
-    · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+    · split at h
+      · exact absurd h (by simp)
+      · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
 
 private theorem inv_claimUnlock (s : State) (id : Nat) (caller : Address) (s' : State)
     (h : step s (Op.claimUnlock id) caller = some s') :
@@ -206,7 +210,10 @@ private theorem inv_redeemApxUSD (s : State) (amount : Nat) (caller : Address) (
           · exact absurd h (by simp)
           · split at h
             · exact absurd h (by simp)
-            · exact ⟨by simp_all, by simp_all, by omega, by omega, by omega, (Option.some.inj h).symm⟩
+            · split at h
+              · exact absurd h (by simp)
+              · exact ⟨by simp_all, by simp_all, by omega, by omega, by omega,
+                  (Option.some.inj h).symm⟩
 
 private theorem inv_withdraw (s : State) (assets : Nat) (receiver caller : Address) (s' : State)
     (h : step s (Op.withdraw assets receiver) caller = some s') :
@@ -1561,6 +1568,9 @@ private def feeWitness : State :=
       globalPause := false
       nextUnlockId := 0
       totalSupply_apxUSD := 10000
+      -- set explicitly: `default` is not a reliable source for fields a witness depends on
+      -- (`Regression.lean` §R11)
+      denylist := fun _ => false
       apxUSDBal := fun a => if a = 0 then 10000 else 0 }
 
 private def flexRun (wait : Nat) : List (Op × Address) :=

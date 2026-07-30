@@ -491,4 +491,35 @@ example (s s' : State) : s.usdcReserve - s'.usdcReserve ≤ stepCost s s' :=
 example (s s' : State) : s.totalSupply_apxUSD - s'.totalSupply_apxUSD ≤ stepCost s s' :=
   claims_out_le_stepCost s s'
 
+/-! ## R13 — the redemption paths are deny-list gated, as the deployment gates them
+
+`code_review_lean.md` §2.6: `redeemApxUSD`, `requestUnlock`, `flexibleRequestUnlock` and
+`poolRedeem` carried no deny-list check, so the model was **more permissive than the chain**.
+On-chain `ApyUSD` overrides `_update` against both `ERC20PausableUpgradeable` and
+`ERC20DenyListUpgradable`, so every mint, burn and transfer is gated structurally rather than by
+remembering to check in each entry point.
+
+Three of the four are gated now; the claim paths are still open (see `README` §9.3).
+-/
+
+def dl : State :=
+  { (default : State) with
+      globalPause := false
+      whitelist := fun _ => true
+      denylist := fun a => a = 1
+      apxUSDBal := fun a => if a = 1 then 100 else if a = 2 then 100 else 0
+      totalSupply_apxUSD := 200
+      usdcReserve := 100
+      redemptionValue := ray
+      apxUSDMarketPrice := ray - 1 }
+
+/-- **A deny-listed holder cannot burn.** All three gated paths revert for address 1. -/
+example : step dl (Op.redeemApxUSD 100) 1 = none := by decide
+example : step dl (Op.requestUnlock 100) 1 = none := by decide
+example : step dl (Op.flexibleRequestUnlock 100) 1 = none := by decide
+
+/-- And an ordinary holder is unaffected — the gate is the deny-list, not a blanket block. -/
+example : step dl (Op.requestUnlock 100) 2 ≠ none := by decide
+example : step dl (Op.flexibleRequestUnlock 100) 2 ≠ none := by decide
+
 end Apyx
