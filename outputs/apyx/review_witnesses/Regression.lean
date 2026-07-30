@@ -1,4 +1,4 @@
-import D2fsSpecs.Safety
+import D2fsSpecs.HolderValue
 
 /-!
 # Regression tests for the ERC-4626 pricing fix
@@ -391,5 +391,61 @@ example :
           TLOp.direct (Op.requestUnlock 100) 1]).base.redemptionValue = 0
       ∧ (execTraceTL q [TLOp.direct (Op.tick 100) 0,
           TLOp.direct (Op.requestUnlock 100) 1]).pending.length = 1 := by decide
+
+/-! ## R10 — the per-holder measure now covers the payout channels
+
+`code_review_lean.md` flagged twice that `Safety.valueAt` omits pending unlock positions — the
+place `requestUnlock`/`withdraw`/`redeem` put the payout — so the caller laws read as "the holder
+loses value" when the truth is "the holder is not extracting value".
+[`../HolderValue.lean`](../HolderValue.lean) closes the measure and proves the three channels
+generally. This section pins the arithmetic on a concrete holder.
+-/
+
+def pv0 : State :=
+  { (default : State) with
+      globalPause := false
+      apxUSDBal := fun a => if a = 1 then 100 else 0
+      totalSupply_apxUSD := 100
+      -- `default` does NOT mean "no pending request" — see R11 below
+      unlockRequestId := fun _ => none }
+
+def pv1 : State := execTrace pv0 [(Op.requestUnlock 100, 1)]
+
+/-- The old measure records a total loss; the complete one records none. Same step. -/
+example : callerValue pv0 1 = 100 ∧ callerValue pv1 1 = 0 := by decide
+example : holderValue pv0 1 = 100 ∧ holderValue pv1 1 = 100 := by decide
+example : netDelta pv0 pv1 1 = 0 := by decide
+
+/-- And the gap between the two measures is exactly the position sum, in every state. -/
+example (s : State) (a : Address) :
+    callerValue s a + stdPositions s a + flexPositions s a = holderValue s a :=
+  callerValue_add_positions s a
+
+/-- The general form, applied here: filing is value-neutral for the filer with no side
+    conditions beyond the branch and the balance. -/
+example : netDelta pv0 pv1 1 = 0 :=
+  requestUnlock_netDelta_zero pv0 100 1 pv1 rfl (by decide) (by decide) (by decide)
+
+/-! ## R11 — `default : State` is not the empty state, and one field is actively misleading
+
+Found while applying `requestUnlock_netDelta_zero` to a `default`-derived witness: the hypothesis
+`unlockRequestId caller = none` came out **false**.
+
+`unlockRequestId : Address → Option Nat`, and `Address` is `Nat`, so the type is
+`Nat → Option Nat` — which `some` itself inhabits. Lean's `Inhabited` derivation picks it, so in
+`default : State` **every address already points at a request id equal to its own address**.
+
+Nothing proved so far is wrong because of it: `requestUnlockStep` follows the pointer to
+`unlockRequests`, which *is* all-`none` by default, so it falls through to the create branch and
+behaves as an empty registry. But any *hypothesis* of the form "this holder has no pending
+request" is false on a `default`-derived state, and a witness that assumed otherwise would be
+silently vacuous rather than failing loudly. Witnesses must set the field explicitly.
+-/
+
+example : (default : State).unlockRequestId 7 = some 7 := by decide
+example : (default : State).unlockRequests 7 = none := by decide
+
+/-- Which is why `pv0` sets it, and the hypothesis then holds. -/
+example : pv0.unlockRequestId 1 = none := by decide
 
 end Apyx

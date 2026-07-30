@@ -1,4 +1,4 @@
-import D2fsSpecs.BlastRadius
+import D2fsSpecs.Safety
 
 /-!
 # A complete, signed, per-holder value ledger (`docs/06` §7.3 E3)
@@ -337,6 +337,79 @@ theorem redeem_receiver_position_gain (s : State) (shares : Nat) (receiver calle
   rw [stdPositions_of_fresh_entry s s' receiver
     (redeemAssets shares (computeExchangeRate (pullVestedYield s))) (s.now + cooldownPeriod)
     receiver hnext hold hnew, if_pos rfl]
+
+/-! ## The bridge to `Safety.valueAt`
+
+Making the relationship explicit, rather than leaving readers to compare two definitions by eye.
+`Safety.callerValue` is exactly `holderValue` minus the two position sums — so every
+`caller_value_*` theorem in `Safety.lean` is a statement about a strict *under*-count of what the
+address owns, and the gap is precisely the pending-redemption channel.
+-/
+
+/-- `Safety.callerValue` is `holderValue` with the positions removed. -/
+theorem callerValue_add_positions (s : State) (a : Address) :
+    callerValue s a + stdPositions s a + flexPositions s a = holderValue s a := by
+  unfold callerValue valueAt holderValue
+  omega
+
+/-- So the old measure never over-counts. -/
+theorem callerValue_le_holderValue (s : State) (a : Address) :
+    callerValue s a ≤ holderValue s a := by
+  have h := callerValue_add_positions s a
+  omega
+
+/-- **What `caller_value_withdraw_fixedRate`'s "fall" actually is.** Withdrawing to yourself moves
+nothing of yours except shares, and the payout appears in your position sum at face value.
+
+`Safety.caller_value_withdraw_fixedRate` records this step as a decrease, and that reading is an
+artifact of the missing term: `apxUSDBal` and `usdcBal` are untouched, so everything the old
+measure saw leave went into the position it was not counting. -/
+theorem withdraw_to_self_moves_only_shares (s : State) (assets : Nat) (caller : Address)
+    (s' : State) (h_step : step s (Op.withdraw assets caller) caller = some s') :
+    stdPositions s' caller = stdPositions s caller + assets ∧
+    s'.apxUSDBal caller = s.apxUSDBal caller ∧
+    s'.usdcBal caller = s.usdcBal caller := by
+  refine ⟨withdraw_receiver_position_gain s assets caller caller s' h_step, ?_, ?_⟩
+  · have hpost : s' = emitEvent (updateExchangeRate (createStandardUnlock
+          { burnApyUSD (pullVestedYield s) caller
+              (withdrawShares assets (computeExchangeRate (pullVestedYield s))) with
+            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller
+              (withdrawShares assets (computeExchangeRate (pullVestedYield s)))).vaultApxUSDBal
+                - assets }
+          caller assets)) "Withdraw"
+        [caller, caller, caller, assets,
+          withdrawShares assets (computeExchangeRate (pullVestedYield s))] := by
+      simp only [step] at h_step
+      split at h_step
+      · exact absurd h_step (by simp)
+      · split at h_step
+        · exact absurd h_step (by simp)
+        · split at h_step
+          · exact absurd h_step (by simp)
+          · split at h_step
+            · exact absurd h_step (by simp)
+            · exact (Option.some.inj h_step).symm
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  · have hpost : s' = emitEvent (updateExchangeRate (createStandardUnlock
+          { burnApyUSD (pullVestedYield s) caller
+              (withdrawShares assets (computeExchangeRate (pullVestedYield s))) with
+            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller
+              (withdrawShares assets (computeExchangeRate (pullVestedYield s)))).vaultApxUSDBal
+                - assets }
+          caller assets)) "Withdraw"
+        [caller, caller, caller, assets,
+          withdrawShares assets (computeExchangeRate (pullVestedYield s))] := by
+      simp only [step] at h_step
+      split at h_step
+      · exact absurd h_step (by simp)
+      · split at h_step
+        · exact absurd h_step (by simp)
+        · split at h_step
+          · exact absurd h_step (by simp)
+          · split at h_step
+            · exact absurd h_step (by simp)
+            · exact (Option.some.inj h_step).symm
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
 
 /-! ## The holder-centric laws
 
