@@ -107,3 +107,58 @@
 
 `vesting()` = `0x0d62b4cc02b4b51ed19ddf41d7a7979cf394c99f` (LinearVest) は本セッションで取得済み。
 `RedemptionPoolV0` が実際にデプロイされ稼働中かどうかは未確認 (model.md §5「Not verified」のまま)。
+
+---
+
+## 追加取得 (2026-07-30、第2セッション) — モデルに無い手数料機構
+
+sourcify から `src/ApyUSD.sol` / `src/FeeCurve.sol` を再取得し、プロキシ
+`0x38EEb52F0771140d10c4E9A9a72349A329Fe8a6A` に対してライブ読み取りを実施。
+
+| 呼び出し | 値 | 含意 |
+|---|---|---|
+| `unlockingFee()` | `1e15` = **10 bps** | 稼働中。モデルには対応する項が無い |
+| `feeWallet()` | `0x6f93635f2a1c19b4f7f1bd9ba655f6a073c629dc` | ゼロでもvault自身でもないので、手数料は**vault外へ出る** |
+| `unlockToken()` | `0x93775e2dfa4e716c361a1f53f212c7ae031bf4e6` | |
+| `receipt()` | `0x9bf51f33955ec70f87c4b5c49441815589043237` | |
+| `totalSupply()` | 128,449,132.273516284371364816 | |
+| `totalAssets()` | 180,310,584.281533099520335160 | |
+
+### 1. vault側 `unlockingFee` — モデルに存在しない
+
+`ApyUSD._withdraw` は毎回の `withdraw`/`redeem` で手数料を徴収する:
+
+```solidity
+uint256 fee = _feeOnRaw(assets, $.unlockingFee);
+super._withdraw(caller, address(this), owner, assets + fee, shares);  // GROSS で株を焼く
+if (fee > 0 && feeRecipient != address(0) && feeRecipient != address(this))
+    IERC20(asset()).safeTransfer(feeRecipient, fee);                  // 手数料は vault を出る
+IERC20(asset()).approve(address($.unlockReceipt), assets);
+$.unlockReceipt.mint(receiver, SafeCast.toUint208(assets));           // receipt は NET を預かる
+```
+
+`_feeOnRaw` / `_feeOnTotal` はいずれも `Math.Rounding.Ceil`(1 wei 未満に丸め消えない)。
+`setUnlockingFee` は `fee <= MAX_FEE`(5%)のみを課す。
+
+→ モデルの `Op.withdraw` は `assets` 分だけ株を焼き `assets` を position に入れる。
+実装は `assets + fee` 分焼き、`fee` は系外へ出る。**モデルは出金者を過小請求し、vault を過大計上**する。
+
+### 2. `receiver == owner` ガード — モデルに存在しない
+
+`_withdraw` は `if (receiver != owner) revert InvalidCaller();` を持つ。モデルの
+`Op.withdraw assets receiver` の4ガードは receiver に一切言及しない(`withdraw_receiver_unconstrained`)。
+
+### 3. `FeeCurve` — モデルの形が違う
+
+`src/FeeCurve.sol` の `fee()` はクランプ付きパラメータ曲線
+(`minFee`, `maxFee`, `minDuration`, `maxDuration`, `curvature`)。定数境界は
+`MAX_FEE = 0.05e18`、`MAX_DURATION = 90 days`、`curvature ∈ [0.1e18, 10e18]`。
+
+**重要**: docstring が明示するとおり `minDuration` は**ロック期間と曲線のゼロ点を兼ねる**。
+`fee()` は `elapsed <= minDuration` で `maxFee` を返すので、**最初に請求可能になる瞬間の
+手数料はちょうど `maxFee`**。モデルは `minFlexibleClaim = 3 day` と `cooldownPeriod = 20 day`
+に役割を分離しているため 2.99% までしか届かず、README §2.3 の「3.5% は到達不能」は
+**モデル由来の人工物**だった(`feeRate_at_first_claim` で訂正)。
+
+以上は [`DeploymentFees.lean`](DeploymentFees.lean) に形式化済み(12定理、公理は
+`propext` / `Quot.sound` のみ)。
