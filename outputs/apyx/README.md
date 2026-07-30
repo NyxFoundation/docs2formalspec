@@ -677,12 +677,21 @@ prices off it, and the field survives only as a published record. `no_dilution` 
 `exchange_rate_monotone_deposit` are now about the live price and are *stronger* — their backing
 and non-zero-supply side conditions are gone.
 
-**2. `x / 0 = 0` let an address with no shares drain the vault.** With `exchangeRate = 0` — the
-`default` value — `withdrawShares` returned 0, so the share-balance guard read `0 < 0` and passed.
-The `+ 1` terms above are OpenZeppelin's virtual share and virtual asset
-(`_convertToShares(a,r) = a.mulDiv(totalSupply() + 10**_decimalsOffset(), totalAssets() + 1, r)`
-with `_decimalsOffset() = 0`). Carrying them makes the denominator structurally non-zero, so the
-whole class is now unreachable rather than merely unwitnessed.
+**2. `x / 0 = 0` let an address with no shares drain the vault** — and it took two passes to close.
+With `exchangeRate = 0` — the `default` value — `withdrawShares` returned 0, so the share-balance
+guard read `0 < 0` and passed. The `+ 1` terms above are OpenZeppelin's virtual share and virtual
+asset (`_convertToShares(a,r) = a.mulDiv(totalSupply() + 10**_decimalsOffset(), totalAssets() + 1, r)`
+with `_decimalsOffset() = 0`), and carrying them makes the *denominator* structurally non-zero.
+
+**That was not sufficient, and a re-review of this fix caught it.** `computeExchangeRate` itself
+still floors to 0 whenever `(totalAssets + 1) * ray < totalSupply_apyUSD + 1`, so with a funded
+vault and enough shares outstanding the same drain reappeared. On-chain the real property is
+stronger than a non-zero denominator: `previewWithdraw` is
+`ceil(assets * (totalSupply + 1) / (totalAssets + 1))`, so for `assets ≥ 1` it is at least 1 — a
+positive withdrawal always costs positive shares. `step`'s `withdraw` branch now enforces that
+directly, and `Regression.lean` §R4b pins both the corner and the fix. The lesson is recorded
+rather than smoothed over: "the denominator can't be zero" is not the same claim as "the quotient
+can't be zero", and the first was initially written as if it settled the second.
 
 **3. Settling a standard unlock stranded the next request.** `claimUnlock` burned the receipt but
 left `unlockRequests id` and `unlockRequestId owner` set. A later `requestUnlock` topped up the

@@ -222,7 +222,9 @@ private theorem inv_withdraw (s : State) (assets : Nat) (receiver caller : Addre
     · exact absurd h (by simp)
     · split at h
       · exact absurd h (by simp)
-      · exact ⟨by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
+      · split at h
+        · exact absurd h (by simp)
+        · exact ⟨by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
 
 private theorem inv_redeem (s : State) (shares : Nat) (receiver caller : Address) (s' : State)
     (h : step s (Op.redeem shares receiver) caller = some s') :

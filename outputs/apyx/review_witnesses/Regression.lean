@@ -132,9 +132,46 @@ example : u0.exchangeRate = 0 ∧ withdrawShares 100 (computeExchangeRate (pullV
 /-- **The fix.** Address `9` holds no shares, so the withdrawal reverts. -/
 example : step u0 (Op.withdraw 100 9) 9 = none := by decide
 
-/-- The denominator of the live rate is `totalSupply_apyUSD + 1`, so it is positive in every
-    state — the whole `x / 0` class is unreachable, not merely unwitnessed. -/
+/-- The *denominator* of the live rate is `totalSupply_apyUSD + 1`, so `computeExchangeRate` is
+    always well-defined. That is weaker than it first looks — see R4b. -/
 example (s : State) : 0 < s.totalSupply_apyUSD + 1 := Nat.succ_pos _
+
+/-! ### R4b — the rate itself can still floor to zero, and that needed its own guard
+
+Found while re-reviewing the R4 fix. `computeExchangeRate` is
+`((totalAssets + 1) * ray) / (totalSupply_apyUSD + 1)`, which floors to **0** whenever
+`(totalAssets + 1) * ray < totalSupply_apyUSD + 1` — roughly `totalSupply_apyUSD > totalAssets * 1e27`.
+A non-zero denominator therefore did *not* close the `x / 0` class: `withdrawShares assets 0` is
+still `0`, so the share-balance guard read `0 < 0` and the drain from R4 came back in that corner.
+
+On-chain the property is structural rather than incidental: `previewWithdraw` is
+`ceil(assets * (totalSupply + 1) / (totalAssets + 1))`, whose denominator is at least 1, so for
+`assets ≥ 1` it is at least 1 — a positive withdrawal always costs positive shares. `step` now
+enforces exactly that.
+-/
+
+/-- `totalAssets = 1` but ~`2 * ray` shares outstanding, so the live rate floors to 0 — with a
+    **funded** vault, which is what made the old corner exploitable. -/
+def k0 : State :=
+  { (default : State) with
+      globalPause := false
+      vaultApxUSDBal := 1
+      totalSupply_apyUSD := 2 * ray + 5
+      apyUSDBal := fun a => if a = 1 then 2 * ray + 5 else 0 }
+
+example : totalAssets k0 = 1 ∧ computeExchangeRate k0 = 0 := by decide
+
+/-- And `withdrawShares` really does return 0 there, which is what bypassed the share guard. -/
+example : withdrawShares 1 (computeExchangeRate (pullVestedYield k0)) = 0 := by decide
+
+/-- **The fix.** Address `9` holds no shares; the withdrawal reverts instead of draining. Before
+    the guard this returned `some`, moved the vault's asset out, burned nothing, and left `9`
+    holding a claimable unlock position. -/
+example : step k0 (Op.withdraw 1 9) 9 = none := by decide
+
+/-- Nothing moved. -/
+example : (execTrace k0 [(Op.withdraw 1 9, 9)]).vaultApxUSDBal = 1
+        ∧ (execTrace k0 [(Op.withdraw 1 9, 9)]).unlockRequests 0 = none := by decide
 
 /-! ## R5 — the first depositor is no longer robbed
 

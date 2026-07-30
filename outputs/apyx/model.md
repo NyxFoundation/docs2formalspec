@@ -116,7 +116,7 @@ Four facts here changed the model rather than merely annotating it; see `README`
 | On-chain | Model |
 |---|---|
 | `totalAssets()` is a `view`: `asset.balanceOf(this) + vesting.vestedAmount()`. There is **no stored exchange rate** — every conversion recomputes. `convertToAssets(1e18)` was checked to equal `1e18 * totalAssets / totalSupply` exactly | `totalAssets` has the same shape, and pricing now reads the derived `computeExchangeRate` at every site. The `exchangeRate` field is a published record only |
-| `_convertToShares(a,r) = a.mulDiv(totalSupply() + 10**_decimalsOffset(), totalAssets() + 1, r)`, with `_decimalsOffset() = 0` | `computeExchangeRate` carries the same `+1` virtual share and virtual asset, which is also what removes every division-by-zero path |
+| `_convertToShares(a,r) = a.mulDiv(totalSupply() + 10**_decimalsOffset(), totalAssets() + 1, r)`, with `_decimalsOffset() = 0` | `computeExchangeRate` carries the same `+1` virtual share and virtual asset, so its denominator is never 0. The *quotient* can still floor to 0 in extreme states, so `withdraw` additionally enforces the deployment's stronger property — `previewWithdraw ≥ 1` for `assets ≥ 1` — as an explicit guard (`README` §9.3 item 2, `Regression.lean` §R4b) |
 | `previewDeposit` Floor, `previewMint` **Ceil**, `previewWithdraw` Ceil, `previewRedeem` Floor | Matched. `previewMint` was Floor and under-charged the minter; `redeemAssetsCeil` fixes it |
 | `withdraw`/`redeem` call `vesting.pullVestedYield()` **before** pricing ("so liquid assets match `totalAssets()`") | Matched — both branches price off `computeExchangeRate (pullVestedYield s)` |
 

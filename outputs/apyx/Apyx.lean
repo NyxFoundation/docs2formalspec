@@ -685,7 +685,15 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
       -- totalAssets()"), then prices off the live rate
       let s1 := pullVestedYield s
       let shares := withdrawShares assets (computeExchangeRate s1)
-      if s1.apyUSDBal caller < shares then none
+      -- A positive withdrawal must cost a positive number of shares. On-chain this is
+      -- structural: `previewWithdraw` is `ceil(assets * (totalSupply + 1) / (totalAssets + 1))`,
+      -- whose denominator is at least 1, so it never returns 0 for `assets ≥ 1`. The model's
+      -- ray-scaled `withdrawShares` *does* return 0 when the rate itself floors to 0, and
+      -- without this guard `apyUSDBal caller < 0` is false and an address holding no shares
+      -- drains the vault burning nothing (`Regression.lean` §R4b). Enforcing the deployment's
+      -- property directly is the faithful fix.
+      if 0 < assets ∧ shares = 0 then none
+      else if s1.apyUSDBal caller < shares then none
       else if s1.vaultApxUSDBal < assets then none
       else
         let s2 := burnApyUSD s1 caller shares
@@ -1148,7 +1156,9 @@ private theorem step_withdraw_some (s : State) (assets : Nat) (receiver caller :
     · exact absurd h (by simp)
     · split at h
       · exact absurd h (by simp)
-      · exact ⟨by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
+      · split at h
+        · exact absurd h (by simp)
+        · exact ⟨by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
 
 private theorem step_redeem_some (s : State) (shares : Nat) (receiver caller : Address) (s' : State)
     (h : step s (Op.redeem shares receiver) caller = some s') :
@@ -2938,13 +2948,21 @@ theorem req_new_locked_receives_yield (s : State) (amount : Nat) (caller : Addre
 theorem req_synchronous_withdraw_return_token (s : State) (assets : Nat) (receiver caller : Address)
     (h1 : s.globalPause = false)
     (h2 : (pullVestedYield s).apyUSDBal caller ≥ withdrawShares assets (computeExchangeRate (pullVestedYield s)))
-    (h3 : (pullVestedYield s).vaultApxUSDBal ≥ assets) :
+    (h3 : (pullVestedYield s).vaultApxUSDBal ≥ assets)
+    -- A positive withdrawal costs positive shares. On-chain this is automatic —
+    -- `previewWithdraw` cannot return 0 for `assets ≥ 1` — and the model's `step` now enforces
+    -- it as a guard, so it has to be supplied here.
+    (h4 : 0 < assets → 0 < withdrawShares assets (computeExchangeRate (pullVestedYield s))) :
     ∃ s', step s (Op.withdraw assets receiver) caller = some s' ∧
     (∃ id, s'.unlockTokenOwner id = some receiver ∧ s'.unlockTokenAmount id = assets) := by
   rcases ho : step s (Op.withdraw assets receiver) caller with _ | s'
   · have h2' : withdrawShares assets (computeExchangeRate (pullVestedYield s)) ≤ s.apyUSDBal caller := by simpa using h2
     have h3' : assets ≤ s.vaultApxUSDBal + vestedAmount s s.now := by simpa using h3
-    exact absurd ho (by simp [step, h1, h2', h3'])
+    have h4' : ¬ (0 < assets ∧ withdrawShares assets (computeExchangeRate (pullVestedYield s)) = 0) := by
+      rintro ⟨ha, hz⟩
+      have := h4 ha
+      omega
+    exact absurd ho (by simp [step, h1, h2', h3', h4'])
   · refine ⟨s', rfl, s.nextUnlockId, ?_⟩
     obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ ho
     subst hs'
