@@ -602,9 +602,9 @@ modules below, plus the regression tests in
 `templates/`; it is unrelated to Apyx.)
 
 `lake build` exiting `0` with **zero warnings** and no `sorry` is the proof-checking event: the
-Lean kernel re-verifies every theorem from source. A `#print axioms` sweep over all 270 public
+Lean kernel re-verifies every theorem from source. A `#print axioms` sweep over all 274 public
 theorems in the tree finds only Lean's three standard axioms and no `sorryAx`: 48 depend on
-`propext` alone, 20 on nothing at all, 196 on `propext` and `Quot.sound`, and six additionally on
+`propext` alone, 23 on nothing at all, 197 on `propext` and `Quot.sound`, and six additionally on
 `Classical.choice` — `req_flexible_redemption_multiple_requests` and
 `req_configurable_vesting_period` in [`Apyx.lean`](Apyx.lean), and
 `admin_alone_moves_redemption_price`, `admin_alone_drains_reserve`,
