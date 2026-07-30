@@ -540,6 +540,25 @@ example : step { dlc with globalPause := true, denylist := fun _ => false }
 /-- And a matured position with a clean owner on a live token still settles. -/
 example : step { dlc with denylist := fun _ => false } (Op.claimUnlock 0) 1 ≠ none := by decide
 
+/-- `flexibleClaimUnlock` takes the same treatment, and **also retires its registry entry** —
+    it used to burn the receipt alone, leaving `flexibleUnlockRequests id` set for ever. -/
+def dlf : State :=
+  { dl with
+      now := minFlexibleClaim
+      nextUnlockId := 1
+      flexibleUnlockRequests := fun i =>
+        if i = 0 then some (1, 50, 0, cooldownPeriod) else none
+      unlockTokenOwner := fun i => if i = 0 then some 1 else none
+      unlockTokenAmount := fun i => if i = 0 then 50 else 0 }
+
+example : step dlf (Op.flexibleClaimUnlock 0) 1 = none := by decide
+example : step { dlf with globalPause := true, denylist := fun _ => false }
+    (Op.flexibleClaimUnlock 0) 1 = none := by decide
+
+/-- With a clean owner it settles, and the entry is gone rather than left stale. -/
+example : (execTrace { dlf with denylist := fun _ => false }
+      [(Op.flexibleClaimUnlock 0, 1)]).flexibleUnlockRequests 0 = none := by decide
+
 /-- And an ordinary holder is unaffected — the gate is the deny-list, not a blanket block. -/
 example : step dl (Op.requestUnlock 100) 2 ≠ none := by decide
 example : step dl (Op.flexibleRequestUnlock 100) 2 ≠ none := by decide

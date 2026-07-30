@@ -175,7 +175,7 @@ private theorem inv_flexibleClaimUnlock (s : State) (id : Nat) (caller : Address
       s.unlockTokenOwner id = some owner ∧
       (caller = owner ∨ caller = s.unlockTokenOperator) ∧
       requestTime + minFlexibleClaim ≤ s.now ∧
-      s' = mintApxUSD (burnUnlockNFT s id) owner
+      s' = mintApxUSD (retireFlexibleUnlock s id) owner
         (amount - amount * flexibleUnlockFee requestTime s.now / 10000) := by
   simp only [step] at h
   split at h
@@ -184,11 +184,13 @@ private theorem inv_flexibleClaimUnlock (s : State) (id : Nat) (caller : Address
     split at h
     · exact absurd h (by simp)
     · split at h
-      · split at h
-        · exact absurd h (by simp)
-        · exact ⟨owner, amount, requestTime, cooldownEnd, heq, by simp_all, by assumption,
-            by omega, (Option.some.inj h).symm⟩
       · exact absurd h (by simp)
+      · split at h
+        · split at h
+          · exact absurd h (by simp)
+          · exact ⟨owner, amount, requestTime, cooldownEnd, heq, by simp_all, by assumption,
+              by omega, (Option.some.inj h).symm⟩
+        · exact absurd h (by simp)
 
 private theorem inv_redeemApxUSD (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.redeemApxUSD amount) caller = some s') :
@@ -387,16 +389,16 @@ private theorem penniless_step (s : State) (op : Op) (caller : Address) (s' : St
   case claimUnlock id =>
     obtain ⟨owner, amount, cooldownEnd, hreq, -, -, -, hs'⟩ := inv_claimUnlock _ _ _ _ h_step
     subst hs'
-    refine ⟨?_, by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hu], ?_,
-      by simpa [mintApxUSD, retireStandardUnlock, burnUnlockNFT] using hflex⟩
+    refine ⟨?_, by simp [mintApxUSD, retireStandardUnlock, retireFlexibleUnlock, burnUnlockNFT, hu], ?_,
+      by simpa [mintApxUSD, retireStandardUnlock, retireFlexibleUnlock, burnUnlockNFT] using hflex⟩
     · by_cases hao : a = owner
       · subst hao
         have h0 : amount = 0 := hstd id amount cooldownEnd hreq
-        simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, h0, hx]
-      · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hao, hx]
+        simp [mintApxUSD, retireStandardUnlock, retireFlexibleUnlock, burnUnlockNFT, h0, hx]
+      · simp [mintApxUSD, retireStandardUnlock, retireFlexibleUnlock, burnUnlockNFT, hao, hx]
     · -- settling retires the entry, so the surviving positions are a subset of the old ones
       intro i am ce hi
-      simp only [mintApxUSD, retireStandardUnlock, burnUnlockNFT] at hi
+      simp only [mintApxUSD, retireStandardUnlock, retireFlexibleUnlock, burnUnlockNFT] at hi
       by_cases hii : i = id
       · simp [hii] at hi
       · exact hstd i am ce (by simpa [hii] using hi)
@@ -460,14 +462,19 @@ private theorem penniless_step (s : State) (op : Op) (caller : Address) (s' : St
     obtain ⟨owner, amount, requestTime, cooldownEnd, hreq, -, -, -, hs'⟩ :=
       inv_flexibleClaimUnlock _ _ _ _ h_step
     subst hs'
-    refine ⟨?_, by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hu],
-      by simpa [mintApxUSD, retireStandardUnlock, burnUnlockNFT] using hstd,
-      by simpa [mintApxUSD, retireStandardUnlock, burnUnlockNFT] using hflex⟩
-    by_cases hao : a = owner
-    · subst hao
-      have h0 : amount = 0 := hflex id amount requestTime cooldownEnd hreq
-      simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, h0, hx]
-    · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hao, hx]
+    refine ⟨?_, by simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT, hu],
+      by simpa [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT] using hstd, ?_⟩
+    · by_cases hao : a = owner
+      · subst hao
+        have h0 : amount = 0 := hflex id amount requestTime cooldownEnd hreq
+        simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT, h0, hx]
+      · simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT, hao, hx]
+    · -- settling retires the flexible entry, so the surviving positions are a subset
+      intro i am rt ce hi
+      simp only [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT] at hi
+      by_cases hii : i = id
+      · simp [hii] at hi
+      · exact hflex i am rt ce (by simpa [hii] using hi)
   case executeRFQRedemption user amount =>
     obtain ⟨-, -, -, hle, -, hs'⟩ := inv_executeRFQRedemption _ _ _ _ _ h_step
     subst hs'
@@ -1603,6 +1610,7 @@ theorem flexible_fee_schedule_is_reachable :
     (execTrace feeWitness (flexRun (20 * day))).apxUSDBal 0 = 9990 := by
   refine ⟨?_, ?_, ?_⟩ <;>
     simp [flexRun, execTrace, step, feeWitness, createFlexibleUnlock, burnApxUSD,
-          mintApxUSD, burnUnlockNFT, flexibleUnlockFee, minFlexibleClaim, cooldownPeriod, day]
+          mintApxUSD, retireFlexibleUnlock, burnUnlockNFT, flexibleUnlockFee, minFlexibleClaim,
+          cooldownPeriod, day]
 
 end Apyx
