@@ -230,6 +230,31 @@ def createFlexibleUnlock (s : State) (owner : Address) (amount : Nat) : State :=
       unlockTokenAmount := fun i => if i = id then amount else s.unlockTokenAmount i
   }
 
+/-- The deployment's ERC-20 `_update` hook, as a gate.
+
+`ApyUSD` (and `ApxUSD`) override `_update` against **both** `ERC20PausableUpgradeable` and
+`ERC20DenyListUpgradable`:
+
+```solidity
+function _update(address from, address to, uint256 value)
+    override(ERC20Upgradeable, ERC20PausableUpgradeable, ERC20DenyListUpgradable)
+{ super._update(from, to, value); }
+```
+
+Every mint, burn and transfer routes through it, so pause and deny-list are enforced
+**structurally** rather than by remembering to check them in each entry point. This model used to
+place the checks per-operation and missed several — `redeemApxUSD`, `requestUnlock`,
+`flexibleRequestUnlock` and `poolRedeem` carried no deny-list check, and the two claim operations
+ignored `globalPause`. That made the model *more permissive than the chain*, which is the worse
+direction for a safety report.
+
+`TokenMoveAllowed s a` is that hook for the party whose balance the move touches: the token is not
+paused and `a` is not deny-listed. Each affected guard is written in the direct
+`s.globalPause || s.denylist a` form so `simp` can discharge it; `token_moves_are_hook_gated`
+below states that the balance-moving operations really are gated by this predicate. -/
+def TokenMoveAllowed (s : State) (a : Address) : Bool :=
+  !s.globalPause && !s.denylist a
+
 def burnUnlockNFT (s : State) (id : Nat) : State :=
   { s with
       unlockTokenOwner := fun i => if i = id then none else s.unlockTokenOwner i
@@ -892,7 +917,15 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
   | Op.setVestPeriod p =>
     -- accrue first, same pattern as `creditYield`: reconfiguring the vesting period
     -- must not forfeit whatever has already streamed out of the current clock.
-    if caller == s.admin then
+    --
+    -- `p = 0` is rejected, exactly as the deployment rejects it:
+    -- `LinearVestV0.setVestingPeriod` opens with
+    -- `if (newPeriod == 0) revert InvalidAmount("vestingPeriod", newPeriod);`.
+    -- Without this the model was *more permissive than the chain* — an admin could set the
+    -- period to 0 and realize the entire remaining stream in one step, which is what made
+    -- `setVestPeriod_preserves_accrued_vest` need its `0 < p` hypothesis.
+    if p = 0 then none
+    else if caller == s.admin then
       let nv := newlyVestedAmount s s.now
       some { s with
         fullyVestedAmount := s.fullyVestedAmount + nv
@@ -1596,7 +1629,8 @@ asynchronous process of request, cooldown, and claim. (Model: a request immediat
 a pending unlock whose cooldown deadline lies in the future, and claiming it in the same
 instant reverts.) -/
 theorem req_redemption_async_process (s : State) (amount : Nat) (caller : Address)
-    (h1 : s.globalPause = false) (h2 : amount ≤ s.apxUSDBal caller) :
+    (h1 : s.globalPause = false) (h2 : amount ≤ s.apxUSDBal caller)
+ :
     ∃ s' id amt, step s (Op.requestUnlock amount) caller = some s' ∧
       s'.unlockRequestId caller = some id ∧
       s'.unlockRequests id = some (caller, amt, s.now + cooldownPeriod) ∧
@@ -1715,7 +1749,8 @@ theorem req_cooldown_no_yield (s : State) :
 multiple concurrent flexible redemption unlock requests. (Model: two back-to-back flexible
 unlock requests both succeed and leave two distinct live requests owned by the caller.) -/
 theorem req_flexible_redemption_multiple_requests (s : State) (a1 a2 : Nat) (caller : Address)
-    (h1 : s.globalPause = false) (h2 : a1 + a2 ≤ s.apxUSDBal caller) :
+    (h1 : s.globalPause = false) (h2 : a1 + a2 ≤ s.apxUSDBal caller)
+ :
     ∃ s1 s2, step s (Op.flexibleRequestUnlock a1) caller = some s1 ∧
       step s1 (Op.flexibleRequestUnlock a2) caller = some s2 ∧
       (∃ rt1 ce1, s2.flexibleUnlockRequests s.nextUnlockId = some (caller, a1, rt1, ce1)) ∧
@@ -2840,14 +2875,14 @@ theorem req_buffer_non_decreasing (s s' : State) (op : Op) (caller : Address)
 be configurable. (Model: `Op.setVestPeriod` accrues the currently-streaming portion into
 `fullyVestedAmount` first — same pattern as `creditYield` — before applying the new
 period, so reconfiguring never forfeits already-accrued yield.) -/
-theorem req_configurable_vesting_period (s : State) (p : Nat) :
+theorem req_configurable_vesting_period (s : State) (p : Nat) (hp : 0 < p) :
     ∃ s', step s (Op.setVestPeriod p) s.admin = some s' ∧ s'.vestPeriod = p :=
   ⟨{ s with
       fullyVestedAmount := s.fullyVestedAmount + newlyVestedAmount s s.now
       vestTotal := s.vestTotal - newlyVestedAmount s s.now
       vestStart := s.now
       vestPeriod := p },
-   by simp [step], rfl⟩
+   by simp [step, Nat.pos_iff_ne_zero.mp hp], rfl⟩
 
 /-- REQ deposit-emits-event: The deposit(assets, receiver) function MUST emit a Deposit event with parameters (sender, receiver, owner, assets, shares) upon successful execution. -/
 theorem req_deposit_emits_event (s s' : State) (amount : Nat) (caller : Address)

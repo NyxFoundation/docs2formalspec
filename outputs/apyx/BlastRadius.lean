@@ -743,9 +743,11 @@ theorem step_setVestPeriod_exact (s : State) (p : Nat) (caller : Address) (s' : 
              vestPeriod := p } := by
   simp only [step] at h
   split at h
-  · rename_i hc
-    exact ⟨by simpa using hc, (Option.some.inj h).symm⟩
   · exact absurd h (by simp)
+  · split at h
+    · rename_i hc
+      exact ⟨by simpa using hc, (Option.some.inj h).symm⟩
+    · exact absurd h (by simp)
 
 /-- T3 (single step, frame form): an admin-gated operation demands the admin role
 and agrees with the pre-state on **every** field other than the ten
