@@ -29,8 +29,6 @@ of `docs/06` §8 remains inapplicable to Apyx by design (§8.1: aggregate ledger
 collateral).
 -/
 
-set_option maxRecDepth 20000
-
 namespace Apyx
 
 /-! ## The positions the old measure dropped -/

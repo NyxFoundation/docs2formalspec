@@ -56,8 +56,6 @@ constants, not a property of the protocol.
 
 namespace Apyx
 
-set_option maxRecDepth 100000
-
 /-! ## Fixed-point conventions
 
 `FEE_PRECISION = 1e18` in both files; the model's own amounts are unscaled (`model.md` §5, "no
