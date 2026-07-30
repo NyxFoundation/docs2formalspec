@@ -580,11 +580,22 @@ buffer included — out to holders pro-rata and zeroes the recorded buffer, whic
 deliberately ends the overcollateralized regime `Solvent` describes rather than
 operating inside it. -/
 
-/-- `Solvent s`: aggregate collateralization is maintained — outstanding apxUSD claims
-plus the required margin never exceed the collateral basket plus the USDC reserve.
-Exactly `req_overcollateralization_limit`'s invariant, named for trace-level use. -/
+/-- `Solvent s`: aggregate collateralization is maintained — outstanding apxUSD claims never
+exceed the collateral basket plus the USDC reserve.
+
+**The "required margin" term is gone, and its removal is the honest fix.** This used to read
+`totalSupply_apxUSD + s.overcollateralizationBuffer ≤ …`, using the `State` *field*
+`overcollateralizationBuffer`. That field is a different object from the computed
+`Apyx.overcollateralizationBuffer` (which `redeemApxUSD`'s guard uses), and the only operation
+that ever writes it is `catastrophicBackstop`, which sets it to `0`. It is `0` in `default` too,
+so along every reachable trace the term was identically zero — the name and the docstring
+promised a margin the statement did not carry. Dropping the term states exactly what is proved.
+
+A genuine margin condition would compare against the *computed* buffer; that needs the pending
+unlock liability on the left-hand side, which the aggregate ledger cannot express (see the
+exclusion list above and `README` §6.2). -/
 def Solvent (s : State) : Prop :=
-  s.totalSupply_apxUSD + s.overcollateralizationBuffer ≤ s.totalCollateralValue + s.usdcReserve
+  s.totalSupply_apxUSD ≤ s.totalCollateralValue + s.usdcReserve
 
 /-- The two ledger-consistency side-conditions `req_overcollateralization_limit` needs
 at every step: no address's apxUSD balance exceeds total supply, and the redemption

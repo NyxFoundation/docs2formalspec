@@ -2132,14 +2132,27 @@ theorem req_redemption_exchange_rate_multiplier (s : State) (shares : Nat)
   have hray : 0 < ray := Nat.pow_pos (by decide)
   exact (Nat.le_div_iff_mul_le hray).mpr (Nat.mul_le_mul_left _ h)
 
-/-- Each user MUST have at most one pending redemption request; if the user adds assets
-to an existing request, the cooldown timer MUST reset to the time of the update. (Model:
-this is now enforced by the transition system itself — `Op.requestUnlock` routes through
-`requestUnlockStep`, which tops up the caller's existing standard position rather than
-opening a second one, keyed on the single per-user `unlockRequestId` pointer. The theorem
-states the *reachable* invariant: after any successful standard redemption request, the
-caller's `unlockRequestId` resolves to exactly one position, holding an aggregated amount
-with a freshly reset cooldown deadline `now + cooldownPeriod`.) -/
+/-- Each user MUST have at most one pending redemption request; if the user adds assets to an
+existing request, the cooldown timer MUST reset to the time of the update.
+
+**What this theorem actually says**, stated precisely because the previous docstring overclaimed
+(review §1.3): after a successful `Op.requestUnlock`, the caller's `unlockRequestId` names a
+position holding an aggregated amount whose cooldown deadline is freshly reset to
+`now + cooldownPeriod`. `requestUnlockStep` does top up rather than open a second position — that
+is the *reset* half of the requirement, and it is what is proved here.
+
+It is **not** a uniqueness statement: the conclusion is `∃ id amt`, so it does not by itself rule
+out another live position owned by the same caller at a different id. Two caveats on that:
+
+* On the `requestUnlock` path uniqueness does hold, but as an *inductive invariant* over the
+  pointer, which is not formalized here — see the open item in `README` §5.
+* On the **vault** path it deliberately does not hold, and that is faithful. `Op.withdraw` /
+  `Op.redeem` call `createStandardUnlock` directly, mirroring `ApyUSD.withdrawForReceipt` /
+  `redeemForReceipt`, which mint a fresh `UnlockReceipt` NFT per call and return its own
+  `tokenId`. The single-pending rule belongs to the `CommitToken`/`UnlockToken` request registry
+  (`_requestRedeem` does `request.shares += shares`), not to the receipt path. The model carries
+  both mechanisms through one registry, so a user who both requests and withdraws holds two
+  positions — matching the deployment, not the requirement text, which describes only the former. -/
 theorem req_single_pending_redemption_per_user (s : State) (amount : Nat) (caller : Address)
     (s' : State) (h_step : step s (Op.requestUnlock amount) caller = some s') :
     ∃ id amt, s'.unlockRequestId caller = some id ∧
@@ -2189,8 +2202,10 @@ entire reserve — margin included — out to holders, ending the overcollateral
 this invariant describes.) -/
 theorem req_overcollateralization_limit (s : State) (op : Op) (caller : Address) (s' : State)
     (h_step : step s op caller = some s')
-    (h_inv : s.totalSupply_apxUSD + s.overcollateralizationBuffer
-      ≤ s.totalCollateralValue + s.usdcReserve)
+    -- The `s.overcollateralizationBuffer` *field* used to appear on both sides as a "required
+    -- margin". Only `catastrophicBackstop` ever writes it, and only to `0`, so the term was
+    -- identically zero on every reachable trace and the margin was rhetorical. Stated without it.
+    (h_inv : s.totalSupply_apxUSD ≤ s.totalCollateralValue + s.usdcReserve)
     (h_bal : ∀ a, s.apxUSDBal a ≤ s.totalSupply_apxUSD)
     (h_rv : s.redemptionValue ≤ ray)
     (h_not_claim : ∀ id, op ≠ Op.claimUnlock id)
@@ -2201,7 +2216,7 @@ theorem req_overcollateralization_limit (s : State) (op : Op) (caller : Address)
     -- right-hand side with the left untouched. It has to be a named exclusion, exactly as the
     -- stress loss and the backstop are — see `reserve_outflow_only_via_redemption`.
     (h_not_withdraw_reserve : ∀ amt r, op ≠ Op.withdrawReserve amt r) :
-    s'.totalSupply_apxUSD + s'.overcollateralizationBuffer
+    s'.totalSupply_apxUSD
       ≤ s'.totalCollateralValue + s'.usdcReserve := by
   cases op
   case poolRedeem amount receiver minOut =>
