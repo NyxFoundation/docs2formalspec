@@ -1,15 +1,16 @@
 import D2fsSpecs.HolderValue
 
 /-!
-# Two fee mechanisms the model does not have, formalized from the deployed Solidity
+# One fee mechanism the model lacks, and one it models with the wrong shape
 
 Everything here is read off verified sources fetched from sourcify for implementation
 `0xfd616567ecc1607f61073951a1e822f7315bb112` (`src/ApyUSD.sol`, `src/FeeCurve.sol`; solidity
 0.8.30, OpenZeppelin upgradeable 5.5.0), plus live reads against the proxy
 `0x38EEb52F0771140d10c4E9A9a72349A329Fe8a6A`. See `deployment_ground_truth.md`.
 
-The model in `Apyx.lean` was built from the documentation corpus, and the corpus does not mention
-either mechanism below. Both are live on chain today.
+The model in `Apyx.lean` was built from the documentation corpus. The corpus does not mention
+mechanism A **at all**; it describes mechanism B, but describes it wrongly, and the model inherits
+the error. Both mechanisms are live on chain today.
 
 ## A. The vault-side unlocking fee — absent from the model entirely
 
@@ -49,9 +50,16 @@ The model instead hardcodes a linear ramp anchored at request time with a *separ
 `minFlexibleClaim = 3 day` lock against a `cooldownPeriod = 20 day` ramp — so by the first
 claimable instant the model's fee has already decayed to 299 bps. That is the origin of the
 report's §2.3 finding ("the advertised 3.5% start is never charged; the real maximum is 2.99%").
-`feeRate_at_first_claim` below shows the deployment ties the two so that the maximum **is**
-charged at the first claimable instant — the §2.3 gap is an artifact of the model's split
-constants, not a property of the protocol.
+`feeRate_at_first_claim` shows the deployment ties the two so that the maximum **is** charged at
+the first claimable instant, and the live curve confirms it: `liveCurve` below is the struct
+returned by `UnlockReceipt.feeCurve()` on mainnet, and its `minDuration` is exactly the 3-day lock.
+
+That read also settles two numbers the corpus got wrong and the model copied. The corpus says the
+fee "declines linearly over time from 3.5% down to just 0.1%". Deployed, the decay is indeed
+linear (`curvature = 1e18`, the library's linear shortcut) over `minDuration = 3 days` to
+`maxDuration = 20 days` — but it runs from **3.4%**, not 3.5%, down to **0%**, not 0.1%. The
+model's `flexibleUnlockFee` hardcodes the corpus's 350 bps and its 10 bps floor; both are wrong,
+in opposite directions.
 -/
 
 namespace Apyx
@@ -102,7 +110,9 @@ def withdrawGross (assets feePct : Nat) : Nat := assets + feeOnRaw assets feePct
 
 /-- **The fee is never rounded away.** Ceil rounding means any positive withdrawal at a positive
 rate costs at least one unit — the deployment's "the holder pays at least 1 wei whenever the rate
-is non-zero". So there is no dust regime in which the model and the chain agree. -/
+is non-zero". So *whenever the rate is non-zero* there is no dust regime in which the two agree;
+at `feePct = 0` they agree exactly. As everywhere in this module, "the chain" means the
+transcription of `_feeOnRaw` above. -/
 theorem feeOnRaw_pos (assets feePct : Nat) (ha : 0 < assets) (hf : 0 < feePct) :
     0 < feeOnRaw assets feePct := by
   have hw : 0 < wad := by decide
@@ -114,10 +124,11 @@ theorem feeOnRaw_pos (assets feePct : Nat) (ha : 0 < assets) (hf : 0 < feePct) :
 /-- **The model under-charges every withdrawal**, strictly, at any positive rate. The deployment
 pulls `assets + fee` out of the vault against the withdrawer's shares; the model pulls `assets`.
 
-Since `withdrawShares` is monotone in its first argument, the deployment's share cost is at least
-the model's — so every "the withdrawer pays at most X shares" statement proved against the model
-is *looser* than what the chain enforces, and every "the vault retains at least Y" statement is
-*tighter* than what the chain delivers. -/
+Requires `0 < assets` and a positive rate. Since `withdrawShares` is monotone in its first
+argument, the deployment's share cost is at least the model's — so **both** directions of model
+statement are optimistic, not one looser and one tighter: "the withdrawer pays at most X shares"
+may be violated on chain because the chain charges more, and "the vault retains at least Y" may
+be violated because the chain retains less. Neither transfers without re-proof. -/
 theorem model_undercharges_withdraw (assets feePct : Nat) (ha : 0 < assets) (hf : 0 < feePct) :
     assets < withdrawGross assets feePct := by
   have := feeOnRaw_pos assets feePct ha hf
@@ -133,10 +144,16 @@ theorem withdrawShares_gross_ge_net (assets feePct R : Nat) :
     Nat.mul_le_mul_right _ (by omega)
   exact Nat.div_le_div_right (by omega)
 
-/-- The `redeem` counterpart. `previewRedeem` returns `gross - _feeOnTotal(gross, φ)`, so the
-receipt escrows strictly **less** than the model's position credit, which is the full `gross`
-(`redeem_receiver_position_gain`). Where `withdraw` under-charges the payer, `redeem`
-over-credits the receiver — the model errs in the user's favour on both vault legs. -/
+/-- The `redeem` counterpart, as **arithmetic**: subtracting a Ceil-rounded positive
+`feeOnTotal` from a positive `gross` lands strictly below `gross`.
+
+The bridge to the model is prose, not proof. `ApyUSD.previewRedeem` is
+`super.previewRedeem(shares) - _feeOnTotal(assets, unlockingFee)` in the verified source, while
+`redeem_receiver_position_gain` (`HolderValue.lean`) credits the receiver the full
+`redeemAssets shares …`. Nothing below ties the variable `gross` to that quantity, so read this
+as the arithmetic behind the claim rather than the claim itself: where `withdraw` under-charges
+the payer, `redeem` over-credits the receiver, and the model errs in the user's favour on both
+vault legs. -/
 theorem model_overcredits_redeem (gross feePct : Nat) (hg : 0 < gross) (hf : 0 < feePct) :
     gross - feeOnTotal gross feePct < gross := by
   have hw : 0 < feePct + wad := by unfold wad; omega
@@ -148,8 +165,10 @@ theorem model_overcredits_redeem (gross feePct : Nat) (hg : 0 < gross) (hf : 0 <
     omega
   omega
 
-/-- The live rate, pinned: at `unlockingFee() = 1e15` a 1000-unit withdrawal is charged exactly
-one unit — 0.1%, matching the on-chain read. The model charges zero. -/
+/-- The live rate, pinned: at `unlockingFee() = 1e15` a 1000-token withdrawal is charged exactly
+one token — 0.1%, matching the on-chain read. Note this witness is **WAD-scaled** (`1000 * wad`
+against a fee of `wad`), unlike the unscaled amounts the receipt witnesses below use; the vault
+fee is a rate against 18-decimal token amounts. The model charges zero either way. -/
 theorem live_fee_is_ten_bps : feeOnRaw (1000 * wad) liveUnlockingFee = wad := by
   unfold feeOnRaw ceilDiv liveUnlockingFee wad
   rfl
@@ -206,8 +225,10 @@ private theorem modelVaultAfterUnlocks_closed (v a : Nat) :
 /-- **The divergence is linear in the unlock count.** With enough balance to avoid truncation,
 the model over-states the vault by exactly `n * feeOnRaw a φ` after `n` unlocks.
 
-At the live rate (10 bps) that is 0.1% of every unlocked amount, compounding across the whole
-unlock flow — a systematic accounting gap, not a corner case. -/
+At the live rate (10 bps) that is 0.1% of every unlocked amount, accumulating linearly across
+the unlock flow — a systematic accounting gap, not a corner case. The two recursions abstract the
+model's and the deployment's vault updates; neither is tied to `Apyx.step` by proof, so the
+correspondence to `Op.withdraw` is by inspection. -/
 theorem vault_leak_linear (v a feePct n : Nat)
     (h_fund : n * withdrawGross a feePct ≤ v) :
     modelVaultAfterUnlocks v a n = vaultAfterUnlocks v a feePct n + n * feeOnRaw a feePct := by
@@ -225,19 +246,19 @@ arbitrary receiver and never compares it to the share owner, so it admits steps 
 — the same "model more permissive than the chain" direction as the deny-list gaps of §9.3.
 -/
 
-/-- The deployment's guard, as a predicate on the model's operation shape. -/
-def ReceiverIsOwner (receiver owner : Address) : Prop := receiver = owner
-
 /-- **The model's withdrawal never constrains the receiver.** If a withdrawal succeeds for one
 receiver it succeeds, from the same state and the same caller, for *every* receiver — the four
 guards on `Op.withdraw` (`globalPause`, the zero-share check, the share balance, the vault
 balance) mention only the caller and the amount.
 
-The deployment does constrain it: `_withdraw` reverts with `InvalidCaller()` unless
-`receiver == owner`, "to prevent third parties from minting the UnlockReceipt to themselves".
-So the model is **more permissive than the chain** on this path — the same direction as the
-deny-list gaps §9.3 closed, and the reason `holder_value_withdraw` has to carry a
-`receiver ≠ caller` branch that on chain is unreachable.
+The deployment compares `receiver` to **`owner`**, not to the caller: `_withdraw` reverts with
+`InvalidCaller()` unless `receiver == owner`, "to prevent third parties from minting the
+UnlockReceipt to themselves". ERC-4626 keeps the two apart — a spender with allowance calls with
+`caller ≠ owner` — and the model has no `owner` parameter at all, so identifying its `caller`
+with the chain's `owner` is a modelling choice rather than a chain fact. Under that
+identification the model is **more permissive than the chain** here, the same direction as the
+deny-list gaps §9.3 closed, and it is why `holder_value_withdraw` carries a `receiver ≠ caller`
+branch.
 
 Stated as a general receiver-independence result rather than a single witness: it says the guard
 is absent from the model, not merely that one state slips through. -/
@@ -268,7 +289,8 @@ def withdrawWitness : State :=
 
 /-- **`withdraw_receiver_unconstrained` is not vacuous.** Successful withdrawals exist, and the
 receiver really is free: the same caller, from the same state, succeeds while directing the
-receipt to two different third parties. On chain both of these revert with `InvalidCaller()`. -/
+receipt to two different third parties. (Read off the source, not proved here: on chain both of
+these revert with `InvalidCaller()`, under the caller-as-owner identification discussed above.) -/
 theorem withdraw_third_party_receipts_succeed :
     (step withdrawWitness (Op.withdraw 100 2) 1).isSome = true ∧
     (step withdrawWitness (Op.withdraw 100 7) 1).isSome = true ∧
@@ -338,8 +360,9 @@ theorem feeRate_at_max_duration (c : Curve) (powK : Nat → Nat) (elapsed : Nat)
   unfold Curve.feeRate
   rw [if_pos h]
 
-/-- The rate never exceeds `maxFee`, at any elapsed time and any curvature — the clamp is
-structural, not a consequence of the decay's shape. -/
+/-- The rate never exceeds `maxFee`, at any elapsed time and for any `powK` — the clamp is
+structural, not a consequence of the decay's shape. Needs `c.isValid`, whose `minFee ≤ maxFee`
+conjunct carries the `maxDuration ≤ elapsed` branch; without validity the claim is false. -/
 theorem feeRate_le_maxFee (c : Curve) (powK : Nat → Nat) (elapsed : Nat) (h : c.isValid) :
     c.feeRate powK elapsed ≤ c.maxFee := by
   obtain ⟨-, -, -, hfee, -, -, -⟩ := h
@@ -350,11 +373,11 @@ theorem feeRate_le_maxFee (c : Curve) (powK : Nat → Nat) (elapsed : Nat) (h : 
     · exact Nat.le_refl _
     · exact Nat.sub_le _ _
 
-/-- **`tHat` never exceeds one**, which is the fact `feeRate_ge_minFee`'s hypothesis rests on:
-the numerator `elapsed - minDuration` is below the denominator `maxDuration - minDuration`
-everywhere the interior branch is taken, so the WAD-scaled ratio is at most `1e18`. The library
-relies on exactly this when it casts to `int256` for `powWad` ("`tHat <= 1e18` (numerator can't
-exceed denominator)"). -/
+/-- **`tHat` never exceeds one, for any `elapsed` below `maxDuration`** — a strictly wider
+condition than the interior branch, which also needs `minDuration < elapsed`. The numerator
+`elapsed - minDuration` cannot exceed the denominator `maxDuration - minDuration`, so the
+WAD-scaled ratio is at most `1e18`. The library relies on exactly this when it casts to `int256`
+for `powWad` ("`tHat <= 1e18` (numerator can't exceed denominator)"). -/
 theorem tHat_le_wad (c : Curve) (elapsed : Nat) (h : elapsed < c.maxDuration) :
     c.tHat elapsed ≤ wad := by
   unfold Curve.tHat
@@ -366,10 +389,11 @@ theorem tHat_le_wad (c : Curve) (elapsed : Nat) (h : elapsed < c.maxDuration) :
         ≤ (c.maxDuration - c.minDuration) * wad := Nat.mul_le_mul_right _ hnum
       _ ≤ (c.maxDuration - c.minDuration) * wad + ((c.maxDuration - c.minDuration) - 1) := by omega
 
-/-- And never falls below `minFee`, given the one fact about `powWad` the library relies on:
-`tHat ≤ 1e18` (`tHat_le_wad`), so `tHat ^ k ≤ 1e18` for the admissible exponents. Instantiating
-`powK` at the library's own linear shortcut (`curvature = 1e18`, where `powWad` is the identity)
-discharges the hypothesis outright, so the statement is not vacuous. -/
+/-- And never falls below `minFee`, **assuming** `powK tHat ≤ 1e18`. That is a hypothesis here,
+not a consequence: `tHat_le_wad` gives `tHat ≤ 1e18`, and real exponentiation preserves it for
+`k ∈ [0.1, 10]`, but `powK` is an arbitrary `Nat → Nat` and Lean proves nothing about `powWad`.
+The hypothesis is discharged outright only at the library's linear shortcut
+(`feeRate_ge_minFee_linear`) — which, per `liveCurve_is_linear`, is the deployed configuration. -/
 theorem feeRate_ge_minFee (c : Curve) (powK : Nat → Nat) (elapsed : Nat) (h : c.isValid)
     (hpow : powK (c.tHat elapsed) ≤ wad) :
     c.minFee ≤ c.feeRate powK elapsed := by
@@ -390,8 +414,9 @@ theorem feeRate_ge_minFee (c : Curve) (powK : Nat → Nat) (elapsed : Nat) (h : 
     · omega
 
 /-- The linear shortcut `curvature = 1e18` is the identity on `tHat`, so `feeRate_ge_minFee`'s
-hypothesis holds for it with no side condition beyond the interior branch — the floor really is
-reachable rather than assumed. -/
+hypothesis is discharged for it outright and the floor **bound** holds unconditionally rather
+than under an assumption about `powK`. It is a lower bound, not an attainment: the rate meeting
+`minFee` is `feeRate_at_max_duration`, which `hlt : elapsed < c.maxDuration` excludes here. -/
 theorem feeRate_ge_minFee_linear (c : Curve) (elapsed : Nat) (h : c.isValid)
     (hlt : elapsed < c.maxDuration) :
     c.minFee ≤ c.feeRate id elapsed :=
@@ -468,6 +493,65 @@ def Receipt.feeNow (r : Receipt) (c : Curve) (powK : Nat → Nat) (now : Nat) : 
 def Receipt.payout (r : Receipt) (c : Curve) (powK : Nat → Nat) (now : Nat) : Nat :=
   r.assets - r.feeNow c powK now
 
+/-! ### The curve that is actually deployed
+
+`UnlockReceipt.feeCurve()` read from mainnet, verbatim. Every claim below about "the deployed
+curve" is this struct; nothing else here is a live reading.
+-/
+
+/-- `UnlockReceipt.feeCurve()` on mainnet: linear decay from 3.4% to 0%, over days 3 to 20. -/
+def liveCurve : Curve :=
+  { minFee := 0
+    maxFee := 34000000000000000
+    minDuration := 3 * day
+    maxDuration := 20 * day
+    curvature := wad }
+
+theorem liveCurve_valid : liveCurve.isValid := by
+  refine ⟨?_, ?_, ?_, by decide, ?_, ?_, ?_⟩
+  · unfold liveCurve day; decide
+  · unfold liveCurve day; decide
+  · unfold liveCurve maxCurveDuration day; decide
+  · unfold liveCurve maxFeeCap; decide
+  · unfold liveCurve minCurvature wad; decide
+  · unfold liveCurve maxCurvature wad; decide
+
+/-- **The deployed curve is the library's linear shortcut**, so `feeRate_ge_minFee`'s hypothesis
+about `powWad` is not merely plausible at this configuration — it is discharged, by
+`feeRate_ge_minFee_linear`. -/
+theorem liveCurve_is_linear : liveCurve.curvature = wad := rfl
+
+/-- **At the first claimable instant the deployed curve charges its maximum, 3.4%.**
+
+This is §2.3 settled against the chain rather than against the model. `minDuration = 3 * day` is
+simultaneously the lock the corpus advertises ("claimable after 3 days") and the curve's zero
+point, so a claimant at the earliest permitted moment meets `maxFee` exactly. Holds for any
+`powK`, the instant being a clamp point. -/
+theorem liveCurve_first_claim_is_max (powK : Nat → Nat) :
+    liveCurve.feeRate powK liveCurve.minDuration = 34000000000000000 :=
+  feeRate_at_first_claim liveCurve powK liveCurve_valid
+
+/-- **Two numbers the corpus states and the deployment contradicts**, both copied into the model's
+`flexibleUnlockFee` as `350` and `10` basis points.
+
+The corpus says the fee "declines linearly over time from 3.5% down to just 0.1%". Deployed, the
+start is 3.4% — `34000000000000000` against a 3.5% of `35000000000000000` — and the floor is
+**zero**, not one tenth of a percent. The model is wrong high at the top of the ramp and wrong
+high at the bottom of it. -/
+theorem liveCurve_bounds_contradict_the_corpus :
+    liveCurve.maxFee ≠ 35000000000000000 ∧
+    liveCurve.maxFee = 34000000000000000 ∧
+    liveCurve.minFee = 0 ∧
+    liveCurve.minFee ≠ 1000000000000000 :=
+  ⟨by decide, rfl, rfl, by decide⟩
+
+/-- The ramp's length, on the other hand, the model gets right: `maxDuration - minDuration` is
+17 days, which is `cooldownPeriod - minFlexibleClaim`. What the model misplaces is the *anchor*,
+not the span. -/
+theorem liveCurve_span_matches_the_model :
+    liveCurve.maxDuration - liveCurve.minDuration = cooldownPeriod - minFlexibleClaim := by
+  unfold liveCurve cooldownPeriod minFlexibleClaim day; decide
+
 /-- A receipt minted under a short, free curve. -/
 def curveBefore : Curve :=
   { minFee := 0, maxFee := 0, minDuration := 1, maxDuration := 2, curvature := wad }
@@ -489,20 +573,19 @@ theorem curveAfter_valid : curveAfter.isValid := by
   · unfold curveAfter minCurvature wad; decide
   · unfold curveAfter maxCurvature wad; decide
 
-/-- **One admin call re-locks an outstanding receipt and reprices it at the ceiling.**
+/-- **The same receipt is claimable under one valid curve and locked under another**, with the
+claim date strictly later — 1 against 100, a factor of a hundred, pinned as a conjunct.
 
-The receipt (1000 units of escrow, created at 0) is claimable at time 1 under the curve in force when it
-was minted, and would pay out in full — that curve's `maxFee` is zero. After `setFeeCurve`, the
-*same* receipt is not claimable at time 1; its claim date has moved from 1 to 100; and when that
-date arrives the fee is the new `maxFee`, because `minDuration` is also the curve's zero point.
-The holder waits a hundred times longer and receives 95% instead of 100%.
+The receipt (1000 units of escrow, created at 0) is claimable at time 1 under `curveBefore` and
+not at time 1 under `curveAfter`. Nothing about the receipt changed: `UnlockReceipt` stores only
+`(assets, createdAt)` and snapshots neither the lock nor the fee at mint.
 
-Nothing about the receipt changed — the contract snapshots neither the lock nor the fee at mint,
-storing only `(assets, createdAt)`. Both curves satisfy `requireValid`, so this is ordinary admin
-configuration rather than a misconfiguration, and there is no timelock on `setFeeCurve`.
-
-The statement holds for **every** `powK`, i.e. every admissible curvature: the two instants it
-speaks about are the clamp points, where the exponent plays no part. -/
+**What is not proved here.** There is no `setFeeCurve` operation, no admin, no role and no
+timelock anywhere in this file, and no state transition connecting the two curves. That a single
+admin call performs this swap is read off the source — `setFeeCurve` is `restricted` with
+`requireValid` as its only check — and both curves passing `requireValid` (proved above) is what
+makes the swap ordinary configuration rather than a misconfiguration. Lean shows the two curves
+differ in effect; the reachability of the swap is prose. -/
 theorem receipt_relocked_by_curve_change :
     ({ assets := 1000, createdAt := 0 } : Receipt).isClaimable curveBefore 1 = true ∧
     ({ assets := 1000, createdAt := 0 } : Receipt).isClaimable curveAfter 1 = false ∧
@@ -511,8 +594,9 @@ theorem receipt_relocked_by_curve_change :
   ⟨rfl, rfl, by decide⟩
 
 /-- And repriced: free under the curve in force at mint, 5% under the replacement, charged at
-the new claim date because `minDuration` is also the curve's zero point. Holds for every
-`powK`, i.e. every admissible curvature — both instants are clamp points. -/
+the new claim date because `minDuration` is also the curve's zero point. Holds for **every**
+`powK` — both instants it evaluates at are clamp points, where the exponent plays no part, so the
+result covers every admissible curvature at once. -/
 theorem receipt_repriced_by_curve_change (powK : Nat → Nat) :
     ({ assets := 1000, createdAt := 0 } : Receipt).payout curveBefore powK 1 = 1000 ∧
     ({ assets := 1000, createdAt := 0 } : Receipt).payout curveAfter powK
@@ -529,8 +613,9 @@ theorem receipt_repriced_by_curve_change (powK : Nat → Nat) :
     unfold maxFeeCap wad
     rfl
 
-/-- **Both effects, from one `setFeeCurve` call**, with the curves' validity discharged so the
-swap is ordinary admin configuration rather than a misconfiguration. -/
+/-- **Both effects together**, with the curves' validity discharged so the swap `setFeeCurve`
+would perform is ordinary admin configuration rather than a misconfiguration. As above, the call
+itself is not modelled — this conjoins the claimability and payout facts about the two curves. -/
 theorem admin_curve_change_relocks_and_reprices (powK : Nat → Nat) :
     curveBefore.isValid ∧ curveAfter.isValid ∧
     (({ assets := 1000, createdAt := 0 } : Receipt).isClaimable curveBefore 1 = true ∧
@@ -545,22 +630,28 @@ theorem admin_curve_change_relocks_and_reprices (powK : Nat → Nat) :
 /-! ## Both fees compose on a single unlock
 
 A holder who deposits, withdraws and later claims pays **twice**: the vault-side `unlockingFee`
-when the receipt is minted, and the curve fee when it is claimed. The model charges neither on
-the vault path and a decayed-only version on the flexible path, so the total charge a real user
-meets is strictly larger than anything the model's theorems bound.
+when the receipt is minted, and the curve fee when it is claimed. The model charges nothing on
+the vault path and a decayed-only version on the flexible path. That the *total* charge exceeds
+what the model's theorems bound is an editorial reading — nothing here compares a total against a
+bound proved in `Apyx.lean`; the two legs are stated separately below.
 -/
 
-/-- What a holder actually nets from an unlock of `assets`, on the deployment: the vault fee is
-added to the shares burned, and the curve fee is deducted from the escrowed amount at claim. -/
+/-- The **claim-side** net for an escrow of `assets`: what the curve fee leaves. The vault-side
+fee is not in here — it is charged earlier, against the shares burned — so this is one leg, not
+the holder's true net, which is worse. -/
 def netFromUnlock (c : Curve) (powK : Nat → Nat) (assets elapsed : Nat) : Nat :=
   assets - c.feeOnAssets powK assets elapsed
 
-/-- **Both fees bite at the earliest claim.** A holder unlocking at a positive vault rate and
-claiming at the first permitted instant burns shares worth strictly more than `assets` and
-receives strictly less than `assets` — the model has no term for either side. -/
+/-- **Both fees bite at the earliest claim.** A holder unlocking at a positive vault rate has
+strictly more than `assets` pulled from the vault against their shares, and — when the curve's
+`maxFee` is positive, which `hmax` requires and `curveBefore` in this file does not satisfy —
+receives strictly less than `assets` at claim. The model has no term for either side.
+
+The first conjunct is an inequality between **asset amounts**, not share counts: the only
+share-level result here, `withdrawShares_gross_ge_net`, is non-strict, because ceil-division can
+map the two gross amounts to the same share count. -/
 theorem both_fees_bite (c : Curve) (powK : Nat → Nat) (assets feePct : Nat)
-    (h : c.isValid) (ha : 0 < assets) (hf : 0 < feePct) (hmax : 0 < c.maxFee)
-    (hsmall : c.feeOnAssets powK assets c.minDuration ≤ assets) :
+    (h : c.isValid) (ha : 0 < assets) (hf : 0 < feePct) (hmax : 0 < c.maxFee) :
     assets < withdrawGross assets feePct ∧
     netFromUnlock c powK assets c.minDuration < assets := by
   refine ⟨model_undercharges_withdraw assets feePct ha hf, ?_⟩

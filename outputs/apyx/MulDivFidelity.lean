@@ -1,12 +1,13 @@
 import D2fsSpecs.Apyx
 
 /-!
-# The ray-scaled rate as a fidelity deviation, quantified (`README` §9.3, "new")
+# The ray-scaled rate as a fidelity deviation: signed, and exhibited at its corner
 
 The report records an open item: OpenZeppelin's ERC-4626 does a **single** `mulDiv` per
 conversion, whereas this model materialises a `ray`-scaled rate (`computeExchangeRate`) and then
-divides a second time (`lockShares` / `redeemAssets` / `withdrawShares`). The two agree at
-deployment scale but not when the intermediate rate floors to `0`, and that corner is the entire
+divides a second time (`lockShares` / `redeemAssets` / `withdrawShares`). The two are close at
+deployment scale — this module bounds their *direction*, not their gap, and proves no agreement
+theorem — and diverge totally when the intermediate rate floors to `0`. That corner is the entire
 reason `step` carries three zero-rate guards (`Regression.lean` §R4b/R4c).
 
 Replacing the conversions outright would touch the rate at 229 call sites across six modules, and
@@ -18,9 +19,9 @@ directly and **proves what the swap would buy**:
   guarded. `withdraw`'s `0 < assets ∧ shares = 0` branch becomes unreachable.
 * `redeemAssets_le_assetsOf` — the deviation is **one-directional and conservative** on the
   redemption side: the double division never pays a redeemer more than the deployment would.
-* `sharesOf_le_lockShares` — and it is **non-conservative on the deposit side**: the model can
-  issue a depositor more shares than the deployment would. This is the direction that matters for
-  a safety report, and it is stated rather than buried.
+* `sharesOf_le_lockShares` — the deposit leg runs the other way: the model never issues a
+  depositor **fewer** shares than the deployment would. Proved as a `≤`; no strict-inequality
+  witness is exhibited, so "can issue more" is not claimed.
 * `rate_floors_to_zero_witness` — a concrete state where the model's rate is `0` and
   `withdrawShares` returns 0 shares for a positive withdrawal, while the deployment-faithful form
   returns `2 * ray + 1`. The guards are load-bearing precisely here.
@@ -61,8 +62,9 @@ def sharesOfCeil (s : State) (assets : Nat) : Nat :=
 
 /-! ## Two `Nat` facts
 
-Floor division does not distribute over multiplication, it only loses dust — in whichever
-position the quotient sits. Both directions are needed below.
+Floor division does not distribute over multiplication, it only loses — in whichever position
+the quotient sits. The direction is what is proved here; the magnitude of the loss is not
+bounded anywhere in this module. Both orientations are needed below.
 -/
 
 private theorem mul_div_le_assoc (a b c : Nat) : a * (b / c) ≤ a * b / c := by
@@ -95,10 +97,12 @@ theorem sharesOfCeil_pos (s : State) (assets : Nat) (h : 0 < assets) :
     Nat.mul_le_mul_right _ h
   omega
 
-/-- The same for the floor-rounded deposit direction, given a non-degenerate pool: a positive
-deposit into a vault whose assets do not exceed its supply mints at least one share. (The
-ceiling form needs no side condition; the floor form genuinely can round a dust deposit to
-zero, on-chain as well — that is the ERC-4626 inflation residue of §9.3, not a model artifact.) -/
+/-- The same for the floor-rounded deposit direction, but only under `totalAssets ≤ totalSupply`
+— i.e. a share price of at most 1, which a yield-accruing vault leaves almost immediately, so this
+covers the early life of the pool rather than its steady state. Above that price the floor form
+genuinely can round a dust deposit to zero, on-chain as well; that is the ERC-4626 inflation
+residue of §9.3, not a model artifact, and it is why only the ceiling form gets an unconditional
+positivity result. -/
 theorem sharesOf_pos (s : State) (assets : Nat) (h : 0 < assets)
     (h_pool : totalAssets s ≤ s.totalSupply_apyUSD) :
     0 < sharesOf s assets := by
@@ -118,8 +122,10 @@ the deviation is worth a report line rather than a footnote.
 /-- **Redemption side: the deviation is conservative.** Pricing a redemption through the
 materialised rate never pays out more than the deployment's single `mulDiv` would.
 
-So every payout bound proved against `redeemAssets` transfers to the deployment *a fortiori*:
-the model is pessimistic here, and a safety result proved on a pessimistic model still holds. -/
+**And that is the direction in which bounds do *not* transfer.** A payout bound is an upper
+bound — "the redeemer receives at most `X`" is `redeemAssets ≤ X` — and `assetsOf` sits *above*
+`redeemAssets`, so nothing follows about the chain's payout. Redemption payout bounds proved
+against this model must be re-proved against `assetsOf`; they do not carry over. -/
 theorem redeemAssets_le_assetsOf (s : State) (shares : Nat) :
     redeemAssets shares (computeExchangeRate s) ≤ assetsOf s shares := by
   have hray : 0 < ray := Nat.pow_pos (by decide)
@@ -175,14 +181,18 @@ zero as soon as the share supply exceeds the ray-scaled asset base. That needs a
 it, which is the point.
 -/
 
-/-- An empty vault carrying a share supply of `2 * ray`. Nothing about it is unreachable in the
-model's own terms: `Op.lockApxUSD` mints shares and no invariant caps the supply. -/
+/-- An empty vault carrying a share supply of `2 * ray`. No stated invariant excludes it — the
+model caps no supply — but whether `step` can *reach* it is not established here, and the shape is
+awkward: `lockApxUSD` mints shares against deposited assets, so `2 * ray` shares over a zero-asset
+vault is exactly what a reachability argument would have to explain. It is exhibited as a state
+the guards must survive, not as a claimed trace. -/
 def zeroRateWitness : State :=
   { (default : State) with
       globalPause := false
       totalSupply_apyUSD := 2 * ray }
 
-/-- **The rate floors to zero**, so both ray-scaled conversions collapse. -/
+/-- **The rate floors to zero.** What that does to the conversions is proved separately, and
+only for `withdrawShares` (`rate_floors_to_zero_witness`); `lockShares` is not shown here. -/
 theorem zeroRate_witness_rate : computeExchangeRate zeroRateWitness = 0 := by
   have hTA : totalAssets zeroRateWitness = 0 := rfl
   unfold computeExchangeRate
@@ -216,10 +226,14 @@ theorem rate_floors_to_zero_witness :
 The swap is worth doing and is **not** attempted here. What the theorems above establish is that
 it is a *correctness* change, not a cosmetic one:
 
-1. it deletes a whole defect class rather than guarding three branches (`sharesOfCeil_pos`);
-2. the current model is pessimistic on redemption (`redeemAssets_le_assetsOf`) — so redemption
-   bounds survive the swap — but optimistic on deposit (`sharesOf_le_lockShares`), so any
-   share-issuance bound must be **re-proved**, not carried over;
+1. it makes `step`'s `withdraw` zero-share branch **unreachable** rather than guarded
+   (`sharesOfCeil_pos`). The deposit branch is only conditionally covered (`sharesOf_pos` needs
+   `totalAssets ≤ totalSupply`), and the third zero-rate guard is not addressed here at all;
+2. the deviation has opposite signs on the two legs, and only one of them is benign. The model
+   never issues a depositor *fewer* shares than the deployment (`sharesOf_le_lockShares`), so a
+   share-issuance **upper** bound proved here does carry over. It never pays a redeemer *more*
+   (`redeemAssets_le_assetsOf`), so a payout upper bound proved here does **not** — that side
+   must be re-proved against `assetsOf`;
 3. the divergence is not asymptotic dust; at the corner it is total
    (`rate_floors_to_zero_witness`).
 

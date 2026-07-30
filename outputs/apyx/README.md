@@ -143,13 +143,15 @@ Every requirement judged expressible as a state-machine property was formalized 
 
 - Users may hold multiple concurrent flexible requests; a flexible claim is possible only after 3 days.
 - The early-exit fee is bounded in [0.1%, 3.5%] **as a function**, is monotonically non-increasing over
-  time, and reaches its 0.1% floor once the full cooldown has elapsed. In the model the maximum actually
-  *charged* on any reachable claim is **2.99%**, because the schedule is anchored at request time while
-  claims are blocked for the first three days (§6.0). **That gap is a model artifact, and the deployed
-  contract does not have it** — `src/FeeCurve.sol` deliberately overloads `minDuration` as both the lock
-  duration and the curve's zero point, so at the first claimable instant `elapsed = minDuration` and the
-  rate is exactly `maxFee`. See [`DeploymentFees.lean`](DeploymentFees.lean) `feeRate_at_first_claim`,
-  and note the real ceiling on `maxFee` is the library's 5%, not the model's hardcoded 3.5%.
+  time, and reaches its 0.1% floor once the full cooldown has elapsed. **Both endpoints are wrong**: they
+  restate the corpus, and a live `UnlockReceipt.feeCurve()` read gives a linear decay from **3.4%** to
+  **0%** over days 3 to 20. In the model the maximum actually *charged* on any reachable claim is
+  **2.99%**, because the schedule is anchored at request time while claims are blocked for the first
+  three days (§6.0). **That gap is a model artifact, and the deployed contract does not have it** —
+  `src/FeeCurve.sol` deliberately overloads `minDuration` as both the lock duration and the curve's zero
+  point, so at the first claimable instant `elapsed = minDuration` and the rate is exactly `maxFee`
+  (3.4%). See [`DeploymentFees.lean`](DeploymentFees.lean): `liveCurve_first_claim_is_max`,
+  `liveCurve_bounds_contradict_the_corpus`. The library's hard ceiling on any admin-set `maxFee` is 5%.
 
 ### Unlock-token (NFT) integrity
 `req_singleton_unlock_token_instance`, `req_unlock_token_nontransferable`, `req_unlock_cannot_be_cancelled`.
@@ -798,7 +800,8 @@ been corrected in §3, §4.1 and §4.2, and the full list is below. Everything h
 | §1.3 | **Single-pending is not a uniqueness theorem**, and uniqueness does not hold model-wide: the vault path opens a fresh position per call | §3, and the theorem's own docstring |
 | §1.5 | **`apxUSD_credit_is_backed` is single-step.** A five-step admin+oracle sequence — reprice to `2·ray`, open the above-peg gate, `mintApxUSD 100` for 100 USDC, open the below-peg gate, `redeemApxUSD 100` for 200 USDC — extracts 100 USDC from other users' deposits while every individual step satisfies the theorem | §4.1 |
 | §1.6 | **Fixed.** `admin_rfq_coalition_drains_funded` is the funded companion: reserve at 100, victim diluted to half the supply, and the counterfactual (the victim's own `redeemApxUSD` paying in full) is a machine-checked conjunct of the statement. The review's literal fix — fund the reserve, keep the sole holder — would show no loss under the now-modeled pro-rata leg, so the funded witness dilutes instead. The original zero-reserve witness stays, as the mechanism demonstration | §4.1 |
-| §2.3 | **Model artifact, not a protocol gap — corrected.** The model anchors the fee at request time and blocks claims for three days, so its maximum reachable charge is 2.99%. The deployed `FeeCurveLib` overloads `minDuration` as both the lock duration and the curve's zero point, so `elapsed = minDuration` at the first permitted claim and the rate is exactly `maxFee` (`feeRate_at_first_claim`). The real ceiling is the library's 5%, not 3.5% | [`DeploymentFees.lean`](DeploymentFees.lean), §3 |
+| §2.3 | **Model artifact, not a protocol gap — corrected against a live read.** The model anchors the fee at request time and blocks claims for three days, so its maximum reachable charge is 2.99%. `UnlockReceipt.feeCurve()` on mainnet returns `minFee = 0`, `maxFee = 3.4%`, `minDuration = 3 days`, `maxDuration = 20 days`, `curvature = 1e18` (linear). `minDuration` is both the lock and the curve's zero point, so at the first permitted claim the rate is exactly `maxFee` — the maximum *is* charged (`liveCurve_first_claim_is_max`) | [`DeploymentFees.lean`](DeploymentFees.lean), §3 |
+| new (from a live read) | **The advertised fee band is wrong in the corpus, and the model copied it.** The corpus says the early-exit fee "declines linearly over time from 3.5% down to just 0.1%", and `flexibleUnlockFee` hardcodes 350 bps and a 10 bps floor. Deployed, the decay is linear over the same 17-day span but runs from **3.4%** to **0%** (`liveCurve_bounds_contradict_the_corpus`, `liveCurve_span_matches_the_model`). The model is wrong at both ends of the ramp, and the report's §3 bound of "[0.1%, 3.5%]" is a restatement of the corpus rather than of the contract | [`DeploymentFees.lean`](DeploymentFees.lean) |
 | §2.6 | **Fixed.** Every balance-moving path now passes the deployment's ERC-20 `_update` hook: `redeemApxUSD`, `requestUnlock` and `flexibleRequestUnlock` (the caller's burn), `poolRedeem` (both the caller's burn and the receiver's credit), and `claimUnlock` (the mint to the owner, gated on `globalPause` **and** the deny-list, which it previously ignored entirely). and both claim paths (the mint to the owner, gated on `globalPause` **and** the deny-list, which they previously ignored entirely). `Regression.lean` §R13 checks each direction, including that a clean owner on a live token still settles | §3 |
 | §1.0-d | **`setVestPeriod 0` realizes the entire vest stream in one admin step.** Both conservation theorems hypothesise the non-zero period, i.e. exclude exactly this case | §4.2 |
 | §3 | **Quantifier scope**: 8 of the 16 BlastRadius trace theorems restrict the trace to one role's operation class, and 6 are over wrapper state rather than protocol state | §6.0 |

@@ -255,3 +255,35 @@ apyUSD の receipt 側には対応するモデル op が無い(モデルの `fle
 
 `CommitToken.lean` は各デプロイの `supplyCap` を持ち deposit で強制するが、cap を動かす op が無い。
 実装は `setSupplyCap` が `restricted` なので、モデルの方が硬い上界に見えている。
+
+### 6. `UnlockReceipt.feeCurve()` のライブ読み取り — corpus とモデルの両方が誤り
+
+```
+minFee      = 0                     (= 0%)
+maxFee      = 34000000000000000     (= 3.4%)
+minDuration = 259200                (= 3 days)
+maxDuration = 1728000               (= 20 days)
+curvature   = 1000000000000000000   (= 1e18 → 線形)
+```
+
+corpus (`corpus.md:190`, `:667`) は「3 日後に請求可能、早期解除手数料は **3.5% から 0.1% まで**
+線形に低下」と書いており、モデルの `flexibleUnlockFee` はこれを 350bps / 10bps 床として写している。
+
+実デプロイは:
+- **上端は 3.4%**(3.5% ではない)
+- **下端は 0%**(0.1% ではない)
+- 線形("declines linearly" は正しい)であり、`curvature = 1e18` は `FeeCurveLib.fee` の線形ショートカット
+- `minDuration = 3 days` は corpus の「3 日ロック」と一致し、**同時に曲線のゼロ点**
+
+したがって:
+1. README §2.3 の「3.5% は到達不能・実最大 2.99%」はモデル由来の人工物であることが**実測で確定**
+   (`liveCurve_first_claim_is_max`)。
+2. §3 の「手数料は [0.1%, 3.5%]」は**契約ではなく corpus の再掲**であり、両端とも誤り
+   (`liveCurve_bounds_contradict_the_corpus`)。
+3. ランプの長さ(17 日 = `maxDuration - minDuration`)だけはモデルと一致する
+   (`liveCurve_span_matches_the_model`)。誤っているのはアンカーと両端の値。
+4. `curvature = 1e18` なので `feeRate_ge_minFee` の `powWad` 仮説は実配置では
+   `feeRate_ge_minFee_linear` により完全に解消される。
+
+また `ApyUSD.previewRedeem` は `super.previewRedeem(shares) - _feeOnTotal(assets, unlockingFee)`
+であり(検証済みソース `src/ApyUSD.sol` の当該箇所)、上の §1 で `_feeOnRaw` のみを引用していたのは不完全だった。
