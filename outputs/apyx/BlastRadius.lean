@@ -292,7 +292,7 @@ private theorem inv_claimUnlock (s : State) (id : Nat) (caller : Address) (s' : 
       s.unlockTokenOwner id = some owner ∧
       (caller = owner ∨ caller = s.unlockTokenOperator) ∧
       cooldownEnd ≤ s.now ∧
-      s' = mintApxUSD (burnUnlockNFT s id) owner amount := by
+      s' = mintApxUSD (retireStandardUnlock s id owner) owner amount := by
   simp only [step] at h
   split at h
   · exact absurd h (by simp)
@@ -531,8 +531,7 @@ else. -/
 theorem step_creditYield_exact (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.creditYield amount) caller = some s') :
     caller = s.yieldDistributor ∧
-    s' = { s with usdcReserve := s.usdcReserve + amount
-                  fullyVestedAmount := s.fullyVestedAmount + newlyVestedAmount s s.now
+    s' = { s with fullyVestedAmount := s.fullyVestedAmount + newlyVestedAmount s s.now
                   vestTotal := (s.vestTotal - newlyVestedAmount s s.now) + amount
                   vestStart := s.now } := by
   simp only [step] at h
@@ -557,11 +556,14 @@ theorem yield_distributor_frame (s : State) (op : Op) (caller : Address) (s' : S
                           fullyVestedAmount := f }
             = { s with usdcReserve := r, vestTotal := v, vestStart := w,
                        fullyVestedAmount := f }) ∧
-    s.usdcReserve ≤ s'.usdcReserve ∧
+    -- STRONGER than the previous `s.usdcReserve ≤ s'.usdcReserve`: now that `creditYield`
+    -- models `IVesting.depositYield` alone, the distributor cannot touch the USDC redemption
+    -- reserve at all — that lives in `RedemptionPoolV0`, a different contract.
+    s'.usdcReserve = s.usdcReserve ∧
     s.fullyVestedAmount + s.vestTotal ≤ s'.fullyVestedAmount + s'.vestTotal := by
   obtain ⟨amount, rfl⟩ := h_gated
   obtain ⟨hc, rfl⟩ := step_creditYield_exact s amount caller s' h_step
-  refine ⟨hc, fun _ _ _ _ => rfl, Nat.le_add_right _ _, ?_⟩
+  refine ⟨hc, fun _ _ _ _ => rfl, rfl, ?_⟩
   have hnv := newlyVestedAmount_le_vestTotal s s.now
   dsimp only
   omega
@@ -580,11 +582,12 @@ theorem yield_distributor_trace_blast_radius (s : State) (σ : List (Op × Addre
                                      fullyVestedAmount := f }
             = { s with usdcReserve := r, vestTotal := v, vestStart := w,
                        fullyVestedAmount := f }) ∧
-    s.usdcReserve ≤ (execTrace s σ).usdcReserve ∧
+    -- equality, not `≤`: `creditYield` no longer touches the USDC reserve at all
+    (execTrace s σ).usdcReserve = s.usdcReserve ∧
     s.fullyVestedAmount + s.vestTotal
       ≤ (execTrace s σ).fullyVestedAmount + (execTrace s σ).vestTotal := by
   induction σ generalizing s with
-  | nil => exact ⟨fun _ _ _ _ => rfl, Nat.le_refl _, Nat.le_refl _⟩
+  | nil => exact ⟨fun _ _ _ _ => rfl, rfl, Nat.le_refl _⟩
   | cons p σ ih =>
     obtain ⟨op, c⟩ := p
     have h_tail : ∀ q ∈ σ, DistributorOp q.1 :=
@@ -596,7 +599,7 @@ theorem yield_distributor_trace_blast_radius (s : State) (σ : List (Op × Addre
       obtain ⟨-, hframe, hres, hvest⟩ :=
         yield_distributor_frame s op c s1 (h_gated (op, c) List.mem_cons_self) hstep
       obtain ⟨ihframe, ihres, ihvest⟩ := ih s1 h_tail
-      refine ⟨fun r v w f => ?_, Nat.le_trans hres ihres, Nat.le_trans hvest ihvest⟩
+      refine ⟨fun r v w f => ?_, ihres.trans hres, Nat.le_trans hvest ihvest⟩
       calc { execTrace s1 σ with usdcReserve := r, vestTotal := v, vestStart := w,
                                  fullyVestedAmount := f }
           = { s1 with usdcReserve := r, vestTotal := v, vestStart := w,
@@ -1097,7 +1100,7 @@ theorem no_role_transfers_user_funds (s : State) (op : Op) (caller : Address) (s
     obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := inv_claimUnlock _ _ _ _ h_step
     subst hs'
     exfalso
-    simp [mintApxUSD, burnUnlockNFT] at h_dec
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT] at h_dec
     split at h_dec <;> omega
   case redeemApxUSD amount =>
     obtain ⟨_, _, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
@@ -1127,7 +1130,7 @@ theorem no_role_transfers_user_funds (s : State) (op : Op) (caller : Address) (s
     obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := inv_flexibleClaimUnlock _ _ _ _ h_step
     subst hs'
     exfalso
-    simp [mintApxUSD, burnUnlockNFT] at h_dec
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT] at h_dec
     split at h_dec <;> omega
   case executeRFQRedemption user amount =>
     obtain ⟨_, hrfq, _, hreq, _, _, hs'⟩ := inv_executeRFQRedemption _ _ _ _ _ h_step
@@ -1224,7 +1227,7 @@ theorem no_role_debits_usdc (s : State) (op : Op) (caller : Address) (s' : State
     obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := inv_claimUnlock _ _ _ _ h_step
     subst hs'
     exfalso
-    simp [mintApxUSD, burnUnlockNFT] at h_dec
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT] at h_dec
   case redeemApxUSD amount =>
     obtain ⟨_, _, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
     subst hs'
@@ -1253,7 +1256,7 @@ theorem no_role_debits_usdc (s : State) (op : Op) (caller : Address) (s' : State
     obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := inv_flexibleClaimUnlock _ _ _ _ h_step
     subst hs'
     exfalso
-    simp [mintApxUSD, burnUnlockNFT] at h_dec
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT] at h_dec
   case executeRFQRedemption user amount =>
     obtain ⟨_, _, _, _, _, _, hs'⟩ := inv_executeRFQRedemption _ _ _ _ _ h_step
     subst hs'
@@ -1308,7 +1311,7 @@ theorem governance_token_balances_immutable (s : State) (op : Op) (caller : Addr
   case claimUnlock id =>
     obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := inv_claimUnlock _ _ _ _ h_step
     subst hs'
-    simp [mintApxUSD, burnUnlockNFT]
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
   case redeemApxUSD amount =>
     obtain ⟨_, _, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
     subst hs'
@@ -1328,7 +1331,7 @@ theorem governance_token_balances_immutable (s : State) (op : Op) (caller : Addr
   case flexibleClaimUnlock id =>
     obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := inv_flexibleClaimUnlock _ _ _ _ h_step
     subst hs'
-    simp [mintApxUSD, burnUnlockNFT]
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
   case executeRFQRedemption user amount =>
     obtain ⟨_, _, _, _, _, _, hs'⟩ := inv_executeRFQRedemption _ _ _ _ _ h_step
     subst hs'
@@ -1419,10 +1422,10 @@ theorem no_role_seizes_unlock_position (s : State) (op : Op) (caller : Address) 
         · exact absurd h h_not_owner
         · exact h
       refine Or.inr (Or.inl ⟨rfl, hop, am, ce, hreq, hnow, ?_⟩)
-      simp [mintApxUSD, burnUnlockNFT]
+      simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
     · have h_ne : id ≠ rid := fun h => hrid h.symm
-      exact Or.inl ⟨by simpa [mintApxUSD, burnUnlockNFT, h_ne] using h_live,
-        by simp [mintApxUSD, burnUnlockNFT, h_ne]⟩
+      exact Or.inl ⟨by simpa [mintApxUSD, retireStandardUnlock, burnUnlockNFT, h_ne] using h_live,
+        by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, h_ne]⟩
   case redeemApxUSD amount =>
     obtain ⟨_, _, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
     subst hs'
@@ -1458,11 +1461,11 @@ theorem no_role_seizes_unlock_position (s : State) (op : Op) (caller : Address) 
         · exact absurd h h_not_owner
         · exact h
       refine Or.inr (Or.inr ⟨rfl, hop, am, rt, ce, hreq, hnow, ?_, ?_⟩)
-      · simp [mintApxUSD, burnUnlockNFT]
+      · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
       · exact Nat.div_le_div_right (Nat.mul_le_mul_left _ (fee_le_start rt s.now))
     · have h_ne : id ≠ rid := fun h => hrid h.symm
-      exact Or.inl ⟨by simpa [mintApxUSD, burnUnlockNFT, h_ne] using h_live,
-        by simp [mintApxUSD, burnUnlockNFT, h_ne]⟩
+      exact Or.inl ⟨by simpa [mintApxUSD, retireStandardUnlock, burnUnlockNFT, h_ne] using h_live,
+        by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, h_ne]⟩
   case executeRFQRedemption user amount =>
     obtain ⟨_, _, _, _, _, _, hs'⟩ := inv_executeRFQRedemption _ _ _ _ _ h_step
     subst hs'
@@ -1599,7 +1602,7 @@ theorem redemption_price_writers (s : State) (op : Op) (caller : Address) (s' : 
   case claimUnlock id =>
     obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := inv_claimUnlock _ _ _ _ h_step
     subst hs'
-    exact absurd (by simp [mintApxUSD, burnUnlockNFT]) h_changed
+    exact absurd (by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]) h_changed
   case redeemApxUSD amount =>
     obtain ⟨_, _, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
     subst hs'
@@ -1621,7 +1624,7 @@ theorem redemption_price_writers (s : State) (op : Op) (caller : Address) (s' : 
   case flexibleClaimUnlock id =>
     obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := inv_flexibleClaimUnlock _ _ _ _ h_step
     subst hs'
-    exact absurd (by simp [mintApxUSD, burnUnlockNFT]) h_changed
+    exact absurd (by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]) h_changed
   case executeRFQRedemption user amount =>
     obtain ⟨_, _, _, _, _, _, hs'⟩ := inv_executeRFQRedemption _ _ _ _ _ h_step
     subst hs'
@@ -1739,7 +1742,7 @@ theorem reserve_outflow_only_via_redemption (s : State) (op : Op) (caller : Addr
   case claimUnlock id =>
     obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := inv_claimUnlock _ _ _ _ h_step
     subst hs'
-    exact absurd h_dec (by simp [mintApxUSD, burnUnlockNFT])
+    exact absurd h_dec (by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT])
   case withdraw assets receiver =>
     obtain ⟨_, _, _, hs'⟩ := inv_withdraw _ _ _ _ _ h_step
     subst hs'
@@ -1757,7 +1760,7 @@ theorem reserve_outflow_only_via_redemption (s : State) (op : Op) (caller : Addr
   case flexibleClaimUnlock id =>
     obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := inv_flexibleClaimUnlock _ _ _ _ h_step
     subst hs'
-    exact absurd h_dec (by simp [mintApxUSD, burnUnlockNFT])
+    exact absurd h_dec (by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT])
   case withdrawReserve amount receiver =>
     simp only [step] at h_step
     repeat' split at h_step
@@ -2098,9 +2101,9 @@ theorem apxUSD_credit_is_backed (s : State) (op : Op) (caller : Address) (s' : S
     by_cases hao : a = o
     · subst hao
       exact Or.inr (Or.inl ⟨id, am, ce, rfl, hreq, howner, hnow,
-        by simp [mintApxUSD, burnUnlockNFT]⟩)
+        by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]⟩)
     · exfalso
-      simp [mintApxUSD, burnUnlockNFT, hao] at h_inc
+      simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hao] at h_inc
   case redeemApxUSD amount =>
     obtain ⟨_, _, _, _, _, hs'⟩ := inv_redeemApxUSD _ _ _ _ h_step
     subst hs'
@@ -2132,12 +2135,12 @@ theorem apxUSD_credit_is_backed (s : State) (op : Op) (caller : Address) (s' : S
       have heq : (mintApxUSD (burnUnlockNFT s id) a
             (am - am * flexibleUnlockFee rt s.now / 10000)).apxUSDBal a
           = s.apxUSDBal a + (am - am * flexibleUnlockFee rt s.now / 10000) := by
-        simp [mintApxUSD, burnUnlockNFT]
+        simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
       refine Or.inr (Or.inr ⟨id, am, rt, ce, rfl, hreq, howner, hnow, heq, ?_⟩)
       rw [heq]
       exact Nat.add_le_add_left (Nat.sub_le _ _) _
     · exfalso
-      simp [mintApxUSD, burnUnlockNFT, hao] at h_inc
+      simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hao] at h_inc
   case executeRFQRedemption user amount =>
     obtain ⟨_, _, _, _, _, _, hs'⟩ := inv_executeRFQRedemption _ _ _ _ _ h_step
     subst hs'
@@ -2753,7 +2756,8 @@ theorem distributor_compartmentalized (s : State) (σ : List (Op × Address))
     (execTrace s σ).vaultApxUSDBal = s.vaultApxUSDBal ∧
     (execTrace s σ).totalSupply_apxUSD = s.totalSupply_apxUSD ∧
     (execTrace s σ).totalSupply_apyUSD = s.totalSupply_apyUSD ∧
-    s.usdcReserve ≤ (execTrace s σ).usdcReserve ∧
+    -- the reserve is now *untouched* by this role, not merely non-decreasing
+    (execTrace s σ).usdcReserve = s.usdcReserve ∧
     s.fullyVestedAmount + s.vestTotal
       ≤ (execTrace s σ).fullyVestedAmount + (execTrace s σ).vestTotal := by
   obtain ⟨hframe, hres, hvest⟩ := yield_distributor_trace_blast_radius s σ h_gated
@@ -2934,7 +2938,7 @@ theorem single_key_bounds (s : State) (σO σP σD σA : List (Op × Address))
     ((execTrace s σP).apxUSDBal = s.apxUSDBal ∧
       (execTrace s σP).usdcReserve = s.usdcReserve) ∧
     ((execTrace s σD).apxUSDBal = s.apxUSDBal ∧
-      s.usdcReserve ≤ (execTrace s σD).usdcReserve) ∧
+      (execTrace s σD).usdcReserve = s.usdcReserve) ∧
     ((execTrace s σA).apxUSDBal = s.apxUSDBal ∧
       (execTrace s σA).usdcReserve ≤ s.usdcReserve) := by
   refine ⟨?_, ?_, ?_, ?_⟩

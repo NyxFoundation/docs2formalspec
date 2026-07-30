@@ -158,6 +158,12 @@ def redeemAssets (shares : Nat) (exchangeRate : Nat) : Nat :=
 def withdrawShares (assets : Nat) (exchangeRate : Nat) : Nat :=
   (assets * ray + exchangeRate - 1) / exchangeRate
 
+/-- Assets needed for `shares`, rounded **up**. OpenZeppelin's `previewMint` is
+`_convertToAssets(shares, Math.Rounding.Ceil)`; the Floor-rounded `redeemAssets` would
+under-charge the minter, i.e. round against the protocol. -/
+def redeemAssetsCeil (shares : Nat) (exchangeRate : Nat) : Nat :=
+  (shares * exchangeRate + ray - 1) / ray
+
 /-- Pull all vested yield (both the previously-realized `fullyVestedAmount` and whatever
 has newly streamed out of the current vest clock) into vault custody, mirroring
 `LinearVestV0.pullVestedYield`: the realized total moves into `vaultApxUSDBal`, the
@@ -222,6 +228,22 @@ def burnUnlockNFT (s : State) (id : Nat) : State :=
   { s with
       unlockTokenOwner := fun i => if i = id then none else s.unlockTokenOwner i
       unlockTokenAmount := fun i => if i = id then 0 else s.unlockTokenAmount i
+  }
+
+/-- Retire a settled standard unlock position: burn its receipt **and** clear the request
+registry entry and the owner's pending-request pointer.
+
+Clearing the last two is what the earlier model omitted. `burnUnlockNFT` alone left
+`unlockRequests id = some (owner, amount, _)` and `unlockRequestId owner = some id` in place, so
+a subsequent `requestUnlock` topped up the already-settled entry — and because the claim guard
+requires `unlockTokenOwner id = some owner`, which the burn had set to `none`, the topped-up
+amount could never be claimed. The deployed `CommitToken.redeem` deletes the request
+(`delete _requests[owner]`) in the same call that burns, so this is the faithful shape. -/
+def retireStandardUnlock (s : State) (id : Nat) (owner : Address) : State :=
+  { burnUnlockNFT s id with
+      unlockRequests := fun i => if i = id then none else s.unlockRequests i
+      unlockRequestId := fun a =>
+        if a = owner ∧ s.unlockRequestId a = some id then none else s.unlockRequestId a
   }
 
 def mintApxUSD (s : State) (to : Address) (amount : Nat) : State :=
@@ -291,7 +313,7 @@ def previewDeposit (s : State) (assets : Nat) : Nat :=
   convertToShares s assets
 
 def previewMint (s : State) (shares : Nat) : Nat :=
-  convertToAssets s shares
+  redeemAssetsCeil shares (computeExchangeRate s)
 
 def previewWithdraw (s : State) (assets : Nat) : Nat :=
   withdrawShares assets (computeExchangeRate s)
@@ -631,7 +653,7 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
       else if caller = owner ∨ caller = s.unlockTokenOperator then
         if s.now < cooldownEnd then none
         else
-          let s1 := burnUnlockNFT s requestId
+          let s1 := retireStandardUnlock s requestId owner
           let s2 := mintApxUSD s1 owner amount
           some s2
       else none
@@ -745,10 +767,13 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     -- clock into `fullyVestedAmount` BEFORE folding the new amount into a
     -- freshly-restarted `vestTotal`/`vestStart` clock, so already-accrued yield is
     -- never forfeited (cf. `req_credit_preserves_accrued_vest`).
+    -- `IVesting.depositYield(amount)` moves apxUSD into the **vesting** contract and nothing
+    -- else; the USDC redemption reserve lives in a different contract entirely
+    -- (`RedemptionPoolV0`). The earlier model credited both from this one op, which inflated
+    -- the collateral side of `Solvent` / `req_overcollateralization_limit` for free.
     if caller == s.yieldDistributor then
       let nv := newlyVestedAmount s s.now
       let s1 := { s with
-        usdcReserve := s.usdcReserve + amount
         fullyVestedAmount := s.fullyVestedAmount + nv
         vestTotal := (s.vestTotal - nv) + amount
         vestStart := s.now
@@ -862,6 +887,17 @@ def depositForMinShares (s : State) (assets minShares : Nat) (_receiver caller :
   if previewDeposit s assets < minShares then none
   else step s (Op.lockApxUSD assets) caller
 
+/-- `mintForMaxAssets(shares, maxAssets, receiver)`: preview the assets, revert on slippage, then
+mint.
+
+**Documented deviation.** On-chain this calls `mint(shares, receiver)`, which delivers *exactly*
+`shares` and pulls the ceil-rounded `previewMint shares` assets. The model has no share-exact
+mint operation — `Op` names asset amounts — so it routes through `lockApxUSD (previewMint s shares)`
+and delivers `convertToShares (previewMint s shares)`, which `mintForMaxAssets_may_underdeliver`
+proves is at most `shares`. The gap is pure rounding (at most one share), but it is a real
+interface deviation and is not hidden behind a theorem that claims exactness. Closing it needs a
+share-denominated `Op` constructor; adding one destabilises the exhaustive-`Op` proofs, so it is
+recorded here instead. -/
 def mintForMaxAssets (s : State) (shares maxAssets : Nat) (_receiver caller : Address) : Option State :=
   if previewMint s shares > maxAssets then none
   else step s (Op.lockApxUSD (previewMint s shares)) caller
@@ -1223,7 +1259,7 @@ private theorem step_claimUnlock_some (s : State) (id : Nat) (caller : Address) 
       s.unlockTokenOwner id = some owner ∧
       (caller = owner ∨ caller = s.unlockTokenOperator) ∧
       cooldownEnd ≤ s.now ∧
-      s' = mintApxUSD (burnUnlockNFT s id) owner amount := by
+      s' = mintApxUSD (retireStandardUnlock s id owner) owner amount := by
   simp only [step] at h
   split at h
   · exact absurd h (by simp)
@@ -1342,7 +1378,7 @@ private theorem apyUSDBal_unchanged_of_non_share_op (s : State) (op : Op) (calle
   case claimUnlock id =>
     obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
     subst hs'
-    simp [mintApxUSD, burnUnlockNFT]
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
   case redeemApxUSD amount =>
     obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
     subst hs'
@@ -1354,7 +1390,7 @@ private theorem apyUSDBal_unchanged_of_non_share_op (s : State) (op : Op) (calle
   case flexibleClaimUnlock id =>
     obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
     subst hs'
-    simp [mintApxUSD, burnUnlockNFT]
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
   case executeRFQRedemption u am =>
     obtain ⟨_, _, _, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
     subst hs'
@@ -1391,7 +1427,7 @@ private theorem step_unlockTokenOperator_unchanged (s : State) (op : Op) (caller
   case claimUnlock id =>
     obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
     subst hs'
-    simp [mintApxUSD, burnUnlockNFT]
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
   case redeemApxUSD a =>
     obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
     subst hs'
@@ -1411,7 +1447,7 @@ private theorem step_unlockTokenOperator_unchanged (s : State) (op : Op) (caller
   case flexibleClaimUnlock id =>
     obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
     subst hs'
-    simp [mintApxUSD, burnUnlockNFT]
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
   case executeRFQRedemption u am =>
     obtain ⟨_, _, _, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
     subst hs'
@@ -1448,7 +1484,7 @@ private theorem step_unlockTokenAddress_unchanged (s : State) (op : Op) (caller 
   case claimUnlock id =>
     obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
     subst hs'
-    simp [mintApxUSD, burnUnlockNFT]
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
   case redeemApxUSD a =>
     obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
     subst hs'
@@ -1468,7 +1504,7 @@ private theorem step_unlockTokenAddress_unchanged (s : State) (op : Op) (caller 
   case flexibleClaimUnlock id =>
     obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
     subst hs'
-    simp [mintApxUSD, burnUnlockNFT]
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
   case executeRFQRedemption u am =>
     obtain ⟨_, _, _, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
     subst hs'
@@ -1638,7 +1674,7 @@ theorem req_cooldown_no_yield (s : State) :
     simp only [Option.some.injEq, Prod.mk.injEq] at hreq'
     obtain ⟨rfl, rfl, rfl⟩ := hreq'
     subst hs'
-    simp [mintApxUSD, burnUnlockNFT]
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
 
 /-- REQ flexible-redemption-multiple-requests: The system MUST allow a user to have
 multiple concurrent flexible redemption unlock requests. (Model: two back-to-back flexible
@@ -1772,7 +1808,6 @@ theorem req_pay_to_non_cooldown (s : State) (amount : Nat) (caller : Address) (s
   · cases Option.some.inj h_step
     have hnv : newlyVestedAmount s s.now ≤ s.vestTotal := newlyVestedAmount_le_total s s.now
     have h_assets : totalAssets { ({ s with
-          usdcReserve := s.usdcReserve + amount
           fullyVestedAmount := s.fullyVestedAmount + newlyVestedAmount s s.now
           vestTotal := (s.vestTotal - newlyVestedAmount s s.now) + amount
           vestStart := s.now }) with
@@ -1914,9 +1949,9 @@ theorem req_unlock_token_redeem_after_cooldown (s : State) (id : Nat) (owner : A
     (h_time : cooldownEnd ≤ s.now) :
     ∃ s', step s (Op.claimUnlock id) owner = some s' ∧
       s'.apxUSDBal owner = s.apxUSDBal owner + amount := by
-  refine ⟨mintApxUSD (burnUnlockNFT s id) owner amount, ?_, ?_⟩
+  refine ⟨mintApxUSD (retireStandardUnlock s id owner) owner amount, ?_, ?_⟩
   · simp [step, h_req, h_owner, Nat.not_lt.mpr h_time]
-  · simp [mintApxUSD, burnUnlockNFT]
+  · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
 
 /-- Helper: a new apxUSD_unlock position can only be created by one of the vault's own
 unlock entry points (`requestUnlock`/`flexibleRequestUnlock`/`withdraw`/`redeem`), and it
@@ -1969,14 +2004,14 @@ private theorem unlock_position_created_only_by_vault_ops (s : State) (op : Op) 
     obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
     subst hs'
     by_cases hid : id = rid
-    · subst hid; simp [mintApxUSD, burnUnlockNFT] at h_now
-    · simp [mintApxUSD, burnUnlockNFT, hid, h_new] at h_now
+    · subst hid; simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT] at h_now
+    · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hid, h_new] at h_now
   case flexibleClaimUnlock rid =>
     obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
     subst hs'
     by_cases hid : id = rid
-    · subst hid; simp [mintApxUSD, burnUnlockNFT] at h_now
-    · simp [mintApxUSD, burnUnlockNFT, hid, h_new] at h_now
+    · subst hid; simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT] at h_now
+    · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hid, h_new] at h_now
   case depositUSDC a =>
     obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
     subst hs'
@@ -2040,14 +2075,14 @@ theorem req_vault_operator_of_unlock_token (s : State) :
             rw [step_unlockTokenOperator_unchanged _ _ _ _ h]; exact hcfg,
           fun hcfg => ⟨?_, ?_⟩⟩
   · intro id owner amount cooldownEnd h_req h_owner h_time
-    refine ⟨mintApxUSD (burnUnlockNFT s id) owner amount, ?_, ?_⟩
+    refine ⟨mintApxUSD (retireStandardUnlock s id owner) owner amount, ?_, ?_⟩
     · simp [step, h_req, h_owner, hcfg, Nat.not_lt.mpr h_time]
-    · simp [mintApxUSD, burnUnlockNFT]
+    · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
   · intro id owner amount requestTime cooldownEnd h_req h_owner h_time
     refine ⟨mintApxUSD (burnUnlockNFT s id) owner
         (amount - amount * flexibleUnlockFee requestTime s.now / 10000), ?_, ?_⟩
     · simp [step, h_req, h_owner, hcfg, Nat.not_lt.mpr h_time]
-    · simp [mintApxUSD, burnUnlockNFT]
+    · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
 
 /-- REQ singleton-unlockToken-instance: There MUST be exactly one instance of UnlockToken
 and it MUST be used exclusively by the apyUSD vault. (Model: the UnlockToken instance is
@@ -2496,9 +2531,9 @@ theorem req_unlock_token_redeemable_1to1_after_20d (s : State) (requestId : Nat)
     (∃ s', step s (.claimUnlock requestId) caller = some s' ∧
            s'.apxUSDBal caller = s.apxUSDBal caller + s.unlockTokenAmount requestId) := by
   right
-  refine ⟨mintApxUSD (burnUnlockNFT s requestId) caller (s.unlockTokenAmount requestId), ?_, ?_⟩
+  refine ⟨mintApxUSD (retireStandardUnlock s requestId caller) caller (s.unlockTokenAmount requestId), ?_, ?_⟩
   · simp [step, h_request, h_owner, Nat.not_lt.mpr (Nat.sub_le s.now cooldownPeriod)]
-  · simp [mintApxUSD, burnUnlockNFT]
+  · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
 
 /-- REQ unlock-token-no-yield: apxUSD_unlock tokens MUST NOT earn yield. -/
 theorem req_unlock_token_no_yield (s : State) (amount dt : Nat) (owner : Address) :
@@ -3017,7 +3052,7 @@ private theorem vaultApxUSDBal_unchanged_of_non_vault_op (s : State) (op : Op) (
   case claimUnlock id =>
     obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
     subst hs'
-    simp [mintApxUSD, burnUnlockNFT]
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
   case redeemApxUSD amount =>
     obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
     subst hs'
@@ -3029,7 +3064,7 @@ private theorem vaultApxUSDBal_unchanged_of_non_vault_op (s : State) (op : Op) (
   case flexibleClaimUnlock id =>
     obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
     subst hs'
-    simp [mintApxUSD, burnUnlockNFT]
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
   case executeRFQRedemption u am =>
     obtain ⟨_, _, _, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
     subst hs'
@@ -3126,8 +3161,8 @@ theorem req_unlock_cannot_be_cancelled (s : State) (op : Op) (caller : Address) 
     · subst hid
       have ho : o = owner := by rw [howner] at h_live; exact Option.some.inj h_live
       subst ho
-      exact Or.inl ⟨rfl, am, ce, hreq, htime, by simp [mintApxUSD, burnUnlockNFT]⟩
-    · simp [mintApxUSD, burnUnlockNFT, hid, h_live] at h_gone
+      exact Or.inl ⟨rfl, am, ce, hreq, htime, by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]⟩
+    · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hid, h_live] at h_gone
   case flexibleClaimUnlock rid =>
     obtain ⟨o, am, rt, ce, hreq, howner, _, htime, hs'⟩ :=
       step_flexibleClaimUnlock_some _ _ _ _ h_step
@@ -3136,8 +3171,8 @@ theorem req_unlock_cannot_be_cancelled (s : State) (op : Op) (caller : Address) 
     · subst hid
       have ho : o = owner := by rw [howner] at h_live; exact Option.some.inj h_live
       subst ho
-      exact Or.inr ⟨rfl, am, rt, ce, hreq, htime, by simp [mintApxUSD, burnUnlockNFT]⟩
-    · simp [mintApxUSD, burnUnlockNFT, hid, h_live] at h_gone
+      exact Or.inr ⟨rfl, am, rt, ce, hreq, htime, by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]⟩
+    · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hid, h_live] at h_gone
   case requestUnlock a =>
     obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
     subst hs'
@@ -3284,23 +3319,23 @@ theorem req_unlock_token_nontransferable (s : State) (op : Op) (caller : Address
     subst hs'
     constructor
     · intro i hi
-      simp only [mintApxUSD, burnUnlockNFT] at hi ⊢
+      simp only [mintApxUSD, retireStandardUnlock, burnUnlockNFT] at hi ⊢
       by_cases hic : i = rid <;> simp [hic, h_fresh i (by simpa using hi)]
     · intro id owner h_own
       by_cases hid : id = rid
-      · exact Or.inr (by simp [mintApxUSD, burnUnlockNFT, hid])
-      · exact Or.inl (by simp [mintApxUSD, burnUnlockNFT, hid, h_own])
+      · exact Or.inr (by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hid])
+      · exact Or.inl (by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hid, h_own])
   case flexibleClaimUnlock rid =>
     obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
     subst hs'
     constructor
     · intro i hi
-      simp only [mintApxUSD, burnUnlockNFT] at hi ⊢
+      simp only [mintApxUSD, retireStandardUnlock, burnUnlockNFT] at hi ⊢
       by_cases hic : i = rid <;> simp [hic, h_fresh i (by simpa using hi)]
     · intro id owner h_own
       by_cases hid : id = rid
-      · exact Or.inr (by simp [mintApxUSD, burnUnlockNFT, hid])
-      · exact Or.inl (by simp [mintApxUSD, burnUnlockNFT, hid, h_own])
+      · exact Or.inr (by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hid])
+      · exact Or.inl (by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hid, h_own])
   case depositUSDC a =>
     obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
     subst hs'
@@ -3443,7 +3478,7 @@ owner's full balance-derived capacity when live.) -/
 theorem req_erc4626_compliance (s : State) :
     -- (1) previews report exactly the conversions the operations use
     (∀ assets, previewDeposit s assets = convertToShares s assets) ∧
-    (∀ shares, previewMint s shares = convertToAssets s shares) ∧
+    (∀ shares, previewMint s shares = redeemAssetsCeil shares (computeExchangeRate s)) ∧
     (∀ assets, previewWithdraw s assets = withdrawShares assets (computeExchangeRate s)) ∧
     (∀ shares, previewRedeem s shares = convertToAssets s shares) ∧
     -- (2) conversions are mutually consistent: round-trips never credit value

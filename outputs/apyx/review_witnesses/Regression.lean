@@ -158,4 +158,69 @@ example : s1.apyUSDBal 2 = 100 ∧ s1.totalSupply_apyUSD = 100 ∧ s1.vaultApxUS
 /-- Zero supply prices at par rather than at zero, which is what made the old hole reachable. -/
 example : computeExchangeRate (default : State) = ray := by decide
 
+/-! ## R6 — settling a standard unlock no longer strands the next request
+
+`code_review_lean.md` §2.2: `claimUnlock` burned the receipt but left `unlockRequests id` and
+`unlockRequestId owner` set. A later `requestUnlock` therefore topped up the already-settled
+entry, and since the claim guard needs `unlockTokenOwner id = some owner` — which the burn had
+set to `none` — the topped-up amount became **permanently unclaimable**.
+
+`retireStandardUnlock` now clears all three, matching `CommitToken.redeem`, which deletes the
+request in the same call that burns.
+-/
+
+/-- Holder `1` has a matured position for 50 and 100 apxUSD in hand. -/
+def c0 : State :=
+  { (default : State) with
+      globalPause := false
+      now := cooldownPeriod
+      apxUSDBal := fun a => if a = 1 then 100 else 0
+      totalSupply_apxUSD := 150
+      nextUnlockId := 1
+      unlockRequestId := fun a => if a = 1 then some 0 else none
+      unlockRequests := fun i => if i = 0 then some (1, 50, 0) else none
+      unlockTokenOwner := fun i => if i = 0 then some 1 else none
+      unlockTokenAmount := fun i => if i = 0 then 50 else 0 }
+
+def c1 : State := execTrace c0 [(Op.claimUnlock 0, 1)]
+
+/-- **The fix.** Settling pays out *and* retires the entry and the pointer. -/
+example : c1.apxUSDBal 1 = 150 ∧ c1.unlockRequests 0 = none ∧ c1.unlockRequestId 1 = none := by
+  decide
+
+/-- A later request opens a **fresh** position rather than topping up the dead one. -/
+def c2 : State := execTrace c1 [(Op.requestUnlock 100, 1)]
+
+example : c2.unlockRequestId 1 = some 1
+        ∧ c2.unlockRequests 1 = some (1, 100, cooldownPeriod + cooldownPeriod)
+        ∧ c2.unlockTokenOwner 1 = some 1
+        ∧ c2.unlockRequests 0 = none := by decide
+
+/-- **And it is claimable.** Before the fix this 100 apxUSD was stranded for good. -/
+example : (execTrace c2 [(Op.tick cooldownPeriod, 0), (Op.claimUnlock 1, 1)]).apxUSDBal 1 = 150 := by
+  decide
+
+/-! ## R7 — `creditYield` no longer credits the USDC reserve
+
+`code_review_lean.md` §2.1: the op added `amount` to **both** `usdcReserve` and the vest pool,
+so one dollar of yield inflated the collateral side of `Solvent` /
+`req_overcollateralization_limit` for free. On-chain `IVesting.depositYield(amount)` moves apxUSD
+into the vesting contract and touches nothing else; the USDC redemption reserve is
+`RedemptionPoolV0`, a different contract.
+-/
+
+def y0 : State :=
+  { (default : State) with yieldDistributor := 5, usdcReserve := 777, vestPeriod := 100 * day }
+
+/-- **The fix.** The reserve is untouched; only the vest pool grows. -/
+example : (execTrace y0 [(Op.creditYield 100, 5)]).usdcReserve = 777
+        ∧ (execTrace y0 [(Op.creditYield 100, 5)]).vestTotal = 100 := by decide
+
+/-- Lifted to the role: a compromised `yieldDistributor` cannot move the reserve *at all* over
+    any trace. This used to be stated as `s.usdcReserve ≤ …` — non-decreasing — because the op
+    did credit it. -/
+example (s : State) (σ : List (Op × Address)) (h : ∀ p ∈ σ, DistributorOp p.1) :
+    (execTrace s σ).usdcReserve = s.usdcReserve :=
+  (yield_distributor_trace_blast_radius s σ h).2.1
+
 end Apyx
