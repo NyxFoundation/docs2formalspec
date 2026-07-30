@@ -3112,8 +3112,9 @@ paying the full `amount` in USDC. Instead the coalition acts first:
 
 Outcome (final conjuncts): the victim ends with 0 apxUSD and strictly less USDC
 than the counterfactual pays — concretely 50 against 100 — an attributable loss of
-half the principal. The other half of the reserve was routed to the bystander by
-the coalition's own first step, so the harm is a redistribution, not bookkeeping.
+half the principal. The redistribution is a conjunct too, not prose: a bystander
+the coalition never names starts with 0 USDC and ends holding exactly half the
+victim's principal, routed there by the backstop's own pro-rata leg.
 
 Model-boundary assumptions carried by both coalition theorems (review action 2):
 the *filing* of the victim's RFQ request is state (`rfqRequests`) and its
@@ -3138,7 +3139,9 @@ theorem admin_rfq_coalition_drains_funded :
       s1.redemptionValue = 0 ∧
       step s1 (Op.executeRFQRedemption victim amount) counterparty = some s2 ∧
       s2.apxUSDBal victim = 0 ∧
-      s2.usdcBal victim < amount := by
+      s2.usdcBal victim < amount ∧
+      (∃ bystander, bystander ≠ victim ∧ s.usdcBal bystander = 0 ∧
+        2 * s2.usdcBal bystander = amount) := by
   -- step 1: the backstop reprices to 0 * ray / 200 = 0 and pays the reserve
   -- pro-rata: 50 to the victim, 50 to the bystander
   let R : State :=
@@ -3165,10 +3168,13 @@ theorem admin_rfq_coalition_drains_funded :
   have h2 := step_executeRFQRedemption_forward R 0 100 2 hgp hcp hwl hrq hbal hres
   obtain ⟨hapx, husdc⟩ := rfq_payout_formula R 0 100 2 _ h2
   refine ⟨coalWitnessFunded, R, _, 0, 2, 100, by decide, rfl, rfl, rfl, rfl, rfl,
-    Nat.le_refl _, by decide, ⟨_, rfl, rfl⟩, h1, rfl, h2, ?_, ?_⟩
+    Nat.le_refl _, by decide, ⟨_, rfl, rfl⟩, h1, rfl, h2, ?_, ?_, ⟨4, by decide, rfl, ?_⟩⟩
   · rw [hapx, show R.apxUSDBal 0 = 100 from rfl]
   · rw [husdc, show R.redemptionValue = 0 from rfl, Nat.mul_zero, Nat.zero_div,
       show R.usdcBal 0 = 50 from rfl]
+    decide
+  · -- the settlement leg touches only the victim's balance, so the bystander still
+    -- holds exactly the 50 the backstop's pro-rata leg routed to them
     decide
 
 /-! ## T11: the RFQ counterparty's timing option
