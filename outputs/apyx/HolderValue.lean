@@ -489,4 +489,496 @@ example : netDelta hvr0 hvRLate 1 = -50 := by decide
 /-- Both traces consume the request, so the holder has no second attempt. -/
 example : hvRNow.rfqRequests 1 = 0 ∧ hvRLate.rfqRequests 1 = 0 := by decide
 
+/-! ## The `caller_value_*` family, restated against the complete measure
+
+`README` §9.3 left one item of the value-ledger work open: `Safety.lean`'s `caller_value_*`
+theorems still price the caller with the incomplete `valueAt`. This section closes it.
+
+`holderValueAt` is the rate-parameterized form of `holderValue`, mirroring `Safety.valueAt`'s
+explicit-rate discipline (the reason for it is unchanged: three of the five ops move the live
+rate within the step, so a clean single-step bound must price pre- and post-state at one rate).
+
+The five op families split by what they do to the unlock registry:
+
+* `depositUSDC`, `lockApxUSD`, `redeemApxUSD` never touch it, so the old theorems lift
+  directly: the same bound, now over everything the caller owns.
+* `withdraw`, `redeem` are the interesting pair — the payout lands in a position the old
+  measure could not see, so `caller_value_withdraw_fixedRate`'s "the caller's value falls"
+  was an artifact. The honest complete-measure statement is a **no-gain** law, and it must be
+  priced at the rate the step executes at (`computeExchangeRate (pullVestedYield s)`): the
+  shares are burned at that rate, so at any *other* rate the burned value and the credited
+  position need not balance. What makes it true is the rounding direction — `withdrawShares`
+  rounds the share cost **up**, so the value leaving the share column covers the `assets`
+  arriving in the position column, and floor-division superadditivity does the rest.
+-/
+
+/-- `holderValue` at an explicit rate `R` — the complete-measure counterpart of
+`Safety.valueAt`. -/
+def holderValueAt (R : Nat) (s : State) (a : Address) : Nat :=
+  valueAt R s a + stdPositions s a + flexPositions s a
+
+/-- At the state's own live rate, the parameterized form is `holderValue`. -/
+theorem holderValueAt_live (s : State) (a : Address) :
+    holderValueAt (computeExchangeRate s) s a = holderValue s a := rfl
+
+@[simp] private theorem pv_apxUSDBal' (s : State) :
+    (pullVestedYield s).apxUSDBal = s.apxUSDBal := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pv_apyUSDBal' (s : State) :
+    (pullVestedYield s).apyUSDBal = s.apyUSDBal := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pv_usdcBal' (s : State) :
+    (pullVestedYield s).usdcBal = s.usdcBal := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pv_flexibleUnlockRequests' (s : State) :
+    (pullVestedYield s).flexibleUnlockRequests = s.flexibleUnlockRequests := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+/-- Registry-frame congruence for the flexible sum (mirror of `stdPositions_congr_on`,
+with the registry equality taken whole because that is what the frame facts provide). -/
+private theorem flexPositions_congr_on (s s' : State) (a : Address)
+    (hn : s'.nextUnlockId = s.nextUnlockId)
+    (h : s'.flexibleUnlockRequests = s.flexibleUnlockRequests) :
+    flexPositions s' a = flexPositions s a := by
+  unfold flexPositions
+  rw [hn]
+  congr 1
+  apply List.map_congr_left
+  intro i _
+  simp [flexAmt, h]
+
+/-- A step that grows the id counter by one without writing the flexible registry leaves the
+flexible sum alone — provided the fresh id was unallocated, the same reachability-shaped
+hypothesis `requestUnlock_holderValue_neutral` takes. -/
+private theorem flexPositions_of_fresh_id (s s' : State) (a : Address)
+    (hnext : s'.nextUnlockId = s.nextUnlockId + 1)
+    (hflex : s'.flexibleUnlockRequests = s.flexibleUnlockRequests)
+    (h_unalloc : s.flexibleUnlockRequests s.nextUnlockId = none) :
+    flexPositions s' a = flexPositions s a := by
+  unfold flexPositions
+  rw [hnext, List.range_succ, List.map_append, List.sum_append]
+  have hagree : (List.range s.nextUnlockId).map (flexAmt s' a)
+      = (List.range s.nextUnlockId).map (flexAmt s a) := by
+    apply List.map_congr_left
+    intro i _
+    simp [flexAmt, hflex]
+  have hlast : flexAmt s' a s.nextUnlockId = 0 := by
+    simp [flexAmt, hflex, h_unalloc]
+  rw [hagree]
+  simp [hlast]
+
+/-! ### Local step inversions
+
+`Safety.lean`'s `inv_*` lemmas are `private` to that file, so the post-state shapes are
+re-derived here — the same pattern this module already uses for `withdraw`/`redeem`. The
+`withdraw` form additionally surfaces the zero-share guard, which the no-gain arithmetic
+needs: a positive withdrawal costing zero shares is exactly the `Regression.lean` §R4b
+drain, and the model refuses it. -/
+
+private theorem post_depositUSDC (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.depositUSDC amount) caller = some s') :
+    s' = emitEvent (mintApxUSD { s with
+        usdcBal := fun a => if a = caller then s.usdcBal a - amount else s.usdcBal a
+        usdcReserve := s.usdcReserve + amount } caller amount)
+      "Deposit" [caller, caller, caller, amount, amount] := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · exact (Option.some.inj h).symm
+
+private theorem post_lockApxUSD (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.lockApxUSD amount) caller = some s') :
+    s' = emitEvent (updateExchangeRate (mintApyUSD
+          { burnApxUSD s caller amount with
+            vaultApxUSDBal := (burnApxUSD s caller amount).vaultApxUSDBal + amount }
+          caller (lockShares amount (computeExchangeRate s))))
+      "Deposit" [caller, caller, caller, amount, lockShares amount (computeExchangeRate s)] := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · exact (Option.some.inj h).symm
+
+private theorem post_redeemApxUSD (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.redeemApxUSD amount) caller = some s') :
+    s' = emitEvent { burnApxUSD s caller amount with
+        usdcReserve := (burnApxUSD s caller amount).usdcReserve - (amount * s.redemptionValue) / ray
+        usdcBal := fun a => if a = caller then (burnApxUSD s caller amount).usdcBal a + (amount * s.redemptionValue) / ray
+                            else (burnApxUSD s caller amount).usdcBal a }
+      "Redeem" [caller, amount, (amount * s.redemptionValue) / ray] := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · split at h
+          · exact absurd h (by simp)
+          · split at h
+            · exact absurd h (by simp)
+            · split at h
+              · exact absurd h (by simp)
+              · exact (Option.some.inj h).symm
+
+private theorem inv_withdraw' (s : State) (assets : Nat) (receiver caller : Address) (s' : State)
+    (h : step s (Op.withdraw assets receiver) caller = some s') :
+    ¬(0 < assets ∧ withdrawShares assets (computeExchangeRate (pullVestedYield s)) = 0) ∧
+    withdrawShares assets (computeExchangeRate (pullVestedYield s))
+      ≤ (pullVestedYield s).apyUSDBal caller ∧
+    s' = emitEvent (updateExchangeRate (createStandardUnlock
+          { burnApyUSD (pullVestedYield s) caller
+              (withdrawShares assets (computeExchangeRate (pullVestedYield s))) with
+            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller
+              (withdrawShares assets (computeExchangeRate (pullVestedYield s)))).vaultApxUSDBal
+                - assets }
+          receiver assets)) "Withdraw"
+      [caller, receiver, caller, assets,
+        withdrawShares assets (computeExchangeRate (pullVestedYield s))] := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · exact ⟨by assumption, by omega, (Option.some.inj h).symm⟩
+
+private theorem inv_redeem' (s : State) (shares : Nat) (receiver caller : Address) (s' : State)
+    (h : step s (Op.redeem shares receiver) caller = some s') :
+    shares ≤ (pullVestedYield s).apyUSDBal caller ∧
+    s' = emitEvent (updateExchangeRate (createStandardUnlock
+          { burnApyUSD (pullVestedYield s) caller shares with
+            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller shares).vaultApxUSDBal
+              - redeemAssets shares (computeExchangeRate (pullVestedYield s)) }
+          receiver (redeemAssets shares (computeExchangeRate (pullVestedYield s))))) "Withdraw"
+      [caller, receiver, caller,
+        redeemAssets shares (computeExchangeRate (pullVestedYield s)), shares] := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · exact ⟨by omega, (Option.some.inj h).symm⟩
+
+/-! ### The rounding arithmetic
+
+Three `Nat` facts carry the two vault cases. Floor division is superadditive
+(`x/d + y/d ≤ (x+y)/d`), so splitting a share balance can only lose dust; and the
+**ceil**-rounded `withdrawShares` covers its `assets` — the share cost, priced back at the
+same rate, is at least what the position receives. The zero-share guard is load-bearing:
+without it `withdrawShares` returns 0 at a zero rate and the covering fact is false. -/
+
+private theorem div_add_div_le (x y d : Nat) : x / d + y / d ≤ (x + y) / d := by
+  rcases Nat.eq_zero_or_pos d with h | h
+  · subst h; simp
+  · rw [Nat.le_div_iff_mul_le h, Nat.add_mul]
+    exact Nat.add_le_add (Nat.div_mul_le_self x d) (Nat.div_mul_le_self y d)
+
+/-- Splitting a share balance across a burn loses at most dust, never gains:
+the two pieces, each floor-priced, never exceed the whole floor-priced. -/
+private theorem redeemAssets_superadd (b c R : Nat) (h : c ≤ b) :
+    redeemAssets (b - c) R + redeemAssets c R ≤ redeemAssets b R := by
+  unfold redeemAssets
+  have hsplit := div_add_div_le ((b - c) * R) (c * R) ray
+  rwa [← Nat.add_mul, Nat.sub_add_cancel h] at hsplit
+
+/-- The ceil-rounded share cost of a withdrawal, floor-priced back at the same rate,
+covers the withdrawn assets. Needs the cost to be nonzero — at `R = 0` the cost is 0
+and covers nothing, which is exactly the state the step's zero-share guard refuses. -/
+private theorem withdrawShares_covers (assets R : Nat)
+    (hW : withdrawShares assets R ≠ 0) :
+    assets ≤ redeemAssets (withdrawShares assets R) R := by
+  rcases Nat.eq_zero_or_pos R with hR | hR
+  · subst hR; simp [withdrawShares] at hW
+  · have hray : 0 < ray := Nat.pow_pos (by decide)
+    unfold withdrawShares redeemAssets
+    have hmod := Nat.div_add_mod (assets * ray + R - 1) R
+    have hlt : (assets * ray + R - 1) % R < R := Nat.mod_lt _ hR
+    have h1 : assets * ray ≤ R * ((assets * ray + R - 1) / R) := by omega
+    rw [Nat.le_div_iff_mul_le hray]
+    calc assets * ray ≤ R * ((assets * ray + R - 1) / R) := h1
+      _ = ((assets * ray + R - 1) / R) * R := Nat.mul_comm _ _
+
+/-- The composed fact the `withdraw` case needs: after burning the ceil-rounded share cost,
+the remaining share value plus the withdrawn `assets` never exceeds the original share
+value — at the one rate everything in the step is priced at. -/
+private theorem redeemAssets_sub_withdraw_le (b assets R : Nat)
+    (hle : withdrawShares assets R ≤ b)
+    (hguard : ¬(0 < assets ∧ withdrawShares assets R = 0)) :
+    redeemAssets (b - withdrawShares assets R) R + assets ≤ redeemAssets b R := by
+  rcases Nat.eq_zero_or_pos assets with ha | ha
+  · subst ha
+    have hmono : redeemAssets (b - withdrawShares 0 R) R ≤ redeemAssets b R := by
+      unfold redeemAssets
+      exact Nat.div_le_div_right (Nat.mul_le_mul_right _ (Nat.sub_le _ _))
+    omega
+  · have hW : withdrawShares assets R ≠ 0 := fun h0 => hguard ⟨ha, h0⟩
+    have hcov := withdrawShares_covers assets R hW
+    have hsup := redeemAssets_superadd b (withdrawShares assets R) R hle
+    omega
+
+/-! ### The restated family -/
+
+/-- `depositUSDC`, complete measure: exactly unchanged at the fixed pre-step rate — the 1:1
+USDC/apxUSD swap was already exact under `valueAt`, and the op never touches the unlock
+registry. Lift of `Safety.caller_value_depositUSDC`. -/
+theorem holder_value_depositUSDC (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.depositUSDC amount) caller = some s') :
+    holderValueAt (computeExchangeRate s) s' caller = holderValue s caller := by
+  have hpost := post_depositUSDC s amount caller s' h_step
+  have hnext : s'.nextUnlockId = s.nextUnlockId := by
+    rw [hpost]; simp [emitEvent, mintApxUSD]
+  have hreq : s'.unlockRequests = s.unlockRequests := by
+    rw [hpost]; simp [emitEvent, mintApxUSD]
+  have hflexreg : s'.flexibleUnlockRequests = s.flexibleUnlockRequests := by
+    rw [hpost]; simp [emitEvent, mintApxUSD]
+  have hstd : stdPositions s' caller = stdPositions s caller :=
+    stdPositions_congr_on s' s caller s.nextUnlockId hnext rfl (fun i _ => by rw [hreq])
+  have hflex : flexPositions s' caller = flexPositions s caller :=
+    flexPositions_congr_on s s' caller hnext hflexreg
+  have hval := caller_value_depositUSDC s amount caller s' h_step
+  show valueAt (computeExchangeRate s) s' caller + stdPositions s' caller
+      + flexPositions s' caller = holderValue s caller
+  rw [hval, hstd, hflex]
+  exact callerValue_add_positions s caller
+
+/-- `depositUSDC` never moves the exchange rate, so the complete measure is exactly
+unchanged at the live rate too. -/
+theorem holder_value_depositUSDC_live (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.depositUSDC amount) caller = some s') :
+    holderValue s' caller = holderValue s caller := by
+  have hpost := post_depositUSDC s amount caller s' h_step
+  have hr : computeExchangeRate s' = computeExchangeRate s := by
+    rw [hpost]
+    simp [emitEvent, mintApxUSD, computeExchangeRate, totalAssets, vestedAmount,
+      newlyVestedAmount]
+  rw [← holderValueAt_live, hr]
+  exact holder_value_depositUSDC s amount caller s' h_step
+
+/-- `lockApxUSD`, complete measure: non-increasing at the fixed pre-step rate — floor-rounded
+share minting cannot manufacture value, and the op never touches the unlock registry. Lift of
+`Safety.caller_value_lockApxUSD_fixedRate`; the live-rate reading stays honestly out of scope
+for the same S4 pool-appreciation reason as there. -/
+theorem holder_value_lockApxUSD_fixedRate (s : State) (amount : Nat) (caller : Address)
+    (s' : State) (h_step : step s (Op.lockApxUSD amount) caller = some s') :
+    holderValueAt (computeExchangeRate s) s' caller ≤ holderValue s caller := by
+  have hpost := post_lockApxUSD s amount caller s' h_step
+  have hnext : s'.nextUnlockId = s.nextUnlockId := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  have hreq : s'.unlockRequests = s.unlockRequests := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  have hflexreg : s'.flexibleUnlockRequests = s.flexibleUnlockRequests := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  have hstd : stdPositions s' caller = stdPositions s caller :=
+    stdPositions_congr_on s' s caller s.nextUnlockId hnext rfl (fun i _ => by rw [hreq])
+  have hflex : flexPositions s' caller = flexPositions s caller :=
+    flexPositions_congr_on s s' caller hnext hflexreg
+  have hval := caller_value_lockApxUSD_fixedRate s amount caller s' h_step
+  show valueAt (computeExchangeRate s) s' caller + stdPositions s' caller
+      + flexPositions s' caller ≤ holderValue s caller
+  rw [hstd, hflex, ← callerValue_add_positions s caller]
+  omega
+
+/-- `redeemApxUSD`, complete measure: non-increasing at the fixed pre-step rate, under the
+standing `redemptionValue ≤ ray` no-premium invariant. Lift of
+`Safety.caller_value_redeemApxUSD`; the registry is untouched. -/
+theorem holder_value_redeemApxUSD (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.redeemApxUSD amount) caller = some s')
+    (h_rv : s.redemptionValue ≤ ray) :
+    holderValueAt (computeExchangeRate s) s' caller ≤ holderValue s caller := by
+  have hpost := post_redeemApxUSD s amount caller s' h_step
+  have hnext : s'.nextUnlockId = s.nextUnlockId := by
+    rw [hpost]; simp [emitEvent, burnApxUSD]
+  have hreq : s'.unlockRequests = s.unlockRequests := by
+    rw [hpost]; simp [emitEvent, burnApxUSD]
+  have hflexreg : s'.flexibleUnlockRequests = s.flexibleUnlockRequests := by
+    rw [hpost]; simp [emitEvent, burnApxUSD]
+  have hstd : stdPositions s' caller = stdPositions s caller :=
+    stdPositions_congr_on s' s caller s.nextUnlockId hnext rfl (fun i _ => by rw [hreq])
+  have hflex : flexPositions s' caller = flexPositions s caller :=
+    flexPositions_congr_on s s' caller hnext hflexreg
+  have hval := caller_value_redeemApxUSD s amount caller s' h_step h_rv
+  show valueAt (computeExchangeRate s) s' caller + stdPositions s' caller
+      + flexPositions s' caller ≤ holderValue s caller
+  rw [hstd, hflex, ← callerValue_add_positions s caller]
+  omega
+
+/-- `redeemApxUSD` never moves the exchange rate: the bound holds at the live rate,
+unqualified. -/
+theorem holder_value_redeemApxUSD_live (s : State) (amount : Nat) (caller : Address)
+    (s' : State) (h_step : step s (Op.redeemApxUSD amount) caller = some s')
+    (h_rv : s.redemptionValue ≤ ray) :
+    holderValue s' caller ≤ holderValue s caller := by
+  have hpost := post_redeemApxUSD s amount caller s' h_step
+  have hr : computeExchangeRate s' = computeExchangeRate s := by
+    rw [hpost]
+    simp [emitEvent, burnApxUSD, computeExchangeRate, totalAssets, vestedAmount,
+      newlyVestedAmount]
+  rw [← holderValueAt_live, hr]
+  exact holder_value_redeemApxUSD s amount caller s' h_step h_rv
+
+/-- **`withdraw`, complete measure: a no-gain law, priced at the execution rate.**
+
+This is the theorem `caller_value_withdraw_fixedRate` was standing in for. That statement's
+"the caller's value falls" was an artifact of the missing position term; the honest claim is
+that the caller cannot come out *ahead*, and it holds at the rate the step actually executes
+at — `computeExchangeRate (pullVestedYield s)`, the rate the share cost is ceil-rounded at.
+Pricing at any other rate mixes denominators: a stale rate under-prices the burned shares
+and the step would (spuriously) read as a gain.
+
+Any `receiver`: if the position goes to someone else the caller strictly pays; if to the
+caller, the ceil-rounded share cost covers the position credit (`withdrawShares_covers`),
+with the zero-share guard (`Regression.lean` §R4b) supplying the nonzero cost. -/
+theorem holder_value_withdraw (s : State) (assets : Nat) (receiver caller : Address)
+    (s' : State) (h_step : step s (Op.withdraw assets receiver) caller = some s')
+    (h_unalloc_flex : s.flexibleUnlockRequests s.nextUnlockId = none) :
+    holderValueAt (computeExchangeRate (pullVestedYield s)) s' caller
+      ≤ holderValueAt (computeExchangeRate (pullVestedYield s)) s caller := by
+  obtain ⟨hguard, hWle, hpost⟩ := inv_withdraw' s assets receiver caller s' h_step
+  rw [pv_apyUSDBal'] at hWle
+  have hx : s'.apxUSDBal caller = s.apxUSDBal caller := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hy : s'.apyUSDBal caller = s.apyUSDBal caller
+      - withdrawShares assets (computeExchangeRate (pullVestedYield s)) := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hu : s'.usdcBal caller = s.usdcBal caller := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hnext : s'.nextUnlockId = s.nextUnlockId + 1 := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hold : ∀ i, i < s.nextUnlockId → s'.unlockRequests i = s.unlockRequests i := by
+    intro i hi
+    have hne : i ≠ s.nextUnlockId := Nat.ne_of_lt hi
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD, hne]
+  have hnew : s'.unlockRequests s.nextUnlockId
+      = some (receiver, assets, s.now + cooldownPeriod) := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hflexreg : s'.flexibleUnlockRequests = s.flexibleUnlockRequests := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hstd : stdPositions s' caller
+      = stdPositions s caller + (if receiver = caller then assets else 0) :=
+    stdPositions_of_fresh_entry s s' receiver assets (s.now + cooldownPeriod) caller
+      hnext hold hnew
+  have hflex : flexPositions s' caller = flexPositions s caller :=
+    flexPositions_of_fresh_id s s' caller hnext hflexreg h_unalloc_flex
+  have hkey := redeemAssets_sub_withdraw_le (s.apyUSDBal caller) assets
+    (computeExchangeRate (pullVestedYield s)) hWle hguard
+  show valueAt _ s' caller + stdPositions s' caller + flexPositions s' caller
+      ≤ valueAt _ s caller + stdPositions s caller + flexPositions s caller
+  unfold valueAt
+  rw [hx, hy, hu, hstd, hflex]
+  split
+  · omega
+  · have hmono : redeemAssets (s.apyUSDBal caller
+        - withdrawShares assets (computeExchangeRate (pullVestedYield s)))
+          (computeExchangeRate (pullVestedYield s))
+        ≤ redeemAssets (s.apyUSDBal caller) (computeExchangeRate (pullVestedYield s)) := by
+      unfold redeemAssets
+      exact Nat.div_le_div_right (Nat.mul_le_mul_right _ (Nat.sub_le _ _))
+    omega
+
+/-- **`redeem`, complete measure: the same no-gain law**, at the same execution rate. Simpler
+than `withdraw`: the position credit *is* the floor-priced value of the burned shares, so
+floor superadditivity alone closes it — no ceil fact, no zero-share guard needed (at a zero
+rate the caller burns shares for a zero-amount position, a pure loss, and the bound is
+slack). -/
+theorem holder_value_redeem (s : State) (shares : Nat) (receiver caller : Address)
+    (s' : State) (h_step : step s (Op.redeem shares receiver) caller = some s')
+    (h_unalloc_flex : s.flexibleUnlockRequests s.nextUnlockId = none) :
+    holderValueAt (computeExchangeRate (pullVestedYield s)) s' caller
+      ≤ holderValueAt (computeExchangeRate (pullVestedYield s)) s caller := by
+  obtain ⟨hle, hpost⟩ := inv_redeem' s shares receiver caller s' h_step
+  rw [pv_apyUSDBal'] at hle
+  have hx : s'.apxUSDBal caller = s.apxUSDBal caller := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hy : s'.apyUSDBal caller = s.apyUSDBal caller - shares := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hu : s'.usdcBal caller = s.usdcBal caller := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hnext : s'.nextUnlockId = s.nextUnlockId + 1 := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hold : ∀ i, i < s.nextUnlockId → s'.unlockRequests i = s.unlockRequests i := by
+    intro i hi
+    have hne : i ≠ s.nextUnlockId := Nat.ne_of_lt hi
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD, hne]
+  have hnew : s'.unlockRequests s.nextUnlockId
+      = some (receiver, redeemAssets shares (computeExchangeRate (pullVestedYield s)),
+          s.now + cooldownPeriod) := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hflexreg : s'.flexibleUnlockRequests = s.flexibleUnlockRequests := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hstd : stdPositions s' caller
+      = stdPositions s caller + (if receiver = caller then
+          redeemAssets shares (computeExchangeRate (pullVestedYield s)) else 0) :=
+    stdPositions_of_fresh_entry s s' receiver
+      (redeemAssets shares (computeExchangeRate (pullVestedYield s)))
+      (s.now + cooldownPeriod) caller hnext hold hnew
+  have hflex : flexPositions s' caller = flexPositions s caller :=
+    flexPositions_of_fresh_id s s' caller hnext hflexreg h_unalloc_flex
+  have hkey := redeemAssets_superadd (s.apyUSDBal caller) shares
+    (computeExchangeRate (pullVestedYield s)) hle
+  show valueAt _ s' caller + stdPositions s' caller + flexPositions s' caller
+      ≤ valueAt _ s caller + stdPositions s caller + flexPositions s caller
+  unfold valueAt
+  rw [hx, hy, hu, hstd, hflex]
+  split
+  · omega
+  · have hmono : redeemAssets (s.apyUSDBal caller - shares)
+          (computeExchangeRate (pullVestedYield s))
+        ≤ redeemAssets (s.apyUSDBal caller) (computeExchangeRate (pullVestedYield s)) := by
+      unfold redeemAssets
+      exact Nat.div_le_div_right (Nat.mul_le_mul_right _ (Nat.sub_le _ _))
+    omega
+
+/-- **S6, complete-measure umbrella**: for each of the five op families
+`Safety.caller_net_nonpositive` covers, there is a single pricing rate — the rate the step
+executes at — under which the caller's *complete* holdings (balances, shares, and pending
+positions) do not rise. For `depositUSDC`/`lockApxUSD`/`redeemApxUSD` that rate is
+`computeExchangeRate s`; for `withdraw`/`redeem` it is
+`computeExchangeRate (pullVestedYield s)` — the per-op theorems above carry the exact rate
+and the exact (in)equality.
+
+This discharges the old umbrella's honesty caveat that its ledger "does not track the
+unlock-registry column": the column is tracked now, and the bound survives. -/
+theorem caller_net_nonpositive_complete (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') (h_rv : s.redemptionValue ≤ ray)
+    (h_unalloc_flex : s.flexibleUnlockRequests s.nextUnlockId = none)
+    (h_case :
+      (∃ amount, op = Op.depositUSDC amount) ∨
+      (∃ amount, op = Op.lockApxUSD amount) ∨
+      (∃ amount, op = Op.redeemApxUSD amount) ∨
+      (∃ amount r, op = Op.withdraw amount r) ∨
+      (∃ shares r, op = Op.redeem shares r)) :
+    ∃ R, holderValueAt R s' caller ≤ holderValueAt R s caller := by
+  rcases h_case with ⟨amount, rfl⟩ | ⟨amount, rfl⟩ | ⟨amount, rfl⟩ | ⟨amount, r, rfl⟩
+    | ⟨shares, r, rfl⟩
+  · exact ⟨computeExchangeRate s,
+      Nat.le_of_eq (holder_value_depositUSDC s amount caller s' h_step)⟩
+  · exact ⟨computeExchangeRate s, holder_value_lockApxUSD_fixedRate s amount caller s' h_step⟩
+  · exact ⟨computeExchangeRate s, holder_value_redeemApxUSD s amount caller s' h_step h_rv⟩
+  · exact ⟨computeExchangeRate (pullVestedYield s),
+      holder_value_withdraw s amount r caller s' h_step h_unalloc_flex⟩
+  · exact ⟨computeExchangeRate (pullVestedYield s),
+      holder_value_redeem s shares r caller s' h_step h_unalloc_flex⟩
+
 end Apyx
