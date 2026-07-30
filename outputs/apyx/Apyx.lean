@@ -125,9 +125,15 @@ conversion recomputes off it, so the price moves continuously as yield vests. Re
 
 The `+1` terms are OpenZeppelin's virtual share and virtual asset:
 `_convertToShares(a,r) = a.mulDiv(totalSupply() + 10**_decimalsOffset(), totalAssets() + 1, r)`
-with `_decimalsOffset() = 0`, hence `10**0 = 1`. Carrying them is what makes the denominator
-structurally non-zero, so no conversion in this model can hit Lean's `x / 0 = 0`
-(`computeExchangeRate_pos`). -/
+with `_decimalsOffset() = 0`, hence `10**0 = 1`. Carrying them makes the **denominator**
+structurally non-zero.
+
+**That is weaker than it sounds, and no theorem here claims more.** The quotient can still floor
+to `0` when `totalSupply_apyUSD + 1 > (totalAssets s + 1) * ray`, and then the ray-scaled
+conversions below divide by it. The root cause is a fidelity deviation: OpenZeppelin does a
+*single* `mulDiv`, whereas this model materialises a rate and divides twice, so the two agree at
+deployment scale but diverge in that corner. `step` guards the branches where a zero rate is
+exploitable; removing the intermediate rate is the real fix and is open (`README` §9.3). -/
 def computeExchangeRate (s : State) : Nat :=
   ((totalAssets s + 1) * ray) / (s.totalSupply_apyUSD + 1)
 
@@ -635,6 +641,14 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     else
       -- priced at the LIVE rate, as the deployment's `previewDeposit` is
       let shares := lockShares amount (computeExchangeRate s)
+      -- Same reason as the `withdraw` guard below: when the ray-scaled rate floors to 0 the model's
+      -- `lockShares` returns 0, and the deposit would be a pure donation of `amount` into the vault.
+      -- OpenZeppelin's single `mulDiv` cannot do that — `assets * (totalSupply + 1) / (totalAssets + 1)`
+      -- has a denominator of at least 1 — so this enforces the deployment's behaviour. Sub-share
+      -- *dust* still rounds to 0 shares, which IS faithful (`previewDeposit(1 wei) = 0` on-chain);
+      -- what is guarded is only the degenerate zero-rate case, where every amount rounds to 0.
+      if 0 < amount ∧ shares = 0 ∧ computeExchangeRate s = 0 then none
+      else
       let s1 := burnApxUSD s caller amount
       let s2 := { s1 with vaultApxUSDBal := s1.vaultApxUSDBal + amount }
       let s3 := mintApyUSD s2 caller shares
@@ -709,7 +723,10 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
       if s1.apyUSDBal caller < shares then none
       else
         let assets := redeemAssets shares (computeExchangeRate s1)
-        if s1.vaultApxUSDBal < assets then none
+        -- Degenerate zero-rate case again: burning shares for 0 assets. Guarded for the same
+        -- reason as `lockApxUSD` and `withdraw`.
+        if 0 < shares ∧ assets = 0 ∧ computeExchangeRate s1 = 0 then none
+        else if s1.vaultApxUSDBal < assets then none
         else
           let s2 := burnApyUSD s1 caller shares
           let s3 := { s2 with vaultApxUSDBal := s2.vaultApxUSDBal - assets }
@@ -901,11 +918,15 @@ mint.
 **Documented deviation.** On-chain this calls `mint(shares, receiver)`, which delivers *exactly*
 `shares` and pulls the ceil-rounded `previewMint shares` assets. The model has no share-exact
 mint operation — `Op` names asset amounts — so it routes through `lockApxUSD (previewMint s shares)`
-and delivers `convertToShares (previewMint s shares)`, which `mintForMaxAssets_may_underdeliver`
-proves is at most `shares`. The gap is pure rounding (at most one share), but it is a real
-interface deviation and is not hidden behind a theorem that claims exactness. Closing it needs a
-share-denominated `Op` constructor; adding one destabilises the exhaustive-`Op` proofs, so it is
-recorded here instead. -/
+and delivers `convertToShares (previewMint s shares)`, which equals `shares` only when the two
+roundings cancel.
+
+**It can land on either side, and no bound is claimed.** With the Floor-rounded `previewMint` this
+model used to have, the result was always `≤ shares`. Now that `previewMint` rounds up to match
+OpenZeppelin, it can also *exceed* `shares` — at rate `ray / 2`, asking for 3 delivers 4. The
+obvious bound is therefore false, and stating it would make this docstring wrong. Closing the
+deviation needs a share-denominated `Op` constructor; adding one destabilises the exhaustive-`Op`
+proofs with kernel deep-recursion, so it is recorded rather than papered over. -/
 def mintForMaxAssets (s : State) (shares maxAssets : Nat) (_receiver caller : Address) : Option State :=
   if previewMint s shares > maxAssets then none
   else step s (Op.lockApxUSD (previewMint s shares)) caller
@@ -1180,7 +1201,9 @@ private theorem step_redeem_some (s : State) (shares : Nat) (receiver caller : A
     · exact absurd h (by simp)
     · split at h
       · exact absurd h (by simp)
-      · exact ⟨by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
+      · split at h
+        · exact absurd h (by simp)
+        · exact ⟨by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
 
 private theorem step_depositUSDC_some (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.depositUSDC amount) caller = some s') :
@@ -1238,7 +1261,9 @@ private theorem step_lockApxUSD_some (s : State) (amount : Nat) (caller : Addres
   · exact absurd h (by simp)
   · split at h
     · exact absurd h (by simp)
-    · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+    · split at h
+      · exact absurd h (by simp)
+      · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
 
 private theorem step_requestUnlock_some (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.requestUnlock amount) caller = some s') :
@@ -2684,10 +2709,14 @@ theorem req_redemption_value (s : State) (amount : Nat) (caller : Address)
 
 /-- REQ lock-apxusd: The protocol MUST allow a user to lock apxUSD in the vault and receive apyUSD. -/
 theorem req_lock_apxusd (s : State) (amount : Nat) (caller : Address)
-    (h1 : s.globalPause = false) (h2 : s.apxUSDBal caller ≥ amount) :
+    (h1 : s.globalPause = false) (h2 : s.apxUSDBal caller ≥ amount)
+    -- The degenerate zero-rate state now reverts rather than silently minting no shares, so
+    -- liveness needs a live price. On-chain this is automatic: OpenZeppelin's single `mulDiv`
+    -- has a denominator of at least 1, so it never produces a zero rate at all.
+    (h3 : 0 < computeExchangeRate s) :
     ∃ s', step s (Op.lockApxUSD amount) caller = some s' := by
   rcases ho : step s (Op.lockApxUSD amount) caller with _ | s'
-  · exact absurd ho (by simp [step, h1, Nat.not_lt.mpr h2])
+  · exact absurd ho (by simp [step, h1, Nat.not_lt.mpr h2, Nat.pos_iff_ne_zero.mp h3])
   · exact ⟨s', rfl⟩
 
 -- /-- REQ price-may-include-spreads: The protocol MAY reflect spreads and offchain execution expenses in the price during minting and redemption. -/
@@ -2736,10 +2765,12 @@ theorem req_issuance_price_one (s : State) (caller : Address) (amount : Nat) (s'
 /-- REQ deposit-permissionless: The vault MUST allow any address to deposit apxUSD and receive apyUSD without requiring KYB/KYC. -/
 theorem req_deposit_permissionless (s : State) (amount : Nat) (caller : Address)
     (h_pause : s.globalPause = false)
-    (h_balance : s.apxUSDBal caller ≥ amount) :
+    (h_balance : s.apxUSDBal caller ≥ amount)
+    (h_rate : 0 < computeExchangeRate s) :
     ∃ s', step s (Op.lockApxUSD amount) caller = some s' := by
   rcases ho : step s (Op.lockApxUSD amount) caller with _ | s'
-  · exact absurd ho (by simp [step, h_pause, Nat.not_lt.mpr h_balance])
+  · exact absurd ho (by simp [step, h_pause, Nat.not_lt.mpr h_balance,
+      Nat.pos_iff_ne_zero.mp h_rate])
   · exact ⟨s', rfl⟩
 
 /-- REQ buffer-preservation: The system MUST preserve the overcollateralization buffer during routine redemption operations; the buffer MUST NOT be consumed. -/

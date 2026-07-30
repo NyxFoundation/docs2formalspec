@@ -173,6 +173,45 @@ example : step k0 (Op.withdraw 1 9) 9 = none := by decide
 example : (execTrace k0 [(Op.withdraw 1 9, 9)]).vaultApxUSDBal = 1
         ∧ (execTrace k0 [(Op.withdraw 1 9, 9)]).unlockRequests 0 = none := by decide
 
+/-! ### R4c — `lockApxUSD` and `redeem` needed the same guard as `withdraw`
+
+The re-review of R4b found that only `withdraw` had been guarded. In the same zero-rate corner,
+`lockApxUSD` turned a deposit into a pure donation (assets into the vault, 0 shares out) and
+`redeem` burned shares for 0 assets. Both are now guarded, and the guard is narrow: it fires only
+when the *rate itself* is 0, so faithful sub-share dust rounding still succeeds.
+-/
+
+def z0 : State :=
+  { (default : State) with
+      globalPause := false
+      vaultApxUSDBal := 9
+      totalSupply_apyUSD := 10 ^ 28
+      apyUSDBal := fun a => if a = 1 then 10 ^ 28 else 0
+      apxUSDBal := fun a => if a = 2 then 1000 else 0
+      totalSupply_apxUSD := 1000 }
+
+example : totalAssets z0 = 9 ∧ computeExchangeRate z0 = 0 := by decide
+
+/-- All three degenerate paths revert. -/
+example : step z0 (Op.lockApxUSD 1000) 2 = none := by decide
+example : step z0 (Op.redeem (10 ^ 28) 1) 1 = none := by decide
+example : step z0 (Op.withdraw 9 9) 9 = none := by decide
+
+/-- **The guards are narrow.** A healthy genesis-shaped state still deposits 1:1. -/
+def h0 : State :=
+  { (default : State) with
+      globalPause := false
+      apxUSDBal := fun a => if a = 2 then 1000 else 0
+      totalSupply_apxUSD := 1000 }
+
+example : computeExchangeRate h0 = ray ∧
+    (execTrace h0 [(Op.lockApxUSD 1000, 2)]).apyUSDBal 2 = 1000 := by decide
+
+/-- And **sub-share dust still rounds to zero shares and still succeeds** — that behaviour is
+    faithful (`previewDeposit(1 wei) = 0` read on-chain), so the guard must not catch it. -/
+example : lockShares 1 (computeExchangeRate t0) = 0 ∧ step t0 (Op.lockApxUSD 1) 2 ≠ none := by
+  decide
+
 /-! ## R5 — the first depositor is no longer robbed
 
 Formerly `W5_first_depositor_steal.lean`: from a `default`-derived state (`exchangeRate = 0`) the

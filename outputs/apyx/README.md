@@ -269,7 +269,7 @@ extract value using only legitimate operations.
 | No free value | No operation sequence lets any address mint apxUSD from nothing | `no_free_value_trace` |
 | Solvency preserved | Minted apxUSD never exceeds the collateral basket plus the USDC reserve across any trace, excluding `claimUnlock`, `flexibleClaimUnlock`, `handleStressEvent`, `catastrophicBackstop` and `withdrawReserve`, and assuming `WellFormed` at every prefix (assumed, not shown inductive). Because `claimUnlock` is excluded, **no trace containing a completed request→claim cycle is in scope** — `requestUnlock` burns without booking the obligation, so the re-mint at claim necessarily breaks the invariant | `solvency_preserved` |
 | Rounding favors the protocol | Conversions never credit the user free value; withdrawals round up in shares | `rounding_favors_protocol`, `withdrawShares_rounds_up` |
-| No dilution | A deposit by someone else never lowers an existing holder's redeemable value, measured at the **live** per-share price. Unconditional — no backing or non-zero-supply side condition, so the first depositor is covered too | `no_dilution` |
+| No dilution | A deposit by someone else never lowers an existing holder's redeemable value, measured at the **live** per-share price. Unconditional — the backing and non-zero-supply side conditions are gone. **It protects bystanders, never the depositor**: the hypothesis `h ≠ caller` excludes them by construction, and the depositor is exactly who the dust-rounding residue below costs | `no_dilution` |
 | No raw donation primitive | Every increase in vault custody is one of the three accounted channels; there is no transfer-into-custody operation | `donation_free`, `no_inflation_attack` |
 | Inflation attack: **mitigated, not impossible** | A deposit below the current share price still rounds partly into the pool. The deployment's only structural defence is OpenZeppelin's single virtual share (`_decimalsOffset() = 0`), which the model now carries; §9.3 quantifies the residue | `Regression.lean` §R3 |
 | No free extraction | For the five conversion/redemption operations (`depositUSDC`, `lockApxUSD`, `redeemApxUSD`, `withdraw`, `redeem`), a caller's measured holdings do not increase across one step, with **both** states priced at the pre-state rate. The ledger omits pending unlock positions, which is where `withdraw`/`redeem` deposit the payout | `caller_net_nonpositive`, and the `caller_value_*` family |
@@ -735,11 +735,22 @@ all, where before it was only proved unable to lower it.
 and that is deliberate. `_decimalsOffset()` returns `0` — the deployment's own docstring calls it
 "the decimals offset for inflation-attack protection" — and `deposit()` does not revert on zero
 shares (`previewDeposit(1 wei) = 0`, read live). Modelling protection the chain does not have would
-be the wrong fix, so `Regression.lean` §R3 pins the exposure instead: a victim depositing below the
-share price now receives a share rather than none, but still puts in 150 and gets 117 back. The
-user-side defence is the real `depositForMinShares`; the protocol-side defence is a non-zero
-`_decimalsOffset`. At the vault's current 128M outstanding shares this path is not economically
-live; it matters for a fresh vault or a drained one.
+be the wrong fix, so `Regression.lean` §R3 pins the exposure instead: in that witness a victim
+depositing below the share price now receives a share rather than none, but still puts in 150 and
+gets 117 back.
+
+**That witness is not the worst case, and the worst case is total loss.** Because
+`convertToShares` floors, any deposit strictly smaller than one share's price mints **zero**
+shares and is absorbed by the pool. A re-review produced an all-honest, `default`-rooted trace —
+`creditYield` by the real distributor, `tick`, then the first vault deposit — in which the
+depositor pays 100 apxUSD for 0 shares, a 100% loss, while `no_dilution`,
+`exchange_rate_monotone_deposit` and `no_inflation_attack` all hold across the step. They hold
+because none of them protects the depositor: `no_dilution` explicitly excludes them.
+
+The user-side defence is the real `depositForMinShares`; the protocol-side defence is a non-zero
+`_decimalsOffset`. At the vault's current 128M outstanding shares the share price is 1.40 apxUSD,
+so the absolute exposure per deposit is small — but it is *not* bounded by "one share of rounding"
+in general, and integrators who do not use the slippage wrapper can lose an entire small deposit.
 
 **Two claims withdrawn rather than fixed.** `Solvent` and `req_overcollateralization_limit`
 carried a "required overcollateralization margin" term that was the `State` *field*
@@ -763,6 +774,9 @@ been corrected in §3, §4.1 and §4.2, and the full list is below. Everything h
 | §2.6 | **No denylist check on the redemption paths** (`redeemApxUSD`, `requestUnlock`, `flexibleRequestUnlock`, `poolRedeem`), and `claimUnlock` / `flexibleClaimUnlock` ignore `globalPause` | §3 |
 | §1.0-d | **`setVestPeriod 0` realizes the entire vest stream in one admin step.** Both conservation theorems hypothesise the non-zero period, i.e. exclude exactly this case | §4.2 |
 | §3 | **Quantifier scope**: 8 of the 16 BlastRadius trace theorems restrict the trace to one role's operation class, and 6 are over wrapper state rather than protocol state | §6.0 |
+| new | **The ray-scaled rate is a fidelity deviation.** OpenZeppelin does a *single* `mulDiv`; this model materialises a rate and divides twice. The two agree exactly at deployment scale but not when the rate floors to 0, which is the whole source of the guards in §9.3 item 2 and R4c. Replacing `lockShares`/`redeemAssets`/`withdrawShares` with the single-`mulDiv` form would remove the class at the root instead of guarding three branches | §9.3 item 2 |
+| new | **`previewMint` / `previewWithdraw` quote off the un-pulled state** while the operations they wrap charge at the pulled state, so `withdrawForMaxShares` / `redeemForMinAssets` check slippage at a different price than they execute at. The two coincide unless `pullVestedYield` moves `totalAssets`, which needs `vestPeriod = 0 ∧ now < vestStart`; unreachable from `default`, but no invariant says so and every theorem quantifies over all states | — |
+| new | **`flexibleClaimUnlock` was not given the `retireStandardUnlock` treatment** — it still clears only the receipt, leaving `flexibleUnlockRequests id` set. Benign (no top-up path, and ids are never reused) but inconsistent with the standard path | — |
 
 Two further gaps are recorded rather than fixed because closing them would mean modelling something
 the chain does not do, or restructuring the state: the ERC-4626 dust residue above, and the

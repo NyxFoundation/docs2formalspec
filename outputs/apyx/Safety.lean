@@ -115,7 +115,9 @@ private theorem inv_lockApxUSD (s : State) (amount : Nat) (caller : Address) (s'
   · exact absurd h (by simp)
   · split at h
     · exact absurd h (by simp)
-    · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+    · split at h
+      · exact absurd h (by simp)
+      · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
 
 private theorem inv_requestUnlock (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.requestUnlock amount) caller = some s') :
@@ -242,7 +244,9 @@ private theorem inv_redeem (s : State) (shares : Nat) (receiver caller : Address
     · exact absurd h (by simp)
     · split at h
       · exact absurd h (by simp)
-      · exact ⟨by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
+      · split at h
+        · exact absurd h (by simp)
+        · exact ⟨by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
 
 private theorem inv_executeRFQRedemption (s : State) (user : Address) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.executeRFQRedemption user amount) caller = some s') :

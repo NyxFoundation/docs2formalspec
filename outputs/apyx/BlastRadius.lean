@@ -223,7 +223,9 @@ private theorem inv_lockApxUSD (s : State) (amount : Nat) (caller : Address) (s'
   · exact absurd h (by simp)
   · split at h
     · exact absurd h (by simp)
-    · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+    · split at h
+      · exact absurd h (by simp)
+      · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
 
 private theorem inv_requestUnlock (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.requestUnlock amount) caller = some s') :
@@ -388,7 +390,9 @@ private theorem inv_redeem (s : State) (shares : Nat) (receiver caller : Address
     · exact absurd h (by simp)
     · split at h
       · exact absurd h (by simp)
-      · exact ⟨by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
+      · split at h
+        · exact absurd h (by simp)
+        · exact ⟨by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
 
 private theorem inv_executeRFQRedemption (s : State) (user : Address) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.executeRFQRedemption user amount) caller = some s') :
@@ -2729,9 +2733,9 @@ Tier-1 trace frames, stating each compromise's blast radius as a *compartment*.
   (`vestTotal`/`fullyVestedAmount`/`usdcReserve`/`vestStart`): an all-distributor
   trace leaves every principal field — user apxUSD/apyUSD/USDC/governance
   balances, both supplies, the vault's apxUSD, i.e. everything users own or that
-  backs what they own — bitwise unchanged, the reserve can only move **upward**
+  backs what they own — bitwise unchanged, the reserve cannot move at all
   (the role pays in, never out), and the combined vest pool
-  `fullyVestedAmount + vestTotal` can only move **upward** too (`vestTotal` alone
+  `fullyVestedAmount + vestTotal` cannot move at all too (`vestTotal` alone
   is NOT monotone — an accrue-first credit can shrink it while growing
   `fullyVestedAmount` by the same amount, cf. T2's `yield_distributor_frame`). A
   distributor compromise can distort *future yield accrual timing*, never
@@ -2743,7 +2747,7 @@ Tier-1 trace frames, stating each compromise's blast radius as a *compartment*.
 /-- T9 `distributor_compartmentalized` (docs/05-blast-radius.md, Tier 3):
 a yieldDistributor compromise is confined to the vesting-pool compartment.
 Over any all-`DistributorOp` trace the principal fields are all bitwise unchanged,
-the reserve `usdcReserve` it feeds moves only upward, and the combined vest pool
+the USDC reserve is untouched (it is a different contract on-chain), and the combined vest pool
 `fullyVestedAmount + vestTotal` moves only upward (`vestTotal` alone can shrink
 when an accrue-first credit realizes more into `fullyVestedAmount` than it adds —
 see the section note above; `vestStart`, the vesting clock anchor, may also be
@@ -2920,7 +2924,7 @@ solely of one role's operations:
   USDC reserve are bitwise unchanged — extraction 0;
 * **pauser alone** (`pauser_compartmentalized`): likewise unchanged — extraction 0;
 * **distributor alone** (`distributor_compartmentalized`): user apxUSD balances
-  unchanged and the reserve only *grows* — the role pays in, extraction 0;
+  unchanged and the reserve is untouched — the role pays into the vesting contract, not the reserve, extraction 0;
 * **admin alone** (`admin_trace_blast_radius` /
   `admin_trace_reserve_nonincreasing`): every apxUSD balance unchanged, and the
   reserve is non-increasing — the only admin channel that moves it is the
