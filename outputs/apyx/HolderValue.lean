@@ -209,6 +209,135 @@ theorem requestUnlock_netDelta_zero (s : State) (amount : Nat) (caller : Address
   rw [requestUnlock_holderValue_neutral s amount caller s' h_step h_fresh h_unalloc_flex h_bal]
   omega
 
+/-! ## Where a vault withdrawal's payout goes
+
+`withdraw` and `redeem` differ from `requestUnlock` in two ways that matter.
+
+The position is opened for a named **receiver**, who need not be the caller. And burning shares
+moves `totalSupply_apyUSD`, so the step reprices the caller's *remaining* holdings — which means
+**full value-neutrality is false for these two operations**, not merely unproved, and this module
+does not claim it. What is provable, and what the old measure could not say at all, is where the
+payout lands.
+
+The statement below is derived from **projections only** — three facts about `nextUnlockId` and
+`unlockRequests` — rather than by substituting the post-state record. Substituting it and rewriting
+`stdPositions` against the result hits kernel deep recursion (`maxRecDepth` does not help; it is
+the kernel's own limit), which is why the sum is computed from a projection-level lemma.
+-/
+
+@[simp] private theorem pv_nextUnlockId' (s : State) :
+    (pullVestedYield s).nextUnlockId = s.nextUnlockId := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pv_unlockRequests' (s : State) :
+    (pullVestedYield s).unlockRequests = s.unlockRequests := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+@[simp] private theorem pv_now' (s : State) : (pullVestedYield s).now = s.now := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+/-- The position sum after a fresh entry, computed from projections alone.
+
+Everything `stdPositions` can see is the id counter and the registry, so these three facts
+determine it: the counter grew by one, the old ids read the same, and the new id carries the
+entry. No post-state record appears. -/
+theorem stdPositions_of_fresh_entry (s s' : State) (owner : Address) (amount ce : Nat)
+    (a : Address)
+    (hnext : s'.nextUnlockId = s.nextUnlockId + 1)
+    (hold : ∀ i, i < s.nextUnlockId → s'.unlockRequests i = s.unlockRequests i)
+    (hnew : s'.unlockRequests s.nextUnlockId = some (owner, amount, ce)) :
+    stdPositions s' a = stdPositions s a + (if owner = a then amount else 0) := by
+  unfold stdPositions
+  rw [hnext, List.range_succ, List.map_append, List.sum_append]
+  have hagree : ((List.range s.nextUnlockId).map (stdAmt s' a))
+      = (List.range s.nextUnlockId).map (stdAmt s a) := by
+    apply List.map_congr_left
+    intro i hi
+    simp only [stdAmt, hold i (List.mem_range.mp hi)]
+  rw [hagree]
+  congr 1
+  simp [stdAmt, hnew]
+
+/-- **A vault withdrawal's payout is measured.** The receiver's standard-position sum rises by
+exactly the `assets` withdrawn.
+
+This is the term `Safety.valueAt` dropped, and dropping it is why
+`caller_value_withdraw_fixedRate` could report a withdrawal as a pure loss to the caller with no
+corresponding gain anywhere. -/
+theorem withdraw_receiver_position_gain (s : State) (assets : Nat) (receiver caller : Address)
+    (s' : State) (h_step : step s (Op.withdraw assets receiver) caller = some s') :
+    stdPositions s' receiver = stdPositions s receiver + assets := by
+  -- invert once, then read off projections only: `stdPositions s'` is never rewritten against
+  -- the post-state record, which is what hits the kernel's recursion limit
+  have hpost : s' = emitEvent (updateExchangeRate (createStandardUnlock
+        { burnApyUSD (pullVestedYield s) caller
+            (withdrawShares assets (computeExchangeRate (pullVestedYield s))) with
+          vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller
+            (withdrawShares assets (computeExchangeRate (pullVestedYield s)))).vaultApxUSDBal
+              - assets }
+        receiver assets)) "Withdraw"
+      [caller, receiver, caller, assets,
+        withdrawShares assets (computeExchangeRate (pullVestedYield s))] := by
+    simp only [step] at h_step
+    split at h_step
+    · exact absurd h_step (by simp)
+    · split at h_step
+      · exact absurd h_step (by simp)
+      · split at h_step
+        · exact absurd h_step (by simp)
+        · split at h_step
+          · exact absurd h_step (by simp)
+          · exact (Option.some.inj h_step).symm
+  have hnext : s'.nextUnlockId = s.nextUnlockId + 1 := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hold : ∀ i, i < s.nextUnlockId → s'.unlockRequests i = s.unlockRequests i := by
+    intro i hi
+    have hne : i ≠ s.nextUnlockId := Nat.ne_of_lt hi
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD, hne]
+  have hnew : s'.unlockRequests s.nextUnlockId
+      = some (receiver, assets, s.now + cooldownPeriod) := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  rw [stdPositions_of_fresh_entry s s' receiver assets (s.now + cooldownPeriod) receiver
+    hnext hold hnew, if_pos rfl]
+
+/-- The same for the share-denominated `redeem`: the receiver's position rises by exactly the
+assets the burned shares were priced at. -/
+theorem redeem_receiver_position_gain (s : State) (shares : Nat) (receiver caller : Address)
+    (s' : State) (h_step : step s (Op.redeem shares receiver) caller = some s') :
+    stdPositions s' receiver
+      = stdPositions s receiver
+        + redeemAssets shares (computeExchangeRate (pullVestedYield s)) := by
+  have hpost : s' = emitEvent (updateExchangeRate (createStandardUnlock
+        { burnApyUSD (pullVestedYield s) caller shares with
+          vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller shares).vaultApxUSDBal
+              - redeemAssets shares (computeExchangeRate (pullVestedYield s)) }
+        receiver (redeemAssets shares (computeExchangeRate (pullVestedYield s))))) "Withdraw"
+      [caller, receiver, caller,
+        redeemAssets shares (computeExchangeRate (pullVestedYield s)), shares] := by
+    simp only [step] at h_step
+    split at h_step
+    · exact absurd h_step (by simp)
+    · split at h_step
+      · exact absurd h_step (by simp)
+      · split at h_step
+        · exact absurd h_step (by simp)
+        · split at h_step
+          · exact absurd h_step (by simp)
+          · exact (Option.some.inj h_step).symm
+  have hnext : s'.nextUnlockId = s.nextUnlockId + 1 := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hold : ∀ i, i < s.nextUnlockId → s'.unlockRequests i = s.unlockRequests i := by
+    intro i hi
+    have hne : i ≠ s.nextUnlockId := Nat.ne_of_lt hi
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD, hne]
+  have hnew : s'.unlockRequests s.nextUnlockId
+      = some (receiver, redeemAssets shares (computeExchangeRate (pullVestedYield s)),
+          s.now + cooldownPeriod) := by
+    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  rw [stdPositions_of_fresh_entry s s' receiver
+    (redeemAssets shares (computeExchangeRate (pullVestedYield s))) (s.now + cooldownPeriod)
+    receiver hnext hold hnew, if_pos rfl]
+
 /-! ## The holder-centric laws
 
 These are the statements the incomplete measure could not make. They are given here as
