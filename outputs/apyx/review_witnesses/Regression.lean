@@ -406,7 +406,8 @@ def pv0 : State :=
       globalPause := false
       apxUSDBal := fun a => if a = 1 then 100 else 0
       totalSupply_apxUSD := 100
-      -- `default` does NOT mean "no pending request" — see R11 below
+      -- historically load-bearing: the derived `default` used to point every address at a
+      -- phantom request id (see R11, now fixed at the root); kept as documentation
       unlockRequestId := fun _ => none }
 
 def pv1 : State := execTrace pv0 [(Op.requestUnlock 100, 1)]
@@ -426,26 +427,34 @@ example (s : State) (a : Address) :
 example : netDelta pv0 pv1 1 = 0 :=
   requestUnlock_netDelta_zero pv0 100 1 pv1 rfl (by decide) (by decide) (by decide)
 
-/-! ## R11 — `default : State` is not the empty state, and one field is actively misleading
+/-! ## R11 — `default : State` is the empty state now (the trap is removed, not just pinned)
 
 Found while applying `requestUnlock_netDelta_zero` to a `default`-derived witness: the hypothesis
 `unlockRequestId caller = none` came out **false**.
 
 `unlockRequestId : Address → Option Nat`, and `Address` is `Nat`, so the type is
-`Nat → Option Nat` — which `some` itself inhabits. Lean's `Inhabited` derivation picks it, so in
-`default : State` **every address already points at a request id equal to its own address**.
+`Nat → Option Nat` — which `some` itself inhabits. Lean's `Inhabited` derivation picked it, so in
+the derived `default : State` **every address already pointed at a request id equal to its own
+address** — and `unlockTokenOwner : Nat → Option Address` has the same type, so every unlock id
+also had a phantom NFT owner equal to itself, a second instance of the trap this section's own
+first draft missed.
 
-Nothing proved so far is wrong because of it: `requestUnlockStep` follows the pointer to
-`unlockRequests`, which *is* all-`none` by default, so it falls through to the create branch and
+Nothing proved was wrong because of it: `requestUnlockStep` follows the pointer to
+`unlockRequests`, which *was* all-`none` by default, so it falls through to the create branch and
 behaves as an empty registry. But any *hypothesis* of the form "this holder has no pending
-request" is false on a `default`-derived state, and a witness that assumed otherwise would be
-silently vacuous rather than failing loudly. Witnesses must set the field explicitly.
--/
+request" was false on a `default`-derived state, and a witness that assumed otherwise would be
+silently vacuous rather than failing loudly.
 
-example : (default : State).unlockRequestId 7 = some 7 := by decide
+**Fixed at the root**: `Apyx.lean` now writes the `Inhabited State` instance out field by field
+— `default` is the honest empty state, and the examples below pin the two previously-trapped
+fields specifically. -/
+
+example : (default : State).unlockRequestId 7 = none := by decide
+example : (default : State).unlockTokenOwner 7 = none := by decide
 example : (default : State).unlockRequests 7 = none := by decide
 
-/-- Which is why `pv0` sets it, and the hypothesis then holds. -/
+/-- `pv0`'s explicit `unlockRequestId := fun _ => none` (kept above as documentation of the
+era when it was load-bearing) is redundant now, and the hypothesis holds on `default` too. -/
 example : pv0.unlockRequestId 1 = none := by decide
 
 /-! ## R12 — the rate limiter charges destroyed claims, not just reserve outflow

@@ -2015,12 +2015,13 @@ theorem redeem_payout_has_no_cap (N : Nat) :
   have hrv : (noCapWitness N).redemptionValue = N * ray := rfl
   have hts : (default : State).totalSupply_apxUSD = 0 := rfl
   have htc : (default : State).totalCollateralValue = 0 := rfl
+  have hmp : (default : State).apxUSDMarketPrice = 0 := rfl
   cases hs : step (noCapWitness N) (Op.redeemApxUSD 1) 0 with
   | none =>
       -- all guards pass on the witness (price 0 < ray, buffer stays at 0), so it cannot revert
-      simp [noCapWitness, step, overcollateralizationBuffer, hts, htc] at hs
+      simp [noCapWitness, step, overcollateralizationBuffer, hts, htc, hmp] at hs
       rw [Nat.mul_div_cancel N hray] at hs
-      exact absurd (hs rfl hray) (Nat.lt_irrefl _)
+      exact absurd (hs (Nat.pos_iff_ne_zero.mp hray)) (Nat.lt_irrefl _)
   | some s' =>
       refine ⟨noCapWitness N, s', 1, 0, hs, h0, ?_⟩
       obtain ⟨hbal, _, _⟩ := redeem_payout_formula (noCapWitness N) 1 0 s' hs

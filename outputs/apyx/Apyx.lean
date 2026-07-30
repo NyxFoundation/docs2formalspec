@@ -91,7 +91,38 @@ structure State where
   usdcBal : Address → Nat
   usdcReserve : Nat
   eventLog : List (String × List Nat)
-deriving Inhabited
+
+/-- `default : State` is the **empty** state, spelled out field by field.
+
+This instance used to be `deriving Inhabited`, which was a trap: for the two fields of type
+`Nat → Option Nat` (`unlockRequestId`, `unlockTokenOwner`) the derivation picked `some`
+*itself* as the default function, so every address in `default` pointed at a request id — and
+an NFT owner — equal to its own address. Nothing proved was wrong (`requestUnlockStep` follows
+the pointer into the all-`none` `unlockRequests` and falls through to the create branch), but
+any hypothesis of the form "this holder has no pending request" was silently false on a
+`default`-derived witness. `Regression.lean` §R11 pins the fixed behavior. -/
+instance : Inhabited State where
+  default :=
+    { now := 0, globalPause := false, pauseController := 0, admin := 0, governance := 0
+      oracle := 0, yieldDistributor := 0
+      whitelist := fun _ => false, denylist := fun _ => false
+      rfqCounterparties := [], rfqRequests := fun _ => 0
+      governanceThreshold := 0, emergencyFlag := false
+      totalSupply_apxUSD := 0, totalSupply_apyUSD := 0
+      apxUSDBal := fun _ => 0, apyUSDBal := fun _ => 0, governanceTokenBal := fun _ => 0
+      vaultApxUSDBal := 0, exchangeRate := 0, totalCollateralValue := 0, redemptionValue := 0
+      apxUSDMarketPrice := 0, overcollateralizationBuffer := 0
+      yieldRateMonth := 0, lastRateSetTime := 0, collateralYieldBase := 0
+      vestStart := 0, vestTotal := 0, vestPeriod := 0, fullyVestedAmount := 0
+      nextUnlockId := 0
+      unlockRequestId := fun _ => none
+      unlockRequests := fun _ => none
+      flexibleUnlockRequests := fun _ => none
+      unlockTokenOwner := fun _ => none
+      unlockTokenAmount := fun _ => 0
+      unlockTokenAddress := 0, unlockTokenOperator := 0
+      bufferDeployed := false
+      usdcBal := fun _ => 0, usdcReserve := 0, eventLog := [] }
 
 /-- The portion of the currently-streaming vest pool (`vestTotal`, anchored at
 `vestStart`, over `vestPeriod`) that has linearly released as of `now` (floor rounding).
