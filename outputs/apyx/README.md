@@ -825,6 +825,12 @@ on the definition instead).
 ---
 
 *This report verifies an abstract model of the protocol's intended design, not the deployed Solidity
-bytecode; the two can diverge (see §4.3), and it does not inspect the implementation. Questions about
-protocol behavior should be verified against the deployed contracts. Generated with
+bytecode; the two can diverge (see §4.3). Most of it is derived from the documentation corpus alone.
+Where a section cites a contract — §9.3's deployment-gap rows, [`DeploymentFees.lean`](DeploymentFees.lean),
+[`DeploymentGaps.lean`](DeploymentGaps.lean), [`MulDivFidelity.lean`](MulDivFidelity.lean) and
+[`deployment_ground_truth.md`](deployment_ground_truth.md) — the source was read from sourcify-verified
+implementations and checked against live mainnet reads, but the Lean transcription of that Solidity is
+**hand-written and machine-unchecked**: Lean proves things about the transcription, and its fidelity to
+the contract is a human judgement, not a theorem. Questions about protocol behavior should be verified
+against the deployed contracts. Generated with
 [docs2formalspec](https://github.com/NyxFoundation/docs2formalspec).*
