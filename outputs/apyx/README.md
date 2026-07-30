@@ -398,13 +398,15 @@ formalized, the theorem naming what it would guarantee is cited.
 2. **Add a withdrawal / redemption rate limit** (ERC-7265-style circuit breaker). Formalized as a wrapper
    over the model and proved to bound cumulative reserve loss to `≤ cap × (epochs elapsed + 1)`
    (`rate_limit_linear_bound`).
-   **Read this as a design suggestion, not a quantified guarantee.** The wrapper's `advanceEpoch` is a
-   free, permissionless action with no relation to `Op.tick` or `base.now`, so the theorem counts epoch
-   markers the attacker put in their own trace rather than elapsed time; and the meter charges
-   `usdcReserve` outflow only, so a repricing-to-zero drain passes it unmetered. Both are recorded in
-   [`code_review_lean.md`](code_review_lean.md) §1.2 and are unfixed. The *recommendation* stands on its
-   own merits — a real ERC-7265 breaker is metered by the chain clock — but this report's theorem does
-   not currently establish it.
+   **The clock is now the base clock.** The wrapper used to carry its own free `advanceEpoch`
+   action, so the bound counted markers the attacker had placed in their own trace. It has no clock
+   of its own any more: allowance is derived from `base.now`, which only `Op.tick` moves, so the
+   bound means what it says. `Regression.lean` §R8 pins it — twenty withdrawals with the clock
+   standing still get one window's allowance out in total, and the same twenty with a window ticked
+   between each get twenty windows' worth.
+   One caveat remains: the meter charges `usdcReserve` outflow only, so a repricing-to-zero drain
+   (which burns claims for nothing rather than moving reserve) passes it unmetered. A real breaker
+   should meter the claim side too.
 
 3. **Add a timelock on privileged admin changes.** The base model is proved to have **no exit window** —
    admin changes take effect in the same block (`base_model_has_no_timelock`,
@@ -766,7 +768,8 @@ been corrected in §3, §4.1 and §4.2, and the full list is below. Everything h
 
 | Item | What is unfixed | Where the prose now says so |
 |---|---|---|
-| §1.2 | **Both defense wrappers let the attacker supply the clock.** `rate_limit_linear_bound`'s `advanceEpoch` and `timelock_escape_guarantee`'s `tick` are free, permissionless counters with no relation to `Op.tick` or `base.now`, so neither theorem means "linear in elapsed time". The rate limiter also meters `usdcReserve` outflow only, so a reprice-to-zero drain passes it uncharged; and the timelock wrapper routes *every* operation through its queue, including a user's own exit, so it does not provide the window its name claims | §5 items 2-3, demoted to design suggestions |
+| §1.2 (rate limiter) | **Fixed.** `RLOp.advanceEpoch` is gone; allowance is derived from `base.now`, which only `Op.tick` moves, so `rate_limit_linear_bound` now means linear in elapsed time (`Regression.lean` §R8). Residual: the meter charges reserve outflow only, so a reprice-to-zero drain is uncharged | §5 item 2 |
+| §1.2 (timelock) | **Unfixed.** `timelock_escape_guarantee`'s `TLOp.tick` is still a free counter unrelated to `base.now`, and the wrapper routes *every* operation through its queue — including a user's own exit — so it does not provide the window its name claims | §5 item 3, still a design suggestion |
 | §1.3 | **Single-pending is not a uniqueness theorem**, and uniqueness does not hold model-wide: the vault path opens a fresh position per call | §3, and the theorem's own docstring |
 | §1.5 | **`apxUSD_credit_is_backed` is single-step.** A five-step admin+oracle sequence — reprice to `2·ray`, open the above-peg gate, `mintApxUSD 100` for 100 USDC, open the below-peg gate, `redeemApxUSD 100` for 200 USDC — extracts 100 USDC from other users' deposits while every individual step satisfies the theorem | §4.1 |
 | §1.6 | **The coalition witness has `usdcReserve = 0`**, so it shows the mechanism rather than an attributable loss. A funded witness was recommended by an earlier human review and not applied | §4.1 |

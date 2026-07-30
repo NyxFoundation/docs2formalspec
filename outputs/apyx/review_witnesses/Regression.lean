@@ -299,4 +299,45 @@ example (s : State) (σ : List (Op × Address)) (h : ∀ p ∈ σ, DistributorOp
     (execTrace s σ).usdcReserve = s.usdcReserve :=
   (yield_distributor_trace_blast_radius s σ h).2.1
 
+/-! ## R8 — the rate limiter is metered by the base clock, not by a free counter
+
+`code_review_lean.md` §1.2: `rate_limit_linear_bound`'s wrapper carried its own
+`RLOp.advanceEpoch` action — free, permissionless, unrelated to `base.now` — so the theorem
+counted markers the attacker had placed in their own trace. `[drain, advanceEpoch, drain,
+advanceEpoch, …]` drained the whole reserve without a single unit of time passing.
+
+The wrapper now has no clock of its own. Allowance is derived from `base.now`, and `base.now`
+moves only through `Op.tick`, so `docs/06` §7.3's E1 is what the bound rests on.
+-/
+
+def b0 : State :=
+  { (default : State) with
+      globalPause := false, admin := 7, usdcReserve := 1000, now := 0 }
+
+/-- Window 100 clock units, allowance 10 per window, meter empty. -/
+def rl0 : RLState := ⟨b0, 0, 100, 10, 0⟩
+
+example : allowance rl0 = 10 := by decide
+
+/-- **The old attack, now defused.** Twenty withdrawals with the clock standing still get one
+    window's allowance out in total — not twenty. -/
+example : (execTrace2 rl0 (List.replicate 20 (Op.withdrawReserve 10 7, 7))).base.usdcReserve = 990
+        ∧ (execTrace2 rl0 (List.replicate 20 (Op.withdrawReserve 10 7, 7))).base.now = 0 := by
+  decide
+
+/-- **And allowance really is bought with time.** The same twenty withdrawals, with a full
+    window ticked between each, get 200 out — exactly linear in elapsed time. -/
+example :
+    (execTrace2 rl0
+      ((List.replicate 20 [(Op.withdrawReserve 10 7, 7), (Op.tick 100, 7)]).flatten)).base.usdcReserve
+      = 800 := by decide
+
+/-- The headline bound, instantiated at the no-time trace. -/
+example : b0.usdcReserve
+      - (execTrace2 rl0 (List.replicate 20 (Op.withdrawReserve 10 7, 7))).base.usdcReserve
+    ≤ rl0.cap
+      * (((execTrace2 rl0 (List.replicate 20 (Op.withdrawReserve 10 7, 7))).base.now - rl0.t0)
+          / rl0.window + 1) :=
+  rate_limit_linear_bound rl0 _ (by decide)
+
 end Apyx
