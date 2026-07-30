@@ -411,10 +411,12 @@ formalized, the theorem naming what it would guarantee is cited.
 3. **Add a timelock on privileged admin changes.** The base model is proved to have **no exit window** —
    admin changes take effect in the same block (`base_model_has_no_timelock`,
    `catastrophicBackstop_is_instantaneous`). That negative result is sound.
-   The positive half (`timelock_escape_guarantee`) carries the same caveat as item 2: its `tick` is a
-   free counter unrelated to the base clock, and the wrapper routes *every* operation through the
-   queue — including a user's own exit — so as modelled it does not actually provide the escape window
-   its name claims (`code_review_lean.md` §1.2). Unfixed.
+   The positive half (`timelock_escape_guarantee`) now holds on the base clock. The wrapper has no
+   clock of its own — time moves through `Op.tick` via the non-privileged `direct` route — and
+   `direct` refuses every `AdminOp`, so privileged changes must queue while ordinary user traffic,
+   including an exit, does not. `Regression.lean` §R9 pins the boundary (499 units short and the
+   queued change does not land; 500 and it does) and pins the escape itself (mid-window a holder
+   exits through `direct` while the queued change is still pending).
    **Largely already met on-chain, and this recommendation was written against a stale
    observation.** The deployed `AccessManager` (`0xe167330E…2824`) runs a graded delay ladder —
    0 for `pause()`, 4h for the price push, 24h for privileged token withdrawal, 3 days for
@@ -769,7 +771,7 @@ been corrected in §3, §4.1 and §4.2, and the full list is below. Everything h
 | Item | What is unfixed | Where the prose now says so |
 |---|---|---|
 | §1.2 (rate limiter) | **Fixed.** `RLOp.advanceEpoch` is gone; allowance is derived from `base.now`, which only `Op.tick` moves, so `rate_limit_linear_bound` now means linear in elapsed time (`Regression.lean` §R8). Residual: the meter charges reserve outflow only, so a reprice-to-zero drain is uncharged | §5 item 2 |
-| §1.2 (timelock) | **Unfixed.** `timelock_escape_guarantee`'s `TLOp.tick` is still a free counter unrelated to `base.now`, and the wrapper routes *every* operation through its queue — including a user's own exit — so it does not provide the window its name claims | §5 item 3, still a design suggestion |
+| §1.2 (timelock) | **Fixed.** `TLOp.tick` is gone; the wrapper's clock is `base.now`, moved only through the base `step`, and the new non-privileged `direct` route lets a user exit mid-window without queueing while `AdminOp`s are refused. `timelock_escape_guarantee` now concludes `queuedAt + delay ≤ base.now` (`Regression.lean` §R9) | §5 item 3 |
 | §1.3 | **Single-pending is not a uniqueness theorem**, and uniqueness does not hold model-wide: the vault path opens a fresh position per call | §3, and the theorem's own docstring |
 | §1.5 | **`apxUSD_credit_is_backed` is single-step.** A five-step admin+oracle sequence — reprice to `2·ray`, open the above-peg gate, `mintApxUSD 100` for 100 USDC, open the below-peg gate, `redeemApxUSD 100` for 200 USDC — extracts 100 USDC from other users' deposits while every individual step satisfies the theorem | §4.1 |
 | §1.6 | **The coalition witness has `usdcReserve = 0`**, so it shows the mechanism rather than an attributable loss. A funded witness was recommended by an earlier human review and not applied | §4.1 |
