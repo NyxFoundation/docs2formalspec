@@ -2829,6 +2829,12 @@ two-key coalition that drains a victim's principal:
   Net loss = 100% of the requested holdings, in stark contrast to the single-key
   rows.
 
+* `admin_rfq_coalition_drains_funded`: the same coalition on a **funded** witness
+  (reserve 100, victim diluted to half the supply), where the pre-attack
+  counterfactual — the victim's own `redeemApxUSD` paying in full — is a
+  machine-checked conjunct. The loss becomes attributable: half the principal,
+  redistributed to a passive bystander by the backstop's own pro-rata leg.
+
 Headline conclusion (see the docstrings): for users with in-flight RFQ requests,
 fund security against a compromised admin rests **entirely** on the RFQ
 counterparty set and on the absence of a rate limit / redemption-price floor —
@@ -3052,6 +3058,117 @@ theorem admin_rfq_coalition_drains :
   · rw [hapx, show R.apxUSDBal 0 = 100 from rfl]
   · rw [husdc, show R.redemptionValue = 0 from rfl, show R.usdcBal 0 = 0 from rfl,
       Nat.mul_zero, Nat.zero_div]
+
+/-- Witness for the **funded** coalition drain: same cast as `coalWitness`, but the
+catastrophe has not consumed the reserve — 100 USDC remain — and the victim's
+100 apxUSD are half of a 200-token supply; a passive bystander (address `4`) holds
+the other half. The collateral valuation is 0 and the emergency flag is up, so the
+backstop can fire; but with a funded reserve the pre-attack counterfactual is now
+*true*: the whitelisted victim could have called `redeemApxUSD 100` themselves and
+received the full 100 USDC (the below-peg gate is open, `apxUSDMarketPrice = 0 < ray`,
+and the reserve covers the payout). -/
+private def coalWitnessFunded : State :=
+  { (default : State) with
+      admin := 1
+      rfqCounterparties := [2]
+      whitelist := fun a => a == 0
+      emergencyFlag := true
+      totalSupply_apxUSD := 200
+      apxUSDBal := fun a => if a = 0 then 100 else if a = 4 then 100 else 0
+      rfqRequests := fun a => if a = 0 then 100 else 0
+      redemptionValue := ray
+      totalCollateralValue := 0
+      usdcReserve := 100 }
+
+/-- T10 `admin_rfq_coalition_drains_funded` — **the funded variant recommended by the
+human review: an attributable loss, not just a mechanism.**
+
+`admin_rfq_coalition_drains` above holds the reserve at 0, so the victim's total loss
+is uncompensated but no value is actually redistributed — the human review
+(`human_review_admin_rfq_coalition_drains.md`, F3) read it as demonstrating the
+mechanism rather than an attributable harm, and recommended a funded witness. The
+literal fix it proposed (fund the reserve, keep the victim as sole holder) no longer
+produces a loss on the current model: the backstop's pro-rata leg — which this model
+now formalizes in full — would hand a sole holder the whole reserve back. The funded
+witness therefore needs *dilution*:
+
+* supply 200 — the victim (address `0`) holds 100, a passive bystander (address `4`)
+  holds the other 100;
+* the reserve holds 100 USDC; the collateral valuation is 0 and the emergency flag
+  is up, so the document-faithful backstop can fire;
+* the published price is still `ray`, and the victim's full balance sits in an
+  outstanding RFQ request filed at that healthy price.
+
+**The counterfactual is machine-checked this time** (the review's F3 point): the
+statement exhibits a successful `redeemApxUSD 100` *by the victim* from the initial
+state — every guard passes, including the below-peg gate and the reserve check —
+paying the full `amount` in USDC. Instead the coalition acts first:
+
+1. the **admin**'s `catastrophicBackstop` reprices to `0 * ray / 200 = 0` and pays
+   the reserve out pro-rata — 50 to the victim, 50 to the bystander;
+2. the **counterparty**'s `executeRFQRedemption victim 100` settles the pending
+   request at the crashed price: 100 apxUSD burn for `100 * 0 / ray = 0` USDC.
+
+Outcome (final conjuncts): the victim ends with 0 apxUSD and strictly less USDC
+than the counterfactual pays — concretely 50 against 100 — an attributable loss of
+half the principal. The other half of the reserve was routed to the bystander by
+the coalition's own first step, so the harm is a redistribution, not bookkeeping.
+
+Model-boundary assumptions carried by both coalition theorems (review action 2):
+the *filing* of the victim's RFQ request is state (`rfqRequests`) and its
+settlement is guarded on it (`req_rfq_redemption_allowed`), but the off-chain
+quote/consent flow around filing is out of scope (§6.1 of the report);
+`catastrophicBackstop` fires on the admin's sole signature once `emergencyFlag` is
+up — any off-chain governance process gating that flag is likewise out of scope;
+and the backstop's pro-rata compensation leg **is** modeled — it is exactly what
+pays the bystander here. -/
+theorem admin_rfq_coalition_drains_funded :
+    ∃ (s s1 s2 : State) (victim counterparty amount : Nat),
+      0 < amount ∧
+      s.apxUSDBal victim = amount ∧ s.usdcBal victim = 0 ∧
+      s.whitelist victim = true ∧
+      s.rfqRequests victim = amount ∧
+      s.emergencyFlag = true ∧
+      ray ≤ s.redemptionValue ∧
+      s.rfqCounterparties.contains counterparty = true ∧
+      (∃ s3 : State, step s (Op.redeemApxUSD amount) victim = some s3 ∧
+        s3.usdcBal victim = amount) ∧
+      step s Op.catastrophicBackstop s.admin = some s1 ∧
+      s1.redemptionValue = 0 ∧
+      step s1 (Op.executeRFQRedemption victim amount) counterparty = some s2 ∧
+      s2.apxUSDBal victim = 0 ∧
+      s2.usdcBal victim < amount := by
+  -- step 1: the backstop reprices to 0 * ray / 200 = 0 and pays the reserve
+  -- pro-rata: 50 to the victim, 50 to the bystander
+  let R : State :=
+    { coalWitnessFunded with
+        redemptionValue :=
+          (coalWitnessFunded.totalCollateralValue * ray) / coalWitnessFunded.totalSupply_apxUSD
+        usdcBal := fun a => coalWitnessFunded.usdcBal a
+          + (coalWitnessFunded.usdcReserve * coalWitnessFunded.apxUSDBal a)
+            / coalWitnessFunded.totalSupply_apxUSD
+        usdcReserve := 0
+        overcollateralizationBuffer := 0 }
+  have h1 : step coalWitnessFunded Op.catastrophicBackstop coalWitnessFunded.admin = some R :=
+    step_catastrophicBackstop_forward coalWitnessFunded rfl
+  have hgp : R.globalPause = false := rfl
+  have hcp : R.rfqCounterparties.contains 2 = true := rfl
+  have hwl : R.whitelist 0 = true := rfl
+  have hrq : (100 : Nat) ≤ R.rfqRequests 0 := Nat.le_refl _
+  have hbal : (100 : Nat) ≤ R.apxUSDBal 0 := Nat.le_refl _
+  have hres : 100 * R.redemptionValue / ray ≤ R.usdcReserve := by
+    rw [show R.redemptionValue = 0 from rfl, Nat.mul_zero, Nat.zero_div]
+    exact Nat.zero_le _
+  -- step 2: the counterparty settles the victim's pending request at price 0,
+  -- burning all 100 apxUSD for 0 USDC — while the victim's pro-rata credit is only 50
+  have h2 := step_executeRFQRedemption_forward R 0 100 2 hgp hcp hwl hrq hbal hres
+  obtain ⟨hapx, husdc⟩ := rfq_payout_formula R 0 100 2 _ h2
+  refine ⟨coalWitnessFunded, R, _, 0, 2, 100, by decide, rfl, rfl, rfl, rfl, rfl,
+    Nat.le_refl _, by decide, ⟨_, rfl, rfl⟩, h1, rfl, h2, ?_, ?_⟩
+  · rw [hapx, show R.apxUSDBal 0 = 100 from rfl]
+  · rw [husdc, show R.redemptionValue = 0 from rfl, Nat.mul_zero, Nat.zero_div,
+      show R.usdcBal 0 = 50 from rfl]
+    decide
 
 /-! ## T11: the RFQ counterparty's timing option
 

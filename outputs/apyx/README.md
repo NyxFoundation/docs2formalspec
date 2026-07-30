@@ -198,7 +198,7 @@ Every requirement judged expressible as a state-machine property was formalized 
 
 ## 4. What was proved — adversarial analysis
 
-### 4.1 Key-compromise blast radius (61 theorems, [`BlastRadius.lean`](BlastRadius.lean))
+### 4.1 Key-compromise blast radius (62 theorems, [`BlastRadius.lean`](BlastRadius.lean))
 
 The requirement proofs assume every actor behaves as documented. This group answers the harder question the
 documentation never addresses: **if a privileged operator key is stolen, how much can the attacker take?**
@@ -235,9 +235,15 @@ is still proved, but it is no longer the cheapest route, and the reason it read 
 in the model rather than a property of the protocol. **Read its witness carefully**: the state it
 exhibits has `usdcReserve = 0`, so with `ray ≤ redemptionValue` the victim's claim was already
 unrealisable before the coalition acted — both redemption paths would have reverted on the reserve
-guard. The theorem demonstrates the *mechanism*, not an attributable loss; a funded witness is an open
-item (§9.3). Two operations now carry what the
-deployment carries:
+guard. That theorem demonstrates the *mechanism*; the funded witness the human review asked for is now
+its companion **`admin_rfq_coalition_drains_funded`** — reserve at 100 USDC, the victim holding half of a
+200-token supply, and the pre-attack counterfactual *machine-checked* (a conjunct of the statement
+exhibits the victim's own successful `redeemApxUSD` paying the full amount). On that witness the
+coalition's backstop routes half the reserve to a passive bystander and settles the victim's request at
+price 0: an attributable loss of half the principal, not just bookkeeping. Note the review's literal fix
+(fund the reserve, sole holder) would show *no* loss on the current model — the backstop's now-modeled
+pro-rata leg would compensate a sole holder in full — which is why the funded witness dilutes the victim.
+Two operations now carry what the deployment carries:
 
 - **`admin_alone_drains_reserve`** — `withdrawReserve` moves the reserve to an address the admin names,
   with nothing burned and no claim settled. It mirrors `RedemptionPoolV0.withdraw` / `withdrawTokens`,
@@ -776,7 +782,7 @@ been corrected in §3, §4.1 and §4.2, and the full list is below. Everything h
 | §1.2 (timelock) | **Fixed.** `TLOp.tick` is gone; the wrapper's clock is `base.now`, moved only through the base `step`, and the new non-privileged `direct` route lets a user exit mid-window without queueing while `AdminOp`s are refused. `timelock_escape_guarantee` now concludes `queuedAt + delay ≤ base.now` (`Regression.lean` §R9) | §5 item 3 |
 | §1.3 | **Single-pending is not a uniqueness theorem**, and uniqueness does not hold model-wide: the vault path opens a fresh position per call | §3, and the theorem's own docstring |
 | §1.5 | **`apxUSD_credit_is_backed` is single-step.** A five-step admin+oracle sequence — reprice to `2·ray`, open the above-peg gate, `mintApxUSD 100` for 100 USDC, open the below-peg gate, `redeemApxUSD 100` for 200 USDC — extracts 100 USDC from other users' deposits while every individual step satisfies the theorem | §4.1 |
-| §1.6 | **The coalition witness has `usdcReserve = 0`**, so it shows the mechanism rather than an attributable loss. A funded witness was recommended by an earlier human review and not applied | §4.1 |
+| §1.6 | **Fixed.** `admin_rfq_coalition_drains_funded` is the funded companion: reserve at 100, victim diluted to half the supply, and the counterfactual (the victim's own `redeemApxUSD` paying in full) is a machine-checked conjunct of the statement. The review's literal fix — fund the reserve, keep the sole holder — would show no loss under the now-modeled pro-rata leg, so the funded witness dilutes instead. The original zero-reserve witness stays, as the mechanism demonstration | §4.1 |
 | §2.3 | **The early-exit fee is anchored at request time**, so the advertised 3.5% start is never charged on a reachable claim; the real maximum is 2.99% | §3, §6.0 |
 | §2.6 | **Fixed.** Every balance-moving path now passes the deployment's ERC-20 `_update` hook: `redeemApxUSD`, `requestUnlock` and `flexibleRequestUnlock` (the caller's burn), `poolRedeem` (both the caller's burn and the receiver's credit), and `claimUnlock` (the mint to the owner, gated on `globalPause` **and** the deny-list, which it previously ignored entirely). and both claim paths (the mint to the owner, gated on `globalPause` **and** the deny-list, which they previously ignored entirely). `Regression.lean` §R13 checks each direction, including that a clean owner on a live token still settles | §3 |
 | §1.0-d | **`setVestPeriod 0` realizes the entire vest stream in one admin step.** Both conservation theorems hypothesise the non-zero period, i.e. exclude exactly this case | §4.2 |
