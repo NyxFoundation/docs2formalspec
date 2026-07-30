@@ -162,3 +162,65 @@ $.unlockReceipt.mint(receiver, SafeCast.toUint208(assets));           // receipt
 
 以上は [`DeploymentFees.lean`](DeploymentFees.lean) に形式化済み(12定理、公理は
 `propext` / `Quot.sound` のみ)。
+
+---
+
+## 追加取得 (2026-07-30、第3セッション) — vesting / supply cap
+
+実装アドレス(ERC-1967 スロット読み取りで解決):
+
+| コントラクト | proxy | impl |
+|---|---|---|
+| ApxUSD | `0x98a878b1…4665` | `0xdd71fd677fde2ed2579a3c45204f41a11016ccb4` |
+| UnlockReceipt | `0x9bf51f33…3237` | `0x54f1c7ffe10bc392f08ae9432a7e21a6e86bb982` |
+| UnlockToken | `0x93775e2d…f4e6` | proxy でない(直接実装) |
+| LinearVestV0 | `0x0d62b4cc…c99f` | proxy でない(直接実装) |
+
+### ライブ読み取り
+
+| 呼び出し | 値 |
+|---|---|
+| `apxUSD.supplyCap()` | 750,000,000.0 |
+| `apxUSD.totalSupply()` | 327,073,514.822856436999740169 |
+| `apxUSD.supplyCapRemaining()` | 422,926,485.177143563000259831 |
+| `linearVest.vestedAmount()` | **122,187.953953604249079465** |
+
+### 1. `LinearVestV0.setBeneficiary` — admin 単独鍵で vesting プール全額が抜ける
+
+```solidity
+modifier onlyBeneficiary() { if (msg.sender != beneficiary) revert UnauthorizedTransfer(); _; }
+
+function pullVestedYield() external override onlyBeneficiary {
+    uint256 transferAmount = vestedAmount();
+    fullyVestedAmount = 0;
+    lastTransferTimestamp = block.timestamp;
+    if (transferAmount == 0) return;
+    asset.safeTransfer(beneficiary, transferAmount);   // ← beneficiary に払う
+}
+
+function setBeneficiary(address newBeneficiary) external override restricted {
+    if (newBeneficiary == address(0)) revert InvalidAddress("beneficiary");
+    beneficiary = newBeneficiary;                       // ← timelock 無し、vault の同意も不要
+}
+```
+
+payee と唯一の呼び出し権者がどちらも `beneficiary` なので、admin が付け替えれば
+その先が全額を引き出せる。現時点で 122,187.95 apxUSD が対象。
+モデルには `setBeneficiary` に相当する op が無いため、§4.1 の「admin 単独では抽出 0」は
+**この経路について何も言っていない**(偽ではなく沈黙)。
+
+### 2. `ApxUSD` の supply cap — モデルに無い
+
+`mint` は `totalSupply() + amount <= supplyCap` を要求する。単独 minter に対しては本物の上界。
+ただし `setSupplyCap` の唯一のガードは `newSupplyCap >= totalSupply()` なので、
+**admin + minter の 2 鍵で任意の供給量に到達できる**(T10 と同じ形)。
+
+### 3. vest の時計 — pull で終点が動くのはモデルだけ
+
+`LinearVestV0` は `lastDepositTimestamp`(= `vestingPeriodEnd` を決める)と
+`lastTransferTimestamp`(= 発生の起点)を**別々に**持ち、`pullVestedYield` は後者しか動かさない。
+つまり **pull しても終点は動かない**。モデルは両者を `vestStart` に統合し、pull で
+`vestStart := now` としてスケジュールを再始動する。実装は `withdraw`/`redeem` のたびに
+pull するので、モデル側の yield は恒常的に後ろ倒しになる(= `totalAssets` と株価を過小報告)。
+
+以上は [`DeploymentGaps.lean`](DeploymentGaps.lean) に形式化済み(9定理)。
