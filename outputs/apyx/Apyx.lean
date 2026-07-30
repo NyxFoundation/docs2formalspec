@@ -690,7 +690,10 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     match s.unlockRequests requestId with
     | none => none
     | some (owner, amount, cooldownEnd) =>
-      if s.unlockTokenOwner requestId != some owner then none
+      -- mints apxUSD to `owner`, so it passes the `_update` hook: a settled claim reverts while
+      -- the token is paused or the owner is deny-listed, exactly as on-chain
+      if s.globalPause || s.denylist owner then none
+      else if s.unlockTokenOwner requestId != some owner then none
       else if caller = owner ∨ caller = s.unlockTokenOperator then
         if s.now < cooldownEnd then none
         else
@@ -887,6 +890,9 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     else none
   | Op.poolRedeem amount receiver minOut =>
     if s.globalPause then none
+    -- burns the caller's apxUSD and credits `receiver`, so **both** parties pass the
+    -- `_update` hook — see `TokenMoveAllowed`
+    else if s.denylist caller || s.denylist receiver then none
     else if ¬ (s.rfqCounterparties.contains caller) then none
     else if amount = 0 then none
     else if receiver = 0 then none
@@ -1346,11 +1352,13 @@ private theorem step_claimUnlock_some (s : State) (id : Nat) (caller : Address) 
     split at h
     · exact absurd h (by simp)
     · split at h
-      · split at h
-        · exact absurd h (by simp)
-        · exact ⟨owner, amount, cooldownEnd, heq, by simp_all, by assumption, by omega,
-            (Option.some.inj h).symm⟩
       · exact absurd h (by simp)
+      · split at h
+        · split at h
+          · exact absurd h (by simp)
+          · exact ⟨owner, amount, cooldownEnd, heq, by simp_all, by assumption, by omega,
+              (Option.some.inj h).symm⟩
+        · exact absurd h (by simp)
 
 private theorem step_flexibleClaimUnlock_some (s : State) (id : Nat) (caller : Address) (s' : State)
     (h : step s (Op.flexibleClaimUnlock id) caller = some s') :
@@ -1672,7 +1680,7 @@ elapse, claim — all three inside one trace. -/
 theorem redemption_cycle_closes_after_cooldown (s : State) (amount : Nat) (caller : Address)
     (h1 : s.globalPause = false) (h2 : amount ≤ s.apxUSDBal caller)
     (h3 : s.unlockRequestId caller = none)
-    -- the burn passes the ERC-20 `_update` hook, so a deny-listed caller reverts
+    -- the burn and the later mint both pass the ERC-20 `_update` hook
     (hd : s.denylist caller = false) :
     ∃ s₁ s₂,
       step s (Op.requestUnlock amount) caller = some s₁ ∧
@@ -1681,7 +1689,7 @@ theorem redemption_cycle_closes_after_cooldown (s : State) (amount : Nat) (calle
   refine ⟨requestUnlockStep s caller amount, _, ?_, rfl, ?_⟩
   · simp [step, h1, hd, Nat.not_lt.mpr h2]
   · simp only [step, requestUnlockStep, burnApxUSD, h3, createStandardUnlock]
-    simp [cooldownPeriod, day]
+    simp [cooldownPeriod, day, h1, hd]
 
 /-- REQ redemption-cooldown-period: After a redemption request is submitted, the system
 MUST enforce a cooldown period of approximately 20 days before a claim can be executed.
@@ -1957,15 +1965,18 @@ deadline passes the claim succeeds. -/
 theorem req_unlock_conversion_after_cooldown (s : State) (id : Nat) (owner : Address)
     (amount cooldownEnd : Nat)
     (h_req : s.unlockRequests id = some (owner, amount, cooldownEnd))
-    (h_owner : s.unlockTokenOwner id = some owner) :
+    (h_owner : s.unlockTokenOwner id = some owner)
+    -- the mint to `owner` passes the ERC-20 `_update` hook, so a paused token or a
+    -- deny-listed owner reverts the settlement — exactly as on-chain
+    (h1 : s.globalPause = false) (hd : s.denylist owner = false) :
     (s.now < cooldownEnd → step s (Op.claimUnlock id) owner = none) ∧
     (cooldownEnd ≤ s.now → ∃ s', step s (Op.claimUnlock id) owner = some s') := by
   constructor
   · intro h
-    simp [step, h_req, h_owner, h]
+    simp [step, h_req, h_owner, h1, hd, h]
   · intro h
     rcases ho : step s (Op.claimUnlock id) owner with _ | s'
-    · exact absurd ho (by simp [step, h_req, h_owner, Nat.not_lt.mpr h])
+    · exact absurd ho (by simp [step, h_req, h_owner, h1, hd, Nat.not_lt.mpr h])
     · exact ⟨s', rfl⟩
 
 /-- REQ redeemForMinAssets-revert-if-below-minAssets: redeemForMinAssets(uint256 shares,
@@ -2036,11 +2047,14 @@ theorem req_unlock_token_redeem_after_cooldown (s : State) (id : Nat) (owner : A
     (amount cooldownEnd : Nat)
     (h_req : s.unlockRequests id = some (owner, amount, cooldownEnd))
     (h_owner : s.unlockTokenOwner id = some owner)
-    (h_time : cooldownEnd ≤ s.now) :
+    (h_time : cooldownEnd ≤ s.now)
+    -- the mint to `owner` passes the ERC-20 `_update` hook, so a paused token or a
+    -- deny-listed owner reverts the settlement — exactly as on-chain
+    (h1 : s.globalPause = false) (hd : s.denylist owner = false) :
     ∃ s', step s (Op.claimUnlock id) owner = some s' ∧
       s'.apxUSDBal owner = s.apxUSDBal owner + amount := by
   refine ⟨mintApxUSD (retireStandardUnlock s id owner) owner amount, ?_, ?_⟩
-  · simp [step, h_req, h_owner, Nat.not_lt.mpr h_time]
+  · simp [step, h_req, h_owner, h1, hd, Nat.not_lt.mpr h_time]
   · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
 
 /-- Helper: a new apxUSD_unlock position can only be created by one of the vault's own
@@ -2150,6 +2164,8 @@ theorem req_vault_operator_of_unlock_token (s : State) :
       (∀ (id : Nat) (owner : Address) (amount cooldownEnd : Nat),
         s.unlockRequests id = some (owner, amount, cooldownEnd) →
         s.unlockTokenOwner id = some owner →
+        -- the mint to `owner` passes the `_update` hook
+        s.globalPause = false → s.denylist owner = false →
         cooldownEnd ≤ s.now →
         ∃ s', step s (Op.claimUnlock id) vaultAddress = some s' ∧
           s'.apxUSDBal owner = s.apxUSDBal owner + amount) ∧
@@ -2164,9 +2180,9 @@ theorem req_vault_operator_of_unlock_token (s : State) :
           fun op caller s' h hcfg => by
             rw [step_unlockTokenOperator_unchanged _ _ _ _ h]; exact hcfg,
           fun hcfg => ⟨?_, ?_⟩⟩
-  · intro id owner amount cooldownEnd h_req h_owner h_time
+  · intro id owner amount cooldownEnd h_req h_owner h1 hd h_time
     refine ⟨mintApxUSD (retireStandardUnlock s id owner) owner amount, ?_, ?_⟩
-    · simp [step, h_req, h_owner, hcfg, Nat.not_lt.mpr h_time]
+    · simp [step, h_req, h_owner, hcfg, h1, hd, Nat.not_lt.mpr h_time]
     · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
   · intro id owner amount requestTime cooldownEnd h_req h_owner h_time
     refine ⟨mintApxUSD (burnUnlockNFT s id) owner
@@ -2633,13 +2649,16 @@ theorem req_global_pause_blocks_deposit (s : State) (amount : Nat) (caller : Add
 /-- REQ unlock-token-redeemable-1to1-after-20d: apxUSD_unlock tokens MUST be redeemable 1:1 for apxUSD after a 20‑day cooldown period. -/
 theorem req_unlock_token_redeemable_1to1_after_20d (s : State) (requestId : Nat) (caller : Address)
     (h_request : s.unlockRequests requestId = some (caller, (s.unlockTokenAmount requestId), s.now - cooldownPeriod))
-    (h_owner : s.unlockTokenOwner requestId = some caller) :
+    (h_owner : s.unlockTokenOwner requestId = some caller)
+    -- the mint to `owner` passes the ERC-20 `_update` hook, so a paused token or a
+    -- deny-listed owner reverts the settlement — exactly as on-chain
+    (h1 : s.globalPause = false) (hd : s.denylist caller = false) :
     step s (.claimUnlock requestId) caller = none ∨
     (∃ s', step s (.claimUnlock requestId) caller = some s' ∧
            s'.apxUSDBal caller = s.apxUSDBal caller + s.unlockTokenAmount requestId) := by
   right
   refine ⟨mintApxUSD (retireStandardUnlock s requestId caller) caller (s.unlockTokenAmount requestId), ?_, ?_⟩
-  · simp [step, h_request, h_owner, Nat.not_lt.mpr (Nat.sub_le s.now cooldownPeriod)]
+  · simp [step, h_request, h_owner, h1, hd, Nat.not_lt.mpr (Nat.sub_le s.now cooldownPeriod)]
   · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
 
 /-- REQ unlock-token-no-yield: apxUSD_unlock tokens MUST NOT earn yield. -/

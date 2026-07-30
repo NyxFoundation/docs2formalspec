@@ -518,6 +518,28 @@ example : step dl (Op.redeemApxUSD 100) 1 = none := by decide
 example : step dl (Op.requestUnlock 100) 1 = none := by decide
 example : step dl (Op.flexibleRequestUnlock 100) 1 = none := by decide
 
+/-- `poolRedeem` gates **both** parties: it burns the caller's apxUSD and credits `receiver`. -/
+example : step { dl with rfqCounterparties := [2] } (Op.poolRedeem 100 1 0) 2 = none := by decide
+
+/-- The claim paths pass the hook too. A matured position whose owner is deny-listed cannot
+    settle, and neither can one while the token is paused — the mint to the owner is a token
+    move, so `ApyUSD._update` gates it on-chain. -/
+def dlc : State :=
+  { dl with
+      now := cooldownPeriod
+      nextUnlockId := 1
+      unlockRequestId := fun a => if a = 1 then some 0 else none
+      unlockRequests := fun i => if i = 0 then some (1, 50, 0) else none
+      unlockTokenOwner := fun i => if i = 0 then some 1 else none
+      unlockTokenAmount := fun i => if i = 0 then 50 else 0 }
+
+example : step dlc (Op.claimUnlock 0) 1 = none := by decide
+example : step { dlc with globalPause := true, denylist := fun _ => false }
+    (Op.claimUnlock 0) 1 = none := by decide
+
+/-- And a matured position with a clean owner on a live token still settles. -/
+example : step { dlc with denylist := fun _ => false } (Op.claimUnlock 0) 1 ≠ none := by decide
+
 /-- And an ordinary holder is unaffected — the gate is the deny-list, not a blanket block. -/
 example : step dl (Op.requestUnlock 100) 2 ≠ none := by decide
 example : step dl (Op.flexibleRequestUnlock 100) 2 ≠ none := by decide

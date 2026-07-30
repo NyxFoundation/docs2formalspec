@@ -160,11 +160,13 @@ private theorem inv_claimUnlock (s : State) (id : Nat) (caller : Address) (s' : 
     split at h
     · exact absurd h (by simp)
     · split at h
-      · split at h
-        · exact absurd h (by simp)
-        · exact ⟨owner, amount, cooldownEnd, heq, by simp_all, by assumption, by omega,
-            (Option.some.inj h).symm⟩
       · exact absurd h (by simp)
+      · split at h
+        · split at h
+          · exact absurd h (by simp)
+          · exact ⟨owner, amount, cooldownEnd, heq, by simp_all, by assumption, by omega,
+              (Option.some.inj h).symm⟩
+        · exact absurd h (by simp)
 
 private theorem inv_flexibleClaimUnlock (s : State) (id : Nat) (caller : Address) (s' : State)
     (h : step s (Op.flexibleClaimUnlock id) caller = some s') :

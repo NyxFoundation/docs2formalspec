@@ -331,11 +331,13 @@ private theorem inv_claimUnlock (s : State) (id : Nat) (caller : Address) (s' : 
     split at h
     · exact absurd h (by simp)
     · split at h
-      · split at h
-        · exact absurd h (by simp)
-        · exact ⟨owner, amount, cooldownEnd, heq, by simp_all, by assumption, by omega,
-            (Option.some.inj h).symm⟩
       · exact absurd h (by simp)
+      · split at h
+        · split at h
+          · exact absurd h (by simp)
+          · exact ⟨owner, amount, cooldownEnd, heq, by simp_all, by assumption, by omega,
+              (Option.some.inj h).symm⟩
+        · exact absurd h (by simp)
 
 private theorem inv_flexibleClaimUnlock (s : State) (id : Nat) (caller : Address) (s' : State)
     (h : step s (Op.flexibleClaimUnlock id) caller = some s') :
@@ -3112,6 +3114,9 @@ private def poolWitness : State :=
   { (default : State) with
       globalPause := false
       admin := 3
+      -- set explicitly: `default` is not a reliable source for fields a witness depends on
+      -- (`Regression.lean` §R11)
+      denylist := fun _ => false
       rfqCounterparties := [2]
       totalSupply_apxUSD := 100
       apxUSDBal := fun a => if a = 2 then 100 else 0
