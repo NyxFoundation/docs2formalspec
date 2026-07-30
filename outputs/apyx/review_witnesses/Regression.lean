@@ -448,4 +448,47 @@ example : (default : State).unlockRequests 7 = none := by decide
 /-- Which is why `pv0` sets it, and the hypothesis then holds. -/
 example : pv0.unlockRequestId 1 = none := by decide
 
+/-! ## R12 — the rate limiter charges destroyed claims, not just reserve outflow
+
+The residual `code_review_lean.md` §1.2 recorded after the clock fix: the meter charged
+`usdcReserve` outflow only, so a settlement at a crashed `redemptionValue` burned a holder's claim
+for **nothing**, moved no reserve, and passed an arbitrarily tight limiter uncharged.
+
+`stepCost` now charges the larger of reserve outflow and claims destroyed at par.
+-/
+
+def cb : State :=
+  { (default : State) with
+      globalPause := false, admin := 7, whitelist := fun _ => true,
+      rfqCounterparties := [2],
+      apxUSDBal := fun a => if a = 1 then 100 else 0, totalSupply_apxUSD := 100,
+      rfqRequests := fun a => if a = 1 then 100 else 0,
+      usdcReserve := 100, redemptionValue := ray, now := 0 }
+
+/-- Crash the price, then settle the victim's whole request for 0 USDC. -/
+def drain : List (Op × Address) :=
+  [(Op.updateRedemptionValue 1, 7), (Op.executeRFQRedemption 1 100, 2)]
+
+/-- **The fix.** With an allowance large enough to admit it, the drain is charged its full 100 —
+    even though the reserve never moved. Under the old metering this cost 0. -/
+example : (execTrace2 ⟨cb, 0, 100, 100, 0⟩ drain).spent = 100
+        ∧ (execTrace2 ⟨cb, 0, 100, 100, 0⟩ drain).base.usdcReserve = 100
+        ∧ (execTrace2 ⟨cb, 0, 100, 100, 0⟩ drain).base.totalSupply_apxUSD = 0 := by decide
+
+/-- So a tight limiter now stops it, and the holder keeps their claim. -/
+example : (execTrace2 ⟨cb, 0, 100, 10, 0⟩ drain).spent = 0
+        ∧ (execTrace2 ⟨cb, 0, 100, 10, 0⟩ drain).base.apxUSDBal 1 = 100 := by decide
+
+/-- Honest traffic is priced exactly as before: a full-price settlement of the same request moves
+    100 out of the reserve and is charged 100. -/
+example : (execTrace2 ⟨cb, 0, 100, 100, 0⟩ [(Op.executeRFQRedemption 1 100, 2)]).spent = 100
+        ∧ (execTrace2 ⟨cb, 0, 100, 100, 0⟩
+            [(Op.executeRFQRedemption 1 100, 2)]).base.usdcReserve = 0 := by decide
+
+/-- Both halves of the charge are lower bounds on it, which is what makes neither escapable. -/
+example (s s' : State) : s.usdcReserve - s'.usdcReserve ≤ stepCost s s' :=
+  reserve_out_le_stepCost s s'
+example (s s' : State) : s.totalSupply_apxUSD - s'.totalSupply_apxUSD ≤ stepCost s s' :=
+  claims_out_le_stepCost s s'
+
 end Apyx

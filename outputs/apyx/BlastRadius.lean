@@ -2230,11 +2230,45 @@ for every window completed since `t0`. It depends on `base.now` and the three im
 parameters and on nothing else — in particular no action raises it directly. -/
 def allowance (rs : RLState) : Nat := rs.cap * ((rs.base.now - rs.t0) / rs.window + 1)
 
-/-- Rate-limited step. The base operation runs unmodified; its reserve outflow
-`d := usdcReserve - usdcReserve'` (0 when the reserve did not decrease — `Nat` truncation) is
-added to the cumulative meter, and the operation **reverts** if the meter would pass the
-clock-derived allowance. The allowance is evaluated at the *post*-state, so a trace that ticks
-the clock forward and then spends is allowed exactly what the elapsed time buys. -/
+/-- What one base step costs the protocol's holders, as the meter charges it.
+
+Two quantities matter and they are not the same. `usdcReserve - usdcReserve'` is value that left
+the reserve — a transfer out. `totalSupply_apxUSD - totalSupply_apxUSD'` is claims destroyed,
+valued at par — what holders gave up. A fair redemption makes them equal. A redemption at a
+crashed `redemptionValue` burns claims for **nothing**, so the reserve does not move and metering
+outflow alone charges zero: that was the residual `code_review_lean.md` §1.2 recorded after the
+clock fix, and it let a reprice-to-zero drain pass an arbitrarily tight limiter untouched.
+
+Charging the **larger** of the two closes it while leaving honest traffic priced as before: a fair
+redemption still costs its face value, `withdrawReserve` still costs what it moves, and a
+zero-payout burn now costs the claims it destroyed.
+
+Written with truncated subtraction rather than `Nat.max` so `omega` can see through it; the two
+agree, which `stepCost_eq_max` records. -/
+def stepCost (s s' : State) : Nat :=
+  (s.usdcReserve - s'.usdcReserve)
+    + ((s.totalSupply_apxUSD - s'.totalSupply_apxUSD) - (s.usdcReserve - s'.usdcReserve))
+
+theorem stepCost_eq_max (s s' : State) :
+    stepCost s s' = Nat.max (s.usdcReserve - s'.usdcReserve)
+      (s.totalSupply_apxUSD - s'.totalSupply_apxUSD) := by
+  unfold stepCost
+  simp only [Nat.max_def]
+  split <;> omega
+
+/-- The meter always charges at least the reserve outflow. -/
+theorem reserve_out_le_stepCost (s s' : State) :
+    s.usdcReserve - s'.usdcReserve ≤ stepCost s s' := by unfold stepCost; omega
+
+/-- …and at least the claims destroyed at par. This is the half that a reprice-to-zero drain
+used to escape. -/
+theorem claims_out_le_stepCost (s s' : State) :
+    s.totalSupply_apxUSD - s'.totalSupply_apxUSD ≤ stepCost s s' := by unfold stepCost; omega
+
+/-- Rate-limited step. The base operation runs unmodified; its cost (`stepCost`) is added to the
+cumulative meter, and the operation **reverts** if the meter would pass the clock-derived
+allowance. The allowance is evaluated at the *post*-state, so a trace that ticks the clock
+forward and then spends is allowed exactly what the elapsed time buys. -/
 def step2 (rs : RLState) (op : Op) (caller : Address) : Option RLState :=
   match step rs.base op caller with
   | none => none
@@ -2242,10 +2276,10 @@ def step2 (rs : RLState) (op : Op) (caller : Address) : Option RLState :=
     -- `allowance` at the post-state, inlined: the policy parameters are copied from `rs`, so
     -- only `now` differs. Written out so `split` can discharge the guard.
     if rs.cap * ((s'.now - rs.t0) / rs.window + 1)
-        < rs.spent + (rs.base.usdcReserve - s'.usdcReserve) then none
+        < rs.spent + stepCost rs.base s' then none
     else some { rs with
       base := s'
-      spent := rs.spent + (rs.base.usdcReserve - s'.usdcReserve) }
+      spent := rs.spent + stepCost rs.base s' }
 
 /-- Trace executor for the wrapper (revert-skip semantics, like `execTrace`). The trace is a
 list of plain base operations: the wrapper contributes no clock action of its own. -/
@@ -2336,6 +2370,7 @@ private theorem rl_outflow_le_spent (rs : RLState) (τ : List (Op × Address)) :
         · exact absurd hstep (by simp)
         · cases Option.some.inj hstep
           simp only at hih
+          simp only [stepCost] at hih ⊢
           omega
 
 /-- T7 `rate_limit_linear_bound` (docs/05-blast-radius.md, Tier 3) — **the rate limiter caps
