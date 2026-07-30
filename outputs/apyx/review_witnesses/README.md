@@ -1,45 +1,58 @@
-# 反例 witness — `code_review_lean.md` の裏付け
+# 回帰テスト — ERC-4626 価格決定の修正
 
-`code_review_lean.md` §1.0 / §1.4 で報告した過大主張を、**Lean kernel で検証可能な具体反例**として
-固定したものです。すべて `by decide` / `rfl` のみで、`native_decide` は使っていません。
+`code_review_lean.md` §1.0 で報告した5つの反例を、**修正後の**モデルに向け直したものです。
+修正前はこれらが README §4.2 の見出し主張の**違反を証明**していました。現在は
+`Regression.lean` が修正後の正しい挙動を固定しており、穴が黙って再発しないようにしています。
+
+すべて `by decide` / `rfl` のみで、`native_decide` は使っていません。
 
 ## 実行方法
 
 ```bash
 cd lean
-lake build D2fsSpecs                     # 先にライブラリをビルド
-lake env lean ../outputs/apyx/review_witnesses/W1_stale_rate_dilution.lean
+lake build D2fsSpecs
+lake env lean ../outputs/apyx/review_witnesses/Regression.lean
 ```
 
-エラー出力がなければ、そのファイル中の全 `example` が kernel で通ったということです
-(5ファイルすべて 2026-07-30 時点で通過を確認済み)。
+エラー出力がなければ全アサーションが kernel で通ったということです。
 
-## 各ファイルの内容
+## 何を修正したか
 
-| ファイル | 反証する README の主張 | 内容 |
-|---|---|---|
-| `W1_stale_rate_dilution.lean` | §4.2「No dilution — A deposit by someone else never lowers an existing holder's redeemable value」 | 手作り状態から。`no_dilution` の仮説 `hTS` / `hbacked` は**両方成立**するのに、A の真の償還価値は 200 → 150 に下落。定理の結論はキャッシュレートで測るため「100 → 150 に増加」と報告する |
-| `W2_honest_lifecycle_dilution.lean` | 同上 +「Share-price monotonicity」 | **最重要。** レート整合な初期状態から、正直なロールだけの操作列 `[lockApxUSD A, creditYield(本物の distributor), tick, lockApxUSD B]` で `computeExchangeRate w4 < computeExchangeRate w3` — **真の株価が下落**。A は 25% 希釈 (200→150)、B は 100 apxUSD が 150 になる |
-| `W3_inflation_attack.lean` | §4.2「Inflation-attack immunity — structurally impossible」 | レート整合・非退化状態 (攻撃者が1株、vault に 200 資産、株価 200·ray)。被害者が 150 apxUSD を lock → **0 株**、150 全額喪失。攻撃者の1株は 200 → 350 に。`no_dilution` の結論は**攻撃者について**成立する |
-| `W4_zero_rate_drain.lean` | §4.2「No free extraction」/ vest の「no early drain」 | (a) `exchangeRate = 0` (= `default` 値) で `withdrawShares 100 0 = 0` となりガード `apyUSDBal < 0` が偽になるため、**0 株しか持たないアドレスが vault を全額**自分の unlock ポジションに移す (株の焼却なし)。(b) `setVestPeriod 0` が vest ストリーム 1000 全額を1ステップで即時実現 |
-| `W5_first_depositor_steal.lean` | 同上 (first-depositor 版) | `default` 由来状態で最初の預入者が 100 apxUSD → 0 株、その後攻撃者が 1 apxUSD で 1 株を得て vault 全額 101 を `redeem` で奪う |
+根拠は [`../deployment_ground_truth.md`](../deployment_ground_truth.md)(検証済みソースと
+mainnet の実測値)。
 
-## 共通の根本原因
+1. **`computeExchangeRate` をライブ価格にした。**
+   `((totalAssets s + 1) * ray) / (totalSupply_apyUSD + 1)`。
+   デプロイ済み `ApyUSD` は**格納レートを持ちません** — `totalAssets()` は
+   `asset.balanceOf(this) + vesting.vestedAmount()` を返す `view` で、変換は毎回そこから
+   計算されます(`convertToAssets(1e18)` が `1e18 * totalAssets / totalSupply` に整数レベルで
+   一致することを実測で確認)。
+   `+1` は OpenZeppelin 5.5.0 の仮想株・仮想資産(`_decimalsOffset() = 0` なので `10**0 = 1`)。
 
-1. **`exchangeRate` がキャッシュで、レート整合の不変量がどこにも無い。**
-   `Op.lockApxUSD` は**格納された古いレート**で株を発行し (`Apyx.lean:594`)、
-   `updateExchangeRate` はその**後**に呼ばれます。`creditYield` / `tick` / vesting は
-   キャッシュを更新しないので、vault 操作の合間はキャッシュが真の価格より必ず低くなります。
-   `s.exchangeRate = computeExchangeRate s` を述べた定義・定理は両ファイルに存在しません。
+2. **すべての変換と `step` の全分岐がそれを参照する。**
+   `exchangeRate` **フィールド**は「公表された記録」になり、価格決定の入力ではなくなりました。
 
-2. **`lockShares = amount * ray / exchangeRate` に下限チェックが無い。**
-   `amount · ray < exchangeRate` のとき floor して 0 になり、これが「存在しない」とされた
-   raw donation primitive です。`depositForMinShares` (`Apyx.lean:838`) は存在しますが、
-   どの安全性定理もそれを使っていません。
+## 各セクションが守るもの
 
-## 実装側への含意
+| セクション | 旧ファイル | 反証していた README §4.2 の主張 | 現在の状態 |
+|---|---|---|---|
+| **R1/R2** | `W1_stale_rate_dilution` / `W2_honest_lifecycle_dilution` | 「No dilution」「Share-price monotonicity」 | **解消。** 預入者は公正な 50 株を受け取り(旧: 100 株)、既存ホルダーの償還価値は 199 のまま(旧: 200→150)、`computeExchangeRate w3 ≤ computeExchangeRate w4` が成立 |
+| **R3** | `W3_inflation_attack` | 「Inflation-attack immunity — structurally impossible」 | **緩和されたが解消はしていない(意図的)。** 被害者は 0 株ではなく 1 株を受け取る。ただし 150 入れて 117 しか戻らず、攻撃者は 100→117 を得る |
+| **R4** | `W4_zero_rate_drain` | 「No free extraction」 | **構造的に解消。** 分母が `totalSupply_apyUSD + 1` で常に正になり、`x / 0 = 0` の穴が到達不能に。0 株のアドレスの `withdraw` は revert |
+| **R5** | `W5_first_depositor_steal` | 同上 (first-depositor 版) | **解消。** 最初の預入者は 100 apxUSD に対して 100 株を受け取る(旧: 0 株) |
 
-1 は**モデルの人工物ではなく実装に持ち帰るべき指摘**です。`lockApxUSD` が価格決定の**前**に
-`pullVestedYield` / `updateExchangeRate` を呼ぶか、レート整合を帰納的不変量として証明する必要が
-あります。2 は ERC-4626 の標準的な緩和策 (virtual shares / offset、または最小株数チェック) の
-有無を deployed contract 側で確認すべき項目です。
+## R3 を閉じきっていない理由
+
+デプロイ済みコントラクトの `_decimalsOffset()` が **`0`** を返します
+(docstring 自身が「Returns the decimals offset for **inflation-attack protection**」と
+書いているにもかかわらず)。したがって構造的防御は OpenZeppelin の仮想株1つだけで、
+`deposit()` は 0 株でも revert しません(`previewDeposit(1 wei) = 0` を実測)。
+
+**チェーンが持っていない保護をモデルに入れるのは誤った修正**なので、R3 は
+「忠実な残存弱点」として境界付きで残しています。対策は2方向:
+
+- ユーザー側: `depositForMinShares`(実在するスリッページラッパー)を使う
+- プロトコル側: `_decimalsOffset()` を非ゼロにする
+
+現行デプロイでは apyUSD の発行済株数が 1.28億株あるため、この経路の実害は現時点では
+無視できる水準です。危険なのは新規 vault や供給が枯れた状態です。

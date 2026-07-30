@@ -216,8 +216,8 @@ private theorem inv_lockApxUSD (s : State) (amount : Nat) (caller : Address) (s'
     s' = emitEvent (updateExchangeRate (mintApyUSD
           { burnApxUSD s caller amount with
             vaultApxUSDBal := (burnApxUSD s caller amount).vaultApxUSDBal + amount }
-          caller (lockShares amount s.exchangeRate)))
-      "Deposit" [caller, caller, caller, amount, lockShares amount s.exchangeRate] := by
+          caller (lockShares amount (computeExchangeRate s))))
+      "Deposit" [caller, caller, caller, amount, lockShares amount (computeExchangeRate s)] := by
   simp only [step] at h
   split at h
   · exact absurd h (by simp)
@@ -355,12 +355,12 @@ private theorem inv_redeemApxUSD (s : State) (amount : Nat) (caller : Address) (
 private theorem inv_withdraw (s : State) (assets : Nat) (receiver caller : Address) (s' : State)
     (h : step s (Op.withdraw assets receiver) caller = some s') :
     s.globalPause = false ∧
-    withdrawShares assets s.exchangeRate ≤ (pullVestedYield s).apyUSDBal caller ∧
+    withdrawShares assets (computeExchangeRate (pullVestedYield s)) ≤ (pullVestedYield s).apyUSDBal caller ∧
     assets ≤ (pullVestedYield s).vaultApxUSDBal ∧
     s' = emitEvent (updateExchangeRate (createStandardUnlock
-          { burnApyUSD (pullVestedYield s) caller (withdrawShares assets s.exchangeRate) with
-            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller (withdrawShares assets s.exchangeRate)).vaultApxUSDBal - assets }
-          receiver assets)) "Withdraw" [caller, receiver, caller, assets, withdrawShares assets s.exchangeRate] := by
+          { burnApyUSD (pullVestedYield s) caller (withdrawShares assets (computeExchangeRate (pullVestedYield s))) with
+            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller (withdrawShares assets (computeExchangeRate (pullVestedYield s)))).vaultApxUSDBal - assets }
+          receiver assets)) "Withdraw" [caller, receiver, caller, assets, withdrawShares assets (computeExchangeRate (pullVestedYield s))] := by
   simp only [step, pv_exchangeRate] at h
   split at h
   · exact absurd h (by simp)
@@ -374,11 +374,11 @@ private theorem inv_redeem (s : State) (shares : Nat) (receiver caller : Address
     (h : step s (Op.redeem shares receiver) caller = some s') :
     s.globalPause = false ∧
     shares ≤ (pullVestedYield s).apyUSDBal caller ∧
-    redeemAssets shares s.exchangeRate ≤ (pullVestedYield s).vaultApxUSDBal ∧
+    redeemAssets shares (computeExchangeRate (pullVestedYield s)) ≤ (pullVestedYield s).vaultApxUSDBal ∧
     s' = emitEvent (updateExchangeRate (createStandardUnlock
           { burnApyUSD (pullVestedYield s) caller shares with
-            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller shares).vaultApxUSDBal - redeemAssets shares s.exchangeRate }
-          receiver (redeemAssets shares s.exchangeRate))) "Withdraw" [caller, receiver, caller, redeemAssets shares s.exchangeRate, shares] := by
+            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller shares).vaultApxUSDBal - redeemAssets shares (computeExchangeRate (pullVestedYield s)) }
+          receiver (redeemAssets shares (computeExchangeRate (pullVestedYield s))))) "Withdraw" [caller, receiver, caller, redeemAssets shares (computeExchangeRate (pullVestedYield s)), shares] := by
   simp only [step, pv_exchangeRate] at h
   split at h
   · exact absurd h (by simp)

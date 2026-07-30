@@ -115,10 +115,28 @@ def vestedAmount (s : State) (now : Nat) : Nat :=
 def totalAssets (s : State) : Nat :=
   s.vaultApxUSDBal + vestedAmount s s.now
 
-def computeExchangeRate (s : State) : Nat :=
-  if s.totalSupply_apyUSD = 0 then ray
-  else (totalAssets s * ray) / s.totalSupply_apyUSD
+/-- The live per-share price, in `ray`.
 
+**Faithful to the deployment** (`outputs/apyx/deployment_ground_truth.md`). The deployed `ApyUSD`
+(impl `0xfd616567…b112`, OpenZeppelin upgradeable 5.5.0) stores **no** exchange rate:
+`totalAssets()` is a `view` returning `asset.balanceOf(this) + vesting.vestedAmount()`, and every
+conversion recomputes off it, so the price moves continuously as yield vests. Read on-chain,
+`convertToAssets(1e18)` matches `1e18 * totalAssets / totalSupply` exactly.
+
+The `+1` terms are OpenZeppelin's virtual share and virtual asset:
+`_convertToShares(a,r) = a.mulDiv(totalSupply() + 10**_decimalsOffset(), totalAssets() + 1, r)`
+with `_decimalsOffset() = 0`, hence `10**0 = 1`. Carrying them is what makes the denominator
+structurally non-zero, so no conversion in this model can hit Lean's `x / 0 = 0`
+(`computeExchangeRate_pos`). -/
+def computeExchangeRate (s : State) : Nat :=
+  ((totalAssets s + 1) * ray) / (s.totalSupply_apyUSD + 1)
+
+/-- Record the live price into the `exchangeRate` field.
+
+The field is a *published record*, not a pricing input: every conversion and every `step` branch
+prices off `computeExchangeRate` directly, matching the deployment's stateless reads. Keeping the
+field lets `rate_consistent_step` state, as a machine-checked invariant, that the recorded value
+never drifts from the live one. -/
 def updateExchangeRate (s : State) : State :=
   { s with exchangeRate := computeExchangeRate s }
 
@@ -248,12 +266,14 @@ def overcollateralizationBuffer (s : State) : Nat :=
 def emitEvent (s : State) (name : String) (args : List Nat) : State :=
   { s with eventLog := (name, args) :: s.eventLog }
 
--- ERC-4626 helper functions
+-- ERC-4626 helper functions.
+-- All of these price off `computeExchangeRate`, the LIVE rate, not the `exchangeRate` field:
+-- the deployment has no stored rate (see `computeExchangeRate`).
 def convertToShares (s : State) (assets : Nat) : Nat :=
-  lockShares assets s.exchangeRate
+  lockShares assets (computeExchangeRate s)
 
 def convertToAssets (s : State) (shares : Nat) : Nat :=
-  redeemAssets shares s.exchangeRate
+  redeemAssets shares (computeExchangeRate s)
 
 def maxDeposit (s : State) (receiver : Address) : Nat :=
   if s.globalPause then 0 else s.apxUSDBal receiver
@@ -274,7 +294,7 @@ def previewMint (s : State) (shares : Nat) : Nat :=
   convertToAssets s shares
 
 def previewWithdraw (s : State) (assets : Nat) : Nat :=
-  withdrawShares assets s.exchangeRate
+  withdrawShares assets (computeExchangeRate s)
 
 def previewRedeem (s : State) (shares : Nat) : Nat :=
   convertToAssets s shares
@@ -591,7 +611,8 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     if s.globalPause then none
     else if s.apxUSDBal caller < amount then none
     else
-      let shares := lockShares amount s.exchangeRate
+      -- priced at the LIVE rate, as the deployment's `previewDeposit` is
+      let shares := lockShares amount (computeExchangeRate s)
       let s1 := burnApxUSD s caller amount
       let s2 := { s1 with vaultApxUSDBal := s1.vaultApxUSDBal + amount }
       let s3 := mintApyUSD s2 caller shares
@@ -638,8 +659,10 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
   | Op.withdraw assets receiver =>
     if s.globalPause then none
     else
+      -- the deployment pulls vested yield BEFORE pricing ("so liquid assets match
+      -- totalAssets()"), then prices off the live rate
       let s1 := pullVestedYield s
-      let shares := withdrawShares assets s1.exchangeRate
+      let shares := withdrawShares assets (computeExchangeRate s1)
       if s1.apyUSDBal caller < shares then none
       else if s1.vaultApxUSDBal < assets then none
       else
@@ -655,7 +678,7 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
       let s1 := pullVestedYield s
       if s1.apyUSDBal caller < shares then none
       else
-        let assets := redeemAssets shares s1.exchangeRate
+        let assets := redeemAssets shares (computeExchangeRate s1)
         if s1.vaultApxUSDBal < assets then none
         else
           let s2 := burnApyUSD s1 caller shares
@@ -1017,10 +1040,9 @@ private theorem computeExchangeRate_mono_now (s : State) (dt : Nat) :
     computeExchangeRate s ≤ computeExchangeRate { s with now := s.now + dt } := by
   unfold computeExchangeRate totalAssets
   dsimp only
-  split
-  · exact Nat.le_refl _
-  · exact Nat.div_le_div_right (Nat.mul_le_mul_right _
-      (Nat.add_le_add_left (vestedAmount_mono s (Nat.le_add_right _ _)) _))
+  exact Nat.div_le_div_right (Nat.mul_le_mul_right _
+    (Nat.add_le_add_right
+      (Nat.add_le_add_left (vestedAmount_mono s (Nat.le_add_right _ _)) _) 1))
 
 /-- The flexible-unlock fee never drops below the 0.1% (10 bps) floor once claimable. -/
 private theorem flexibleUnlockFee_ge_min (rt now : Nat) (h : rt + minFlexibleClaim ≤ now) :
@@ -1072,13 +1094,18 @@ private theorem flexibleUnlockFee_after_cooldown (rt now : Nat)
 private theorem step_withdraw_some (s : State) (assets : Nat) (receiver caller : Address) (s' : State)
     (h : step s (Op.withdraw assets receiver) caller = some s') :
     s.globalPause = false ∧
-    withdrawShares assets s.exchangeRate ≤ (pullVestedYield s).apyUSDBal caller ∧
+    withdrawShares assets (computeExchangeRate (pullVestedYield s))
+      ≤ (pullVestedYield s).apyUSDBal caller ∧
     assets ≤ (pullVestedYield s).vaultApxUSDBal ∧
     s' = emitEvent (updateExchangeRate (createStandardUnlock
-          { burnApyUSD (pullVestedYield s) caller (withdrawShares assets s.exchangeRate) with
-            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller (withdrawShares assets s.exchangeRate)).vaultApxUSDBal - assets }
-          receiver assets)) "Withdraw" [caller, receiver, caller, assets, withdrawShares assets s.exchangeRate] := by
-  simp only [step, pullVestedYield_exchangeRate] at h
+          { burnApyUSD (pullVestedYield s) caller
+              (withdrawShares assets (computeExchangeRate (pullVestedYield s))) with
+            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller
+              (withdrawShares assets (computeExchangeRate (pullVestedYield s)))).vaultApxUSDBal - assets }
+          receiver assets)) "Withdraw"
+      [caller, receiver, caller, assets,
+        withdrawShares assets (computeExchangeRate (pullVestedYield s))] := by
+  simp only [step] at h
   split at h
   · exact absurd h (by simp)
   · split at h
@@ -1091,12 +1118,16 @@ private theorem step_redeem_some (s : State) (shares : Nat) (receiver caller : A
     (h : step s (Op.redeem shares receiver) caller = some s') :
     s.globalPause = false ∧
     shares ≤ (pullVestedYield s).apyUSDBal caller ∧
-    redeemAssets shares s.exchangeRate ≤ (pullVestedYield s).vaultApxUSDBal ∧
+    redeemAssets shares (computeExchangeRate (pullVestedYield s))
+      ≤ (pullVestedYield s).vaultApxUSDBal ∧
     s' = emitEvent (updateExchangeRate (createStandardUnlock
           { burnApyUSD (pullVestedYield s) caller shares with
-            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller shares).vaultApxUSDBal - redeemAssets shares s.exchangeRate }
-          receiver (redeemAssets shares s.exchangeRate))) "Withdraw" [caller, receiver, caller, redeemAssets shares s.exchangeRate, shares] := by
-  simp only [step, pullVestedYield_exchangeRate] at h
+            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller shares).vaultApxUSDBal
+              - redeemAssets shares (computeExchangeRate (pullVestedYield s)) }
+          receiver (redeemAssets shares (computeExchangeRate (pullVestedYield s))))) "Withdraw"
+      [caller, receiver, caller,
+        redeemAssets shares (computeExchangeRate (pullVestedYield s)), shares] := by
+  simp only [step] at h
   split at h
   · exact absurd h (by simp)
   · split at h
@@ -1154,8 +1185,8 @@ private theorem step_lockApxUSD_some (s : State) (amount : Nat) (caller : Addres
     s' = emitEvent (updateExchangeRate (mintApyUSD
           { burnApxUSD s caller amount with
             vaultApxUSDBal := (burnApxUSD s caller amount).vaultApxUSDBal + amount }
-          caller (lockShares amount s.exchangeRate)))
-      "Deposit" [caller, caller, caller, amount, lockShares amount s.exchangeRate] := by
+          caller (lockShares amount (computeExchangeRate s))))
+      "Deposit" [caller, caller, caller, amount, lockShares amount (computeExchangeRate s)] := by
   simp only [step] at h
   split at h
   · exact absurd h (by simp)
@@ -1555,7 +1586,7 @@ theorem req_redemption_cooldown_period (s : State) :
 apyUSD MUST remain fixed and the user MUST not accrue additional yield on those tokens.
 (Model: when apyUSD enters the redemption cooldown — `Op.redeem`/`Op.withdraw` — the
 payout for the locked tokens is computed ONCE, at the apxUSD/apyUSD exchange rate in
-force at request time (`redeemAssets shares s.exchangeRate` resp. `assets`), and recorded
+force at request time (`redeemAssets shares (computeExchangeRate (pullVestedYield s))` resp. `assets`), and recorded
 in the cooldown position. That is the "fixed exchange rate": the locked tokens' value is
 frozen at the request-time rate for the entire `cooldownPeriod`. And no additional yield
 accrues on them: `Op.creditYield` — the only operation by which apyUSD holders receive
@@ -1568,8 +1599,8 @@ theorem req_cooldown_no_yield (s : State) :
     (∀ shares receiver caller s',
       step s (Op.redeem shares receiver) caller = some s' →
       s'.unlockRequests s.nextUnlockId
-        = some (receiver, redeemAssets shares s.exchangeRate, s.now + cooldownPeriod) ∧
-      s'.unlockTokenAmount s.nextUnlockId = redeemAssets shares s.exchangeRate) ∧
+        = some (receiver, redeemAssets shares (computeExchangeRate (pullVestedYield s)), s.now + cooldownPeriod) ∧
+      s'.unlockTokenAmount s.nextUnlockId = redeemAssets shares (computeExchangeRate (pullVestedYield s))) ∧
     -- apyUSD entering cooldown via `withdraw`: likewise frozen at the request-time rate
     (∀ assets receiver caller s',
       step s (Op.withdraw assets receiver) caller = some s' →
@@ -1845,7 +1876,7 @@ theorem req_unlock_token_mints_apx_usd_unlock_immediately (s : State) :
     (∀ (shares : Nat) (receiver caller : Address) (s' : State),
       step s (Op.redeem shares receiver) caller = some s' →
       s'.unlockTokenOwner s.nextUnlockId = some receiver ∧
-      s'.unlockTokenAmount s.nextUnlockId = redeemAssets shares s.exchangeRate) ∧
+      s'.unlockTokenAmount s.nextUnlockId = redeemAssets shares (computeExchangeRate (pullVestedYield s))) ∧
     (∀ (amount : Nat) (caller : Address) (s' : State),
       s.unlockRequestId caller = none →
       step s (Op.requestUnlock amount) caller = some s' →
@@ -2045,231 +2076,22 @@ theorem req_singleton_unlock_token_instance (s : State) (op : Op) (caller : Addr
      unlock_position_created_only_by_vault_ops _ _ _ _ h_step id owner h_new h_now⟩
 
 
-
-
-
-
--- BROKEN: 
--- BROKEN: 
--- BROKEN: open Nat
--- BROKEN: 
--- BROKEN: 
--- BROKEN: 
--- BROKEN: abbrev Address := Nat
--- BROKEN: 
--- BROKEN: def ray : Nat := 10^27
--- BROKEN: def day : Nat := 86400
--- BROKEN: def cooldownPeriod : Nat := 20 * day
--- BROKEN: def minFlexibleClaim : Nat := 3 * day
--- BROKEN: 
--- BROKEN: def vaultAddress : Address := 0
--- BROKEN: 
--- BROKEN: structure State where
--- BROKEN:   now : Nat
--- BROKEN:   globalPause : Bool
--- BROKEN:   pauseController : Address
--- BROKEN:   admin : Address
--- BROKEN:   governance : Address
--- BROKEN:   oracle : Address
--- BROKEN:   yieldDistributor : Address
--- BROKEN:   whitelist : Address → Bool
--- BROKEN:   denylist : Address → Bool
--- BROKEN:   rfqCounterparties : List Address
--- BROKEN:   governanceThreshold : Nat
--- BROKEN:   emergencyFlag : Bool
--- BROKEN:   totalSupply_apxUSD : Nat
--- BROKEN:   totalSupply_apyUSD : Nat
--- BROKEN:   apxUSDBal : Address → Nat
--- BROKEN:   apyUSDBal : Address → Nat
--- BROKEN:   governanceTokenBal : Address → Nat
--- BROKEN:   vaultApxUSDBal : Nat
--- BROKEN:   exchangeRate : Nat
--- BROKEN:   totalCollateralValue : Nat
--- BROKEN:   redemptionValue : Nat
--- BROKEN:   overcollateralizationBuffer : Nat
--- BROKEN:   yieldRateMonth : Nat
--- BROKEN:   vestStart : Nat
--- BROKEN:   vestTotal : Nat
--- BROKEN:   vestPeriod : Nat
--- BROKEN:   nextUnlockId : Nat
--- BROKEN:   unlockRequestId : Address → Option Nat
--- BROKEN:   unlockRequests : Nat → Option (Address × Nat × Nat)
--- BROKEN:   flexibleUnlockRequests : Nat → Option (Address × Nat × Nat × Nat)
--- BROKEN:   unlockTokenOwner : Nat → Option Address
--- BROKEN:   unlockTokenAmount : Nat → Nat
--- BROKEN:   bufferDeployed : Bool
--- BROKEN: deriving Inhabited
--- BROKEN: 
--- BROKEN: def vestedAmount (s : State) (now : Nat) : Nat :=
--- BROKEN:   if now < s.vestStart then 0
--- BROKEN:   else
--- BROKEN:     let elapsed := now - s.vestStart
--- BROKEN:     if elapsed ≥ s.vestPeriod then s.vestTotal
--- BROKEN:     else (elapsed * s.vestTotal) / s.vestPeriod
--- BROKEN: 
--- BROKEN: def totalAssets (s : State) : Nat :=
--- BROKEN:   s.vaultApxUSDBal + vestedAmount s s.now
--- BROKEN: 
--- BROKEN: def computeExchangeRate (s : State) : Nat :=
--- BROKEN:   if s.totalSupply_apyUSD = 0 then ray
--- BROKEN:   else (totalAssets s * ray) / s.totalSupply_apyUSD
--- BROKEN: 
--- BROKEN: def updateExchangeRate (s : State) : State :=
--- BROKEN:   { s with exchangeRate := computeExchangeRate s }
--- BROKEN: 
--- BROKEN: def flexibleUnlockFee (requestTime : Nat) (now : Nat) : Nat :=
--- BROKEN:   if now < requestTime + minFlexibleClaim then 0
--- BROKEN:   else
--- BROKEN:     let elapsed := now - requestTime
--- BROKEN:     if elapsed ≥ cooldownPeriod then 10
--- BROKEN:     else
--- BROKEN:       let feeBps := 350 - (elapsed * 340) / cooldownPeriod
--- BROKEN:       max feeBps 10
--- BROKEN: 
--- BROKEN: def lockShares (assets : Nat) (exchangeRate : Nat) : Nat :=
--- BROKEN:   (assets * ray) / exchangeRate
--- BROKEN: 
--- BROKEN: def redeemAssets (shares : Nat) (exchangeRate : Nat) : Nat :=
--- BROKEN:   (shares * exchangeRate) / ray
--- BROKEN: 
--- BROKEN: def withdrawShares (assets : Nat) (exchangeRate : Nat) : Nat :=
--- BROKEN:   (assets * ray + exchangeRate - 1) / exchangeRate
--- BROKEN: 
--- BROKEN: def pullVestedYield (s : State) : State :=
--- BROKEN:   let v := vestedAmount s s.now
--- BROKEN:   if v = 0 then s
--- BROKEN:   else
--- BROKEN:     { s with
--- BROKEN:         vaultApxUSDBal := s.vaultApxUSDBal + v
--- BROKEN:         vestTotal := s.vestTotal - v
--- BROKEN:         vestStart := s.now
--- BROKEN:     }
--- BROKEN: 
--- BROKEN: def createStandardUnlock (s : State) (owner : Address) (amount : Nat) : State :=
--- BROKEN:   let id := s.nextUnlockId
--- BROKEN:   let cooldownEnd := s.now + cooldownPeriod
--- BROKEN:   { s with
--- BROKEN:       nextUnlockId := id + 1
--- BROKEN:       unlockRequestId := fun a => if a = owner then some id else s.unlockRequestId a
--- BROKEN:       unlockRequests := fun i => if i = id then some (owner, amount, cooldownEnd) else s.unlockRequests i
--- BROKEN:       unlockTokenOwner := fun i => if i = id then some owner else s.unlockTokenOwner i
--- BROKEN:       unlockTokenAmount := fun i => if i = id then amount else s.unlockTokenAmount i
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def updateStandardUnlock (s : State) (id : Nat) (owner : Address) (addAmount : Nat) : State :=
--- BROKEN:   match s.unlockRequests id with
--- BROKEN:   | none => s
--- BROKEN:   | some (_, oldAmount, _) =>
--- BROKEN:     let newAmount := oldAmount + addAmount
--- BROKEN:     let newCooldownEnd := s.now + cooldownPeriod
--- BROKEN:     { s with
--- BROKEN:         unlockRequests := fun i => if i = id then some (owner, newAmount, newCooldownEnd) else s.unlockRequests i
--- BROKEN:         unlockTokenAmount := fun i => if i = id then newAmount else s.unlockTokenAmount i
--- BROKEN:     }
--- BROKEN: 
--- BROKEN: def createFlexibleUnlock (s : State) (owner : Address) (amount : Nat) : State :=
--- BROKEN:   let id := s.nextUnlockId
--- BROKEN:   let requestTime := s.now
--- BROKEN:   let cooldownEnd := s.now + cooldownPeriod
--- BROKEN:   { s with
--- BROKEN:       nextUnlockId := id + 1
--- BROKEN:       flexibleUnlockRequests := fun i => if i = id then some (owner, amount, requestTime, cooldownEnd) else s.flexibleUnlockRequests i
--- BROKEN:       unlockTokenOwner := fun i => if i = id then some owner else s.unlockTokenOwner i
--- BROKEN:       unlockTokenAmount := fun i => if i = id then amount else s.unlockTokenAmount i
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def burnUnlockNFT (s : State) (id : Nat) : State :=
--- BROKEN:   { s with
--- BROKEN:       unlockTokenOwner := fun i => if i = id then none else s.unlockTokenOwner i
--- BROKEN:       unlockTokenAmount := fun i => if i = id then 0 else s.unlockTokenAmount i
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def mintApxUSD (s : State) (to : Address) (amount : Nat) : State :=
--- BROKEN:   { s with
--- BROKEN:       totalSupply_apxUSD := s.totalSupply_apxUSD + amount
--- BROKEN:       apxUSDBal := fun a => if a = to then s.apxUSDBal a + amount else s.apxUSDBal a
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def burnApxUSD (s : State) (fromAddr : Address) (amount : Nat) : State :=
--- BROKEN:   { s with
--- BROKEN:       totalSupply_apxUSD := s.totalSupply_apxUSD - amount
--- BROKEN:       apxUSDBal := fun a => if a = fromAddr then s.apxUSDBal a - amount else s.apxUSDBal a
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def mintApyUSD (s : State) (to : Address) (shares : Nat) : State :=
--- BROKEN:   { s with
--- BROKEN:       totalSupply_apyUSD := s.totalSupply_apyUSD + shares
--- BROKEN:       apyUSDBal := fun a => if a = to then s.apyUSDBal a + shares else s.apyUSDBal a
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def burnApyUSD (s : State) (fromAddr : Address) (shares : Nat) : State :=
--- BROKEN:   { s with
--- BROKEN:       totalSupply_apyUSD := s.totalSupply_apyUSD - shares
--- BROKEN:       apyUSDBal := fun a => if a = fromAddr then s.apyUSDBal a - shares else s.apyUSDBal a
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def transferApxUSD (s : State) (fromAddr toAddr : Address) (amount : Nat) : State :=
--- BROKEN:   { s with
--- BROKEN:       apxUSDBal := fun a =>
--- BROKEN:         if a = fromAddr then s.apxUSDBal a - amount
--- BROKEN:         else if a = toAddr then s.apxUSDBal a + amount
--- BROKEN:         else s.apxUSDBal a
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def mem (a : Address) (l : List Address) : Bool :=
--- BROKEN:   l.elem a
--- BROKEN: 
--- BROKEN: inductive Op
--- BROKEN:   | depositUSDC (amount : Nat)
--- BROKEN:   | mintApxUSD (to : Address) (amount : Nat)
--- BROKEN:   | lockApxUSD (amount : Nat)
--- BROKEN:   | requestUnlock (amount : Nat)
--- BROKEN:   | claimUnlock (requestId : Nat)
--- BROKEN:   | redeemApxUSD (amount : Nat)
--- BROKEN:   | withdraw (assets : Nat) (receiver : Address)
--- BROKEN:   | redeem (shares : Nat) (receiver : Address)
--- BROKEN:   | flexibleRequestUnlock (amount : Nat)
--- BROKEN:   | flexibleClaimUnlock (requestId : Nat)
--- BROKEN:   | pause
--- BROKEN:   | unpause
--- BROKEN:   | addToWhitelist (addr : Address)
--- BROKEN:   | removeFromWhitelist (addr : Address)
--- BROKEN:   | addToDenylist (addr : Address)
--- BROKEN:   | removeFromDenylist (addr : Address)
--- BROKEN:   | setYieldRate (bps : Nat)
--- BROKEN:   | creditYield (amount : Nat)
--- BROKEN:   | voteBufferDeployment
--- BROKEN:   | executeRFQRedemption (user : Address) (amount : Nat)
--- BROKEN:   | updateRedemptionValue
--- BROKEN:   | handleStressEvent (amount : Nat)
--- BROKEN:   | catastrophicBackstop
--- BROKEN: 
--- BROKEN: def step (s : State) (op : Op) (caller : Address) : Option State :=
--- BROKEN:   match op with
--- BROKEN:   | Op.depositUSDC amount =>
--- BROKEN:     if s.globalPause then none
--- BROKEN:     else sorry
--- BROKEN:   | _ => sorry
-
 theorem req_apyusd_value_increase (s : State) (_h : s.totalSupply_apyUSD > 0) :
     computeExchangeRate s ≤ computeExchangeRate { s with now := s.now + 1 } :=
   computeExchangeRate_mono_now s 1
 
--- BROKEN: theorem req_token_no_rebase : Prop :=
--- BROKEN:   ∀ (s : State) (id : Nat) (owner : Address) (amount : Nat),
--- BROKEN:     (s.unlockTokenOwner id = some owner) →
--- BROKEN:     (s.unlockTokenAmount id = amount) →
--- BROKEN:     let s' := createStandardUnlock s owner amount
--- BROKEN:     s'.unlockTokenAmount id = amount
 
--- BROKEN: theorem req_exchange_rate_non_decreasing : Prop :=
--- BROKEN:   ∀ (s : State), s.exchangeRate ≤ computeExchangeRate s
+/-- When a user redeems apyUSD, the system MUST transfer an amount of apxUSD equal to the number
+of apyUSD redeemed multiplied by the current exchange rate, which MUST be greater than or equal
+to 1.
 
-/-- When a user redeems apyUSD, the system MUST transfer an amount of apxUSD equal to the number of apyUSD redeemed multiplied by the current exchange rate, which MUST be greater than or equal to 1. -/
+Stated about the rate the redemption is actually priced at — the **live** rate after the
+deployment's pre-pricing `pullVestedYield` — rather than the recorded `exchangeRate` field. -/
 theorem req_redemption_exchange_rate_multiplier (s : State) (shares : Nat)
-    (h : ray ≤ s.exchangeRate) :
-    redeemAssets shares s.exchangeRate = (shares * s.exchangeRate) / ray ∧
-    shares ≤ redeemAssets shares s.exchangeRate := by
+    (h : ray ≤ computeExchangeRate (pullVestedYield s)) :
+    redeemAssets shares (computeExchangeRate (pullVestedYield s))
+        = (shares * computeExchangeRate (pullVestedYield s)) / ray ∧
+    shares ≤ redeemAssets shares (computeExchangeRate (pullVestedYield s)) := by
   refine ⟨rfl, ?_⟩
   unfold redeemAssets
   have hray : 0 < ray := Nat.pow_pos (by decide)
@@ -2291,11 +2113,6 @@ theorem req_single_pending_redemption_per_user (s : State) (amount : Nat) (calle
   subst hs'
   exact requestUnlockStep_caller_position s caller amount
 
--- BROKEN: theorem req_cooldown_no_yield : Prop :=
--- BROKEN:   ∀ (s : State) (owner : Address) (amount : Nat) (s' : State),
--- BROKEN:     step s (Op.requestUnlock amount) owner = some s' →
--- BROKEN:     ∀ (requestId : Nat),
--- BROKEN:       s'.unlockRequests requestId = some (owner, amount, s.now + cooldownPeriod)
 
 /-- A flexible redemption claim MUST be executable only after a minimum of 3 days have elapsed since the request. -/
 theorem req_flexible_redemption_claim_minimum (s : State) (requestId : Nat) (owner : Address) (amount requestTime cooldownEnd : Nat) :
@@ -2636,11 +2453,11 @@ ERC-4626 deposit is `Op.lockApxUSD` — it locks apxUSD and mints apyUSD *shares
 *temporal* claim: the shares are credited to the receiver — here the locking `caller` — in the very
 same atomic `step`, not deferred into a pending/settlement record the way a redemption is. This
 theorem states exactly that: on a successful lock the receiver's apyUSD balance has *already*
-increased, by exactly the freshly minted `lockShares amount s.exchangeRate`, with no intermediate
+increased, by exactly the freshly minted `lockShares amount (computeExchangeRate s)`, with no intermediate
 state — the strong, exact form of "synchronous, immediate share delivery".) -/
 theorem req_deposit_immediate (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.lockApxUSD amount) caller = some s') :
-    s'.apyUSDBal caller = s.apyUSDBal caller + lockShares amount s.exchangeRate := by
+    s'.apyUSDBal caller = s.apyUSDBal caller + lockShares amount (computeExchangeRate s) := by
   obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
   subst hs'
   simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
@@ -2649,27 +2466,17 @@ theorem req_deposit_immediate (s : State) (amount : Nat) (caller : Address) (s' 
 apyUSD shares to the receiver without any delay. (Model: like `deposit-immediate`, the vault's
 synchronous share-minting path is `Op.lockApxUSD`. The stronger temporal witness proved here is
 that in the single atomic `step` *both* the receiver's apyUSD balance *and* the apyUSD total supply
-increase by exactly the same freshly minted `lockShares amount s.exchangeRate` — the shares are
+increase by exactly the same freshly minted `lockShares amount (computeExchangeRate s)` — the shares are
 genuinely newly issued and delivered now, in lockstep, with no deferred settlement.) -/
 theorem req_mint_immediate (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.lockApxUSD amount) caller = some s') :
-    s'.apyUSDBal caller = s.apyUSDBal caller + lockShares amount s.exchangeRate ∧
-    s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount s.exchangeRate := by
+    s'.apyUSDBal caller = s.apyUSDBal caller + lockShares amount (computeExchangeRate s) ∧
+    s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount (computeExchangeRate s) := by
   obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
   subst hs'
   refine ⟨?_, ?_⟩ <;>
     simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
 
--- BROKEN: /-- REQ unlock-cooldown: The apxUSD_unlock token MAY be redeemed for apxUSD only after a cooldown period has elapsed. -/
--- BROKEN: theorem req_unlock_cooldown (s : State) (requestId : Nat) (caller : Address)
--- BROKEN:     (h_request : s.unlockRequests requestId = some (caller, 0, s.now + cooldownPeriod))
--- BROKEN:     (h_early : s.now < (match s.unlockRequests requestId with | some (_, _, cooldownEnd) => cooldownEnd | none => 0)) :
--- BROKEN:     step s (.claimUnlock requestId) caller = none := by
--- BROKEN:   simp [step]
--- BROKEN:   split
--- BROKEN:   case _ h1 =>
--- BROKEN:     simp at h1
--- BROKEN:     have h_eq : (s.unlockRequests requestId).get! = (caller, 0, s.now + cooldownPeriod) := by simp [step]
 
 /-- REQ totalAssets-includes-vault-balance-and-vested: The vault's totalAssets() function MUST include both the vault's apxUSD balance and the vestedAmount() reported by the LinearVestV0 contract. -/
 theorem req_total_assets_includes_vault_balance_and_vested (s : State) :
@@ -2717,32 +2524,6 @@ theorem req_unlock_claimable_after_3d (s : State) (requestId : Nat) (caller : Ad
   simp [step, h_request, h_owner]
   omega
 
--- BROKEN: /-- REQ early-unlock-fee-linear-decline: The early unlock fee MUST decline linearly over time from 3.5 % down to 0.1 %. -/
--- BROKEN: theorem req_early_unlock_fee_linear_decline (requestTime now : Nat) (h_elapsed : now ≥ requestTime + minFlexibleClaim) (h_not_late : now < requestTime + cooldownPeriod) :
--- BROKEN:     let elapsed := now - requestTime
--- BROKEN:     let feeBps := 350 - (elapsed * 340) / cooldownPeriod
--- BROKEN:     10 ≤ feeBps ∧ feeBps ≤ 350 := by
--- BROKEN:   have h1 : elapsed ≥ minFlexibleClaim := Nat.sub_le_sub_right h_elapsed requestTime
--- BROKEN:   have h2 : elapsed < cooldownPeriod := Nat.sub_lt_of_pos_le (Nat.lt_of_lt_of_le (Nat.add_lt_of_lt h_not_late (Nat.zero_le _)) (Nat.le_add_right _ _)) h_not_late
--- BROKEN:   unfold flexibleUnlockFee
--- BROKEN:   simp [h_elapsed, h_not_late]
--- BROKEN:   split
--- BROKEN:   . contradiction
--- BROKEN:   . split
--- BROKEN:     . rfl
--- BROKEN:     . have h3 : elapsed ≥ minFlexibleClaim := h1
--- BROKEN:       have h4 : elapsed < cooldownPeriod := h2
--- BROKEN:       have h5 : 350 - elapsed * 340 / cooldownPeriod ≥ 10 := by
--- BROKEN:         have key : elapsed * 340 / cooldownPeriod ≤ 340 := by
--- BROKEN:           apply Nat.div_le_of_le_mul
--- BROKEN:           rw [Nat.mul_comm]
--- BROKEN:           exact Nat.mul_le_mul_right _ (Nat.le_of_lt_succ h4)
--- BROKEN:         exact Nat.sub_le_sub_left 350 340 _ key
--- BROKEN:       have h6 : 350 - elapsed * 340 / cooldownPeriod ≤ 350 := sorry
-
--- BROKEN: /-- REQ unlock-cannot-be-cancelled: The system MUST NOT allow an unlocking request to be cancelled once it has been initiated. -/
-
--- BROKEN: /-- REQ unlock-conversion-after-cooldown: Conversion of apxUSD_unlock to apxUSD MUST only be possible after the cooldown period has elapsed. -/
 
 /-- REQ multiple-unlocks-reset-cooldown: If a user initiates multiple unlocks, the system
 MUST reset the cooldown period for the total locked amount. (Model: reachable via `step` —
@@ -2768,16 +2549,6 @@ theorem req_multiple_unlocks_reset_cooldown (s : State) (amount id oldAmount old
     caller oldAmount oldEnd hr id]
   simp [burnApxUSD]
 
--- BROKEN: /-- REQ withdrawForMaxShares-revert-if-exceeds-maxShares: withdrawForMaxShares(uint256 assets, uint256 maxShares, address receiver) MUST revert if the number of apyUSD shares required to withdraw the assets exceeds maxShares. -/
-
--- BROKEN: /-- REQ redeemForMinAssets-revert-if-below-minAssets: redeemForMinAssets(uint256 shares, uint256 minAssets, address receiver) MUST revert if the amount of apxUSD assets to be received is less than minAssets. -/
-
--- BROKEN: /-- REQ vault-pulls-vested-yield-before-withdraw: When a withdrawal is requested, the vault MUST automatically pull all vested yield from the LinearVestV0 contract before processing the withdrawal. -/
-
--- BROKEN: /-- REQ vault-burns-apyUSD-shares-immediately: The vault MUST burn the appropriate amount of apyUSD shares immediately upon a withdraw or redeem call. -/
--- BROKEN: 
--- BROKEN: 
--- BROKEN: -- Theorems added after model extension
 
 /-- REQ deposit-mint-apxusd: The protocol MUST mint apxUSD to a user when the user deposits USDC. -/
 theorem req_deposit_mint_apxusd (s : State) (amount : Nat) (caller : Address)
@@ -2872,398 +2643,6 @@ theorem req_lock_apxusd (s : State) (amount : Nat) (caller : Address)
 -- handleStressEvent, an exogenous loss). The passive invariant that operations preserve
 -- overcollateralization is already covered by req_overcollateralization_limit; the active
 -- rebalancing mechanism this requirement mandates is not modeled.
--- BROKEN: 
--- BROKEN: open Nat
--- BROKEN: 
--- BROKEN: 
--- BROKEN: 
--- BROKEN: abbrev Address := Nat
--- BROKEN: 
--- BROKEN: def ray : Nat := 10^27
--- BROKEN: def day : Nat := 86400
--- BROKEN: def cooldownPeriod : Nat := 20 * day
--- BROKEN: def minFlexibleClaim : Nat := 3 * day
--- BROKEN: 
--- BROKEN: def vaultAddress : Address := 0
--- BROKEN: 
--- BROKEN: structure State where
--- BROKEN:   now : Nat
--- BROKEN:   globalPause : Bool
--- BROKEN:   pauseController : Address
--- BROKEN:   admin : Address
--- BROKEN:   governance : Address
--- BROKEN:   oracle : Address
--- BROKEN:   yieldDistributor : Address
--- BROKEN:   whitelist : Address → Bool
--- BROKEN:   denylist : Address → Bool
--- BROKEN:   rfqCounterparties : List Address
--- BROKEN:   governanceThreshold : Nat
--- BROKEN:   emergencyFlag : Bool
--- BROKEN:   totalSupply_apxUSD : Nat
--- BROKEN:   totalSupply_apyUSD : Nat
--- BROKEN:   apxUSDBal : Address → Nat
--- BROKEN:   apyUSDBal : Address → Nat
--- BROKEN:   governanceTokenBal : Address → Nat
--- BROKEN:   vaultApxUSDBal : Nat
--- BROKEN:   exchangeRate : Nat
--- BROKEN:   totalCollateralValue : Nat
--- BROKEN:   redemptionValue : Nat
--- BROKEN:   overcollateralizationBuffer : Nat
--- BROKEN:   yieldRateMonth : Nat
--- BROKEN:   vestStart : Nat
--- BROKEN:   vestTotal : Nat
--- BROKEN:   vestPeriod : Nat
--- BROKEN:   nextUnlockId : Nat
--- BROKEN:   unlockRequestId : Address → Option Nat
--- BROKEN:   unlockRequests : Nat → Option (Address × Nat × Nat)
--- BROKEN:   flexibleUnlockRequests : Nat → Option (Address × Nat × Nat × Nat)
--- BROKEN:   unlockTokenOwner : Nat → Option Address
--- BROKEN:   unlockTokenAmount : Nat → Nat
--- BROKEN:   bufferDeployed : Bool
--- BROKEN:   usdcBal : Address → Nat
--- BROKEN:   usdcReserve : Nat
--- BROKEN:   eventLog : List (String × List Nat)
--- BROKEN: deriving Inhabited
--- BROKEN: 
--- BROKEN: def vestedAmount (s : State) (now : Nat) : Nat :=
--- BROKEN:   if now < s.vestStart then 0
--- BROKEN:   else
--- BROKEN:     let elapsed := now - s.vestStart
--- BROKEN:     if elapsed ≥ s.vestPeriod then s.vestTotal
--- BROKEN:     else (elapsed * s.vestTotal) / s.vestPeriod
--- BROKEN: 
--- BROKEN: def totalAssets (s : State) : Nat :=
--- BROKEN:   s.vaultApxUSDBal + vestedAmount s s.now
--- BROKEN: 
--- BROKEN: def computeExchangeRate (s : State) : Nat :=
--- BROKEN:   if s.totalSupply_apyUSD = 0 then ray
--- BROKEN:   else (totalAssets s * ray) / s.totalSupply_apyUSD
--- BROKEN: 
--- BROKEN: def updateExchangeRate (s : State) : State :=
--- BROKEN:   { s with exchangeRate := computeExchangeRate s }
--- BROKEN: 
--- BROKEN: def flexibleUnlockFee (requestTime : Nat) (now : Nat) : Nat :=
--- BROKEN:   if now < requestTime + minFlexibleClaim then 0
--- BROKEN:   else
--- BROKEN:     let elapsed := now - requestTime
--- BROKEN:     if elapsed ≥ cooldownPeriod then 10
--- BROKEN:     else
--- BROKEN:       let feeBps := 350 - (elapsed * 340) / cooldownPeriod
--- BROKEN:       max feeBps 10
--- BROKEN: 
--- BROKEN: def lockShares (assets : Nat) (exchangeRate : Nat) : Nat :=
--- BROKEN:   (assets * ray) / exchangeRate
--- BROKEN: 
--- BROKEN: def redeemAssets (shares : Nat) (exchangeRate : Nat) : Nat :=
--- BROKEN:   (shares * exchangeRate) / ray
--- BROKEN: 
--- BROKEN: def withdrawShares (assets : Nat) (exchangeRate : Nat) : Nat :=
--- BROKEN:   (assets * ray + exchangeRate - 1) / exchangeRate
--- BROKEN: 
--- BROKEN: def pullVestedYield (s : State) : State :=
--- BROKEN:   let v := vestedAmount s s.now
--- BROKEN:   if v = 0 then s
--- BROKEN:   else
--- BROKEN:     { s with
--- BROKEN:         vaultApxUSDBal := s.vaultApxUSDBal + v
--- BROKEN:         vestTotal := s.vestTotal - v
--- BROKEN:         vestStart := s.now
--- BROKEN:     }
--- BROKEN: 
--- BROKEN: def createStandardUnlock (s : State) (owner : Address) (amount : Nat) : State :=
--- BROKEN:   let id := s.nextUnlockId
--- BROKEN:   let cooldownEnd := s.now + cooldownPeriod
--- BROKEN:   { s with
--- BROKEN:       nextUnlockId := id + 1
--- BROKEN:       unlockRequestId := fun a => if a = owner then some id else s.unlockRequestId a
--- BROKEN:       unlockRequests := fun i => if i = id then some (owner, amount, cooldownEnd) else s.unlockRequests i
--- BROKEN:       unlockTokenOwner := fun i => if i = id then some owner else s.unlockTokenOwner i
--- BROKEN:       unlockTokenAmount := fun i => if i = id then amount else s.unlockTokenAmount i
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def updateStandardUnlock (s : State) (id : Nat) (owner : Address) (addAmount : Nat) : State :=
--- BROKEN:   match s.unlockRequests id with
--- BROKEN:   | none => s
--- BROKEN:   | some (_, oldAmount, _) =>
--- BROKEN:     let newAmount := oldAmount + addAmount
--- BROKEN:     let newCooldownEnd := s.now + cooldownPeriod
--- BROKEN:     { s with
--- BROKEN:         unlockRequests := fun i => if i = id then some (owner, newAmount, newCooldownEnd) else s.unlockRequests i
--- BROKEN:         unlockTokenAmount := fun i => if i = id then newAmount else s.unlockTokenAmount i
--- BROKEN:     }
--- BROKEN: 
--- BROKEN: def createFlexibleUnlock (s : State) (owner : Address) (amount : Nat) : State :=
--- BROKEN:   let id := s.nextUnlockId
--- BROKEN:   let requestTime := s.now
--- BROKEN:   let cooldownEnd := s.now + cooldownPeriod
--- BROKEN:   { s with
--- BROKEN:       nextUnlockId := id + 1
--- BROKEN:       flexibleUnlockRequests := fun i => if i = id then some (owner, amount, requestTime, cooldownEnd) else s.flexibleUnlockRequests i
--- BROKEN:       unlockTokenOwner := fun i => if i = id then some owner else s.unlockTokenOwner i
--- BROKEN:       unlockTokenAmount := fun i => if i = id then amount else s.unlockTokenAmount i
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def burnUnlockNFT (s : State) (id : Nat) : State :=
--- BROKEN:   { s with
--- BROKEN:       unlockTokenOwner := fun i => if i = id then none else s.unlockTokenOwner i
--- BROKEN:       unlockTokenAmount := fun i => if i = id then 0 else s.unlockTokenAmount i
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def mintApxUSD (s : State) (to : Address) (amount : Nat) : State :=
--- BROKEN:   { s with
--- BROKEN:       totalSupply_apxUSD := s.totalSupply_apxUSD + amount
--- BROKEN:       apxUSDBal := fun a => if a = to then s.apxUSDBal a + amount else s.apxUSDBal a
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def burnApxUSD (s : State) (fromAddr : Address) (amount : Nat) : State :=
--- BROKEN:   { s with
--- BROKEN:       totalSupply_apxUSD := s.totalSupply_apxUSD - amount
--- BROKEN:       apxUSDBal := fun a => if a = fromAddr then s.apxUSDBal a - amount else s.apxUSDBal a
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def mintApyUSD (s : State) (to : Address) (shares : Nat) : State :=
--- BROKEN:   { s with
--- BROKEN:       totalSupply_apyUSD := s.totalSupply_apyUSD + shares
--- BROKEN:       apyUSDBal := fun a => if a = to then s.apyUSDBal a + shares else s.apyUSDBal a
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def burnApyUSD (s : State) (fromAddr : Address) (shares : Nat) : State :=
--- BROKEN:   { s with
--- BROKEN:       totalSupply_apyUSD := s.totalSupply_apyUSD - shares
--- BROKEN:       apyUSDBal := fun a => if a = fromAddr then s.apyUSDBal a - shares else s.apyUSDBal a
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def transferApxUSD (s : State) (fromAddr toAddr : Address) (amount : Nat) : State :=
--- BROKEN:   { s with
--- BROKEN:       apxUSDBal := fun a =>
--- BROKEN:         if a = fromAddr then s.apxUSDBal a - amount
--- BROKEN:         else if a = toAddr then s.apxUSDBal a + amount
--- BROKEN:         else s.apxUSDBal a
--- BROKEN:   }
--- BROKEN: 
--- BROKEN: def mem (a : Address) (l : List Address) : Bool :=
--- BROKEN:   l.elem a
--- BROKEN: 
--- BROKEN: def overcollateralizationBuffer (s : State) : Nat :=
--- BROKEN:   let redemptionTotal := (s.totalSupply_apxUSD * s.redemptionValue) / ray
--- BROKEN:   if s.totalCollateralValue > redemptionTotal then s.totalCollateralValue - redemptionTotal else 0
--- BROKEN: 
--- BROKEN: def emitEvent (s : State) (name : String) (args : List Nat) : State :=
--- BROKEN:   { s with eventLog := (name, args) :: s.eventLog }
--- BROKEN: 
--- BROKEN: -- ERC-4626 helper functions
--- BROKEN: def convertToShares (s : State) (assets : Nat) : Nat :=
--- BROKEN:   lockShares assets s.exchangeRate
--- BROKEN: 
--- BROKEN: def convertToAssets (s : State) (shares : Nat) : Nat :=
--- BROKEN:   redeemAssets shares s.exchangeRate
--- BROKEN: 
--- BROKEN: def maxDeposit (s : State) (receiver : Address) : Nat :=
--- BROKEN:   if s.globalPause then 0 else s.apxUSDBal receiver
--- BROKEN: 
--- BROKEN: def maxMint (s : State) (receiver : Address) : Nat :=
--- BROKEN:   if s.globalPause then 0 else convertToShares s (s.apxUSDBal receiver)
--- BROKEN: 
--- BROKEN: def maxWithdraw (s : State) (owner : Address) : Nat :=
--- BROKEN:   if s.globalPause then 0 else convertToAssets s (s.apyUSDBal owner)
--- BROKEN: 
--- BROKEN: def maxRedeem (s : State) (owner : Address) : Nat :=
--- BROKEN:   if s.globalPause then 0 else s.apyUSDBal owner
--- BROKEN: 
--- BROKEN: def previewDeposit (s : State) (assets : Nat) : Nat :=
--- BROKEN:   convertToShares s assets
--- BROKEN: 
--- BROKEN: def previewMint (s : State) (shares : Nat) : Nat :=
--- BROKEN:   convertToAssets s shares
--- BROKEN: 
--- BROKEN: def previewWithdraw (s : State) (assets : Nat) : Nat :=
--- BROKEN:   withdrawShares assets s.exchangeRate
--- BROKEN: 
--- BROKEN: def previewRedeem (s : State) (shares : Nat) : Nat :=
--- BROKEN:   convertToAssets s shares
--- BROKEN: 
--- BROKEN: inductive Op
--- BROKEN:   | depositUSDC (amount : Nat)
--- BROKEN:   | mintApxUSD (to : Address) (amount : Nat)
--- BROKEN:   | lockApxUSD (amount : Nat)
--- BROKEN:   | requestUnlock (amount : Nat)
--- BROKEN:   | claimUnlock (requestId : Nat)
--- BROKEN:   | redeemApxUSD (amount : Nat)
--- BROKEN:   | withdraw (assets : Nat) (receiver : Address)
--- BROKEN:   | redeem (shares : Nat) (receiver : Address)
--- BROKEN:   | flexibleRequestUnlock (amount : Nat)
--- BROKEN:   | flexibleClaimUnlock (requestId : Nat)
--- BROKEN:   | pause
--- BROKEN:   | unpause
--- BROKEN:   | addToWhitelist (addr : Address)
--- BROKEN:   | removeFromWhitelist (addr : Address)
--- BROKEN:   | addToDenylist (addr : Address)
--- BROKEN:   | removeFromDenylist (addr : Address)
--- BROKEN:   | setYieldRate (bps : Nat)
--- BROKEN:   | creditYield (amount : Nat)
--- BROKEN:   | voteBufferDeployment
--- BROKEN:   | executeRFQRedemption (user : Address) (amount : Nat)
--- BROKEN:   | updateRedemptionValue
--- BROKEN:   | handleStressEvent (amount : Nat)
--- BROKEN:   | catastrophicBackstop
--- BROKEN: 
--- BROKEN: def step (s : State) (op : Op) (caller : Address) : Option State :=
--- BROKEN:   match op with
--- BROKEN:   | Op.depositUSDC amount =>
--- BROKEN:     if s.globalPause then none
--- BROKEN:     else if ¬ s.whitelist caller then none
--- BROKEN:     else if s.usdcBal caller < amount then none
--- BROKEN:     else
--- BROKEN:       let s1 := { s with
--- BROKEN:         usdcBal := fun a => if a = caller then s.usdcBal a - amount else s.usdcBal a
--- BROKEN:         usdcReserve := s.usdcReserve + amount
--- BROKEN:       }
--- BROKEN:       let s2 := mintApxUSD s1 caller amount
--- BROKEN:       let s3 := emitEvent s2 "Deposit" [caller, caller, caller, amount, amount] -- sender, receiver, owner, assets, shares (1:1)
--- BROKEN:       some s3
--- BROKEN:   | Op.mintApxUSD to amount =>
--- BROKEN:     if s.globalPause then none
--- BROKEN:     else if ¬ s.whitelist caller then none
--- BROKEN:     else if s.usdcBal caller < amount then none
--- BROKEN:     else
--- BROKEN:       let s1 := { s with
--- BROKEN:         usdcBal := fun a => if a = caller then s.usdcBal a - amount else s.usdcBal a
--- BROKEN:         usdcReserve := s.usdcReserve + amount
--- BROKEN:       }
--- BROKEN:       let s2 := mintApxUSD s1 to amount
--- BROKEN:       let s3 := emitEvent s2 "Deposit" [caller, to, to, amount, amount]
--- BROKEN:       some s3
--- BROKEN:   | Op.lockApxUSD amount =>
--- BROKEN:     if s.globalPause then none
--- BROKEN:     else if s.apxUSDBal caller < amount then none
--- BROKEN:     else
--- BROKEN:       let shares := lockShares amount s.exchangeRate
--- BROKEN:       let s1 := burnApxUSD s caller amount
--- BROKEN:       let s2 := { s1 with vaultApxUSDBal := s1.vaultApxUSDBal + amount }
--- BROKEN:       let s3 := mintApyUSD s2 caller shares
--- BROKEN:       let s4 := updateExchangeRate s3
--- BROKEN:       let s5 := emitEvent s4 "Deposit" [caller, caller, caller, amount, shares]
--- BROKEN:       some s5
--- BROKEN:   | Op.requestUnlock amount =>
--- BROKEN:     if s.globalPause then none
--- BROKEN:     else if s.apxUSDBal caller < amount then none
--- BROKEN:     else
--- BROKEN:       let s1 := burnApxUSD s caller amount
--- BROKEN:       let s2 := createStandardUnlock s1 caller amount
--- BROKEN:       some s2
--- BROKEN:   | Op.claimUnlock requestId =>
--- BROKEN:     match s.unlockRequests requestId with
--- BROKEN:     | none => none
--- BROKEN:     | some (owner, amount, cooldownEnd) =>
--- BROKEN:       if s.unlockTokenOwner requestId != some owner then none
--- BROKEN:       else if s.now < cooldownEnd then none
--- BROKEN:       else
--- BROKEN:         let s1 := burnUnlockNFT s requestId
--- BROKEN:         let s2 := mintApxUSD s1 owner amount
--- BROKEN:         some s2
--- BROKEN:   | Op.redeemApxUSD amount =>
--- BROKEN:     if s.globalPause then none
--- BROKEN:     else if ¬ s.whitelist caller then none
--- BROKEN:     else if s.apxUSDBal caller < amount then none
--- BROKEN:     else
--- BROKEN:       let usdcAmount := (amount * s.redemptionValue) / ray
--- BROKEN:       if s.usdcReserve < usdcAmount then none
--- BROKEN:       else
--- BROKEN:         let oldBuffer := overcollateralizationBuffer s
--- BROKEN:         let s1 := burnApxUSD s caller amount
--- BROKEN:         let s2 := { s1 with
--- BROKEN:           usdcReserve := s1.usdcReserve - usdcAmount
--- BROKEN:           usdcBal := fun a => if a = caller then s1.usdcBal a + usdcAmount else s1.usdcBal a
--- BROKEN:         }
--- BROKEN:         let newBuffer := overcollateralizationBuffer s2
--- BROKEN:         if newBuffer < oldBuffer then none
--- BROKEN:         else
--- BROKEN:           let s3 := emitEvent s2 "Redeem" [caller, amount, usdcAmount]
--- BROKEN:           some s3
--- BROKEN:   | Op.withdraw assets receiver =>
--- BROKEN:     if s.globalPause then none
--- BROKEN:     else
--- BROKEN:       let s1 := pullVestedYield s
--- BROKEN:       let shares := withdrawShares assets s1.exchangeRate
--- BROKEN:       if s1.apyUSDBal caller < shares then none
--- BROKEN:       else if s1.vaultApxUSDBal < assets then none
--- BROKEN:       else
--- BROKEN:         let s2 := burnApyUSD s1 caller shares
--- BROKEN:         let s3 := { s2 with vaultApxUSDBal := s2.vaultApxUSDBal - assets }
--- BROKEN:         let s4 := createStandardUnlock s3 receiver assets
--- BROKEN:         let s5 := updateExchangeRate s4
--- BROKEN:         let s6 := emitEvent s5 "Withdraw" [caller, receiver, caller, assets, shares]
--- BROKEN:         some s6
--- BROKEN:   | Op.redeem shares receiver =>
--- BROKEN:     if s.globalPause then none
--- BROKEN:     else
--- BROKEN:       let s1 := pullVestedYield s
--- BROKEN:       if s1.apyUSDBal caller < shares then none
--- BROKEN:       else
--- BROKEN:         let assets := redeemAssets shares s1.exchangeRate
--- BROKEN:         if s1.vaultApxUSDBal < assets then none
--- BROKEN:         else
--- BROKEN:           let s2 := burnApyUSD s1 caller shares
--- BROKEN:           let s3 := { s2 with vaultApxUSDBal := s2.vaultApxUSDBal - assets }
--- BROKEN:           let s4 := createStandardUnlock s3 receiver assets
--- BROKEN:           let s5 := updateExchangeRate s4
--- BROKEN:           let s6 := emitEvent s5 "Withdraw" [caller, receiver, caller, assets, shares]
--- BROKEN:           some s6
--- BROKEN:   | Op.flexibleRequestUnlock amount =>
--- BROKEN:     if s.globalPause then none
--- BROKEN:     else if s.apxUSDBal caller < amount then none
--- BROKEN:     else
--- BROKEN:       let s1 := burnApxUSD s caller amount
--- BROKEN:       let s2 := createFlexibleUnlock s1 caller amount
--- BROKEN:       some s2
--- BROKEN:   | Op.flexibleClaimUnlock requestId =>
--- BROKEN:     match s.flexibleUnlockRequests requestId with
--- BROKEN:     | none => none
--- BROKEN:     | some (owner, amount, requestTime, cooldownEnd) =>
--- BROKEN:       if s.unlockTokenOwner requestId != some owner then none
--- BROKEN:       else if s.now < cooldownEnd then none
--- BROKEN:       else
--- BROKEN:         let feeBps := flexibleUnlockFee requestTime s.now
--- BROKEN:         let fee := (amount * feeBps) / 10000
--- BROKEN:         let claimAmount := amount - fee
--- BROKEN:         let s1 := burnUnlockNFT s requestId
--- BROKEN:         let s2 := mintApxUSD s1 owner claimAmount
--- BROKEN:         some s2
--- BROKEN:   | Op.pause =>
--- BROKEN:     if caller == s.pauseController then some { s with globalPause := true }
--- BROKEN:     else none
--- BROKEN:   | Op.unpause =>
--- BROKEN:     if caller == s.pauseController then some { s with globalPause := false }
--- BROKEN:     else none
--- BROKEN:   | Op.addToWhitelist addr =>
--- BROKEN:     if caller == s.admin then some { s with whitelist := fun a => if a = addr then true else s.whitelist a }
--- BROKEN:     else none
--- BROKEN:   | Op.removeFromWhitelist addr =>
--- BROKEN:     if caller == s.admin then some { s with whitelist := fun a => if a = addr then false else s.whitelist a }
--- BROKEN:     else none
--- BROKEN:   | Op.addToDenylist addr =>
--- BROKEN:     if caller == s.admin then some { s with denylist := fun a => if a = addr then true else s.denylist a }
--- BROKEN:     else none
--- BROKEN:   | Op.removeFromDenylist addr =>
--- BROKEN:     if caller == s.admin then some { s with denylist := fun a => if a = addr then false else s.denylist a }
--- BROKEN:     else none
--- BROKEN:   | Op.setYieldRate bps =>
--- BROKEN:     if caller == s.admin then some { s with yieldRateMonth := bps }
--- BROKEN:     else none
--- BROKEN:   | Op.creditYield amount =>
--- BROKEN:     if caller == s.yieldDistributor then
--- BROKEN:       let s1 := { s with
--- BROKEN:         usdcReserve := s.usdcReserve + amount
--- BROKEN:         vestTotal := s.vestTotal + amount
--- BROKEN:         vestStart := s.now
--- BROKEN:       }
--- BROKEN:       some s1
--- BROKEN:     else none
--- BROKEN:   | Op.voteBufferDeployment => sorry
--- BROKEN:   | Op.executeRFQRedemption user amount => sorry
--- BROKEN:   | Op.updateRedemptionValue => sorry
--- BROKEN:   | Op.handleStressEvent amount => sorry
--- BROKEN:   | Op.catastrophicBackstop => sorry
 
 /-- REQ redemption-settlement-value: Redemptions SHALL be settled at the Redemption Value, which tracks the underlying basket. -/
 theorem req_redemption_settlement_value (s : State) (caller : Address) (amount : Nat) (s' : State)
@@ -3393,15 +2772,6 @@ theorem req_mint_emits_event (s s' : State) (to : Address) (amount : Nat) (calle
   subst hs'
   simp [emitEvent]
 
--- BROKEN: /-- REQ unlock-conversion-after-cooldown: Conversion of apxUSD_unlock to apxUSD MUST only be possible after the cooldown period has elapsed. -/
--- BROKEN: theorem req_unlock_conversion_after_cooldown (s : State) (requestId : Nat) (caller : Address)
--- BROKEN:     (h1 : s.unlockRequests requestId = some (caller, 0, 0))
--- BROKEN:     (h2 : s.unlockTokenOwner requestId = some caller) : 
--- BROKEN:     step s (.claimUnlock requestId) caller = none ∨ s.now ≥ match s.unlockRequests requestId with | some (_, _, cooldownEnd) => cooldownEnd | none => 0 := by
--- BROKEN:   simp [step]
--- BROKEN:   split
--- BROKEN:   . next _ _ _ =>
--- BROKEN:     obtain rfl : owner = caller ∧ amount = 0 ∧ cooldownEnd = 0 := by simp [step]
 
 /-- REQ vault-pulls-vested-yield-before-withdraw: When a withdrawal is requested, the vault
 MUST automatically pull all vested yield from the LinearVestV0 contract before processing
@@ -3493,13 +2863,13 @@ base, (weakly) diluting each unit share's claim on any yet-unvested yield pool.)
 theorem req_new_locked_receives_yield (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.lockApxUSD amount) caller = some s') :
     -- shares are minted immediately, priced at the prevailing exchange rate
-    s'.apyUSDBal caller = s.apyUSDBal caller + lockShares amount s.exchangeRate ∧
+    s'.apyUSDBal caller = s.apyUSDBal caller + lockShares amount (computeExchangeRate s) ∧
     -- and immediately begin receiving yield: the new holder's redeemable assets grow with
     -- the vesting exchange rate from the very moment of the lock, like any other holder's
     (∀ dt, redeemAssets (s'.apyUSDBal caller) (computeExchangeRate s')
       ≤ redeemAssets (s'.apyUSDBal caller) (computeExchangeRate { s' with now := s'.now + dt })) ∧
     -- the enlarged share base spreads future yield thinner over existing holders:
-    s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount s.exchangeRate ∧
+    s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount (computeExchangeRate s) ∧
     (∀ pendingYield : Nat, 0 < s.totalSupply_apyUSD →
       (pendingYield * ray) / s'.totalSupply_apyUSD
         ≤ (pendingYield * ray) / s.totalSupply_apyUSD) := by
@@ -3517,12 +2887,12 @@ theorem req_new_locked_receives_yield (s : State) (amount : Nat) (caller : Addre
 /-- REQ synchronous_withdraw_return_token: The apyUSD vault MUST execute withdrawals and redeems synchronously and MUST return apxUSD_unlock tokens immediately. -/
 theorem req_synchronous_withdraw_return_token (s : State) (assets : Nat) (receiver caller : Address)
     (h1 : s.globalPause = false)
-    (h2 : (pullVestedYield s).apyUSDBal caller ≥ withdrawShares assets (pullVestedYield s).exchangeRate)
+    (h2 : (pullVestedYield s).apyUSDBal caller ≥ withdrawShares assets (computeExchangeRate (pullVestedYield s)))
     (h3 : (pullVestedYield s).vaultApxUSDBal ≥ assets) :
     ∃ s', step s (Op.withdraw assets receiver) caller = some s' ∧
     (∃ id, s'.unlockTokenOwner id = some receiver ∧ s'.unlockTokenAmount id = assets) := by
   rcases ho : step s (Op.withdraw assets receiver) caller with _ | s'
-  · have h2' : withdrawShares assets s.exchangeRate ≤ s.apyUSDBal caller := by simpa using h2
+  · have h2' : withdrawShares assets (computeExchangeRate (pullVestedYield s)) ≤ s.apyUSDBal caller := by simpa using h2
     have h3' : assets ≤ s.vaultApxUSDBal + vestedAmount s s.now := by simpa using h3
     exact absurd ho (by simp [step, h1, h2', h3'])
   · refine ⟨s', rfl, s.nextUnlockId, ?_⟩
@@ -3539,7 +2909,7 @@ theorem req_withdraw_for_max_shares_revert_if_exceeds_max_shares (s : State) (as
 /-- REQ vault-burns-apyUSD-shares-immediately: The vault MUST burn the appropriate amount of apyUSD shares immediately upon a withdraw or redeem call. -/
 theorem req_vault_burns_apyUSD_shares_immediately_on_withdraw (s s' : State) (assets : Nat) (receiver caller : Address)
     (h_step : step s (.withdraw assets receiver) caller = some s') :
-    s'.totalSupply_apyUSD = s.totalSupply_apyUSD - withdrawShares assets s.exchangeRate := by
+    s'.totalSupply_apyUSD = s.totalSupply_apyUSD - withdrawShares assets (computeExchangeRate (pullVestedYield s)) := by
   obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
   subst hs'
   simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
@@ -3570,18 +2940,6 @@ theorem req_withdrawal_pulls_vested (s : State) (assets : Nat) (receiver : Addre
   subst hs'
   simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
 
--- BROKEN: /-- REQ denylist_blocks_deposit: If the caller or the receiver address is present in the deny list, deposit and mint operations MUST revert. -/
--- BROKEN: theorem req_denylist_blocks_deposit (s : State) (amount : Nat) (to : Address) (caller : Address) :
--- BROKEN:     s.denylist caller ∨ s.denylist to → step s (Op.depositUSDC amount) caller = none := by
--- BROKEN:   intro h
--- BROKEN:   simp [step]
--- BROKEN:   split
--- BROKEN:   · intro; contradiction
--- BROKEN:   split
--- BROKEN:   · intro; contradiction
--- BROKEN:   split
--- BROKEN:   · intro h1 h2 h3
--- BROKEN:     have : s.denylist caller ∨ s.denylist caller := sorry
 
 /-- REQ withdrawForMaxShares_revert_if_exceeds_maxShares: withdrawForMaxShares(uint256 assets, uint256 maxShares, address receiver) MUST revert if the number of apyUSD shares required to withdraw the assets exceeds maxShares. -/
 theorem req_withdrawForMaxShares_revert_if_exceeds_maxShares (s : State) (assets : Nat) (maxShares : Nat) (receiver : Address) (caller : Address) :
@@ -3596,7 +2954,7 @@ theorem req_withdrawForMaxShares_revert_if_exceeds_maxShares (s : State) (assets
 
 /-- REQ vault-burns-apyUSD-shares-immediately: The vault MUST burn the appropriate amount of apyUSD shares immediately upon a withdraw or redeem call. -/
 theorem req_vault_burns_apy_usd_shares_immediately (s : State) (assets : Nat) (receiver caller : Address) (s' : State) (h_step : step s (Op.withdraw assets receiver) caller = some s') :
-    s'.apyUSDBal caller = s.apyUSDBal caller - withdrawShares assets s.exchangeRate := by
+    s'.apyUSDBal caller = s.apyUSDBal caller - withdrawShares assets (computeExchangeRate (pullVestedYield s)) := by
   obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
   subst hs'
   simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
@@ -3621,32 +2979,13 @@ theorem req_vault_deposits_apx_usd_into_unlock_token (s : State) (assets : Nat) 
 /-- REQ vault-deposits-apxUSD-into-UnlockToken: The vault MUST deposit the corresponding apxUSD amount into the UnlockToken contract during a withdraw or redeem operation. -/
 theorem req_vault_deposits_apx_usd_into_unlock_token_redeem (s : State) (shares : Nat) (receiver caller : Address) (s' : State) (h_step : step s (Op.redeem shares receiver) caller = some s') :
     match s'.unlockRequests (s'.nextUnlockId - 1) with
-    | some (_, amount, _) => amount = redeemAssets shares s.exchangeRate
+    | some (_, amount, _) => amount = redeemAssets shares (computeExchangeRate (pullVestedYield s))
     | none => False
     := by
   obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
   subst hs'
   simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
 
--- BROKEN: /-- REQ unlockToken-redeem-after-cooldown: The UnlockToken contract MUST allow a user to call redeem() after the cooldown period to receive the underlying apxUSD. -/
--- BROKEN: theorem req_unlock_token_redeem_after_cooldown (s : State) (requestId : Nat) (caller : Address)
--- BROKEN:     (h_request : s.unlockRequests requestId = some (caller, 0, s.now - cooldownPeriod)) 
--- BROKEN:     (h_owner : s.unlockTokenOwner requestId = some caller) :
--- BROKEN:     step s (Op.claimUnlock requestId) caller ≠ none := by
--- BROKEN:   simp [step, Op.claimUnlock]
--- BROKEN:   split
--- BROKEN:   · intro h
--- BROKEN:     simp at h
--- BROKEN:     have h1 : s.unlockRequests requestId = none := by
--- BROKEN:       rw [h] at h_request
--- BROKEN:       simp at h_request
--- BROKEN:     contradiction
--- BROKEN:   · simp [h_request, h_owner]
--- BROKEN:     split
--- BROKEN:     · next h_eq => 
--- BROKEN:       simp [h_eq] at h_owner
--- BROKEN:     · next h_ne h_time =>
--- BROKEN:       have h4 : s.now ≥ s.now - cooldownPeriod := by simp [step]
 
 -- Theorems added re-examining requirements marked UNFORMALIZABLE by the first pipeline run
 
@@ -3722,7 +3061,7 @@ theorem req_no_rehypothecation (s : State) (op : Op) (caller : Address) (s' : St
     (∀ x r, op = Op.withdraw x r →
       s'.vaultApxUSDBal = (pullVestedYield s).vaultApxUSDBal - x) ∧
     (∀ x r, op = Op.redeem x r →
-      s'.vaultApxUSDBal = (pullVestedYield s).vaultApxUSDBal - redeemAssets x s.exchangeRate) := by
+      s'.vaultApxUSDBal = (pullVestedYield s).vaultApxUSDBal - redeemAssets x (computeExchangeRate (pullVestedYield s))) := by
   refine ⟨?_, ?_, ?_, ?_⟩
   · intro h_changed
     cases op
@@ -4019,7 +3358,7 @@ theorem req_cooldown_removal (s : State) :
       step s (Op.redeem shares receiver) caller = some s' →
       -- ... is placed under cooldown until `now + cooldownPeriod` ...
       s'.unlockRequests s.nextUnlockId
-        = some (receiver, redeemAssets shares s.exchangeRate, s.now + cooldownPeriod) ∧
+        = some (receiver, redeemAssets shares (computeExchangeRate (pullVestedYield s)), s.now + cooldownPeriod) ∧
       -- ... and removed from the yield pool in the very same step
       s'.totalSupply_apyUSD = s.totalSupply_apyUSD - shares ∧
       (0 < shares → s.apyUSDBal caller ≤ s.totalSupply_apyUSD →
@@ -4035,16 +3374,16 @@ theorem req_cooldown_removal (s : State) :
       -- apyUSD entering the cooldown phase via `withdraw`: identical consequences
       step s (Op.withdraw assets receiver) caller = some s' →
       s'.unlockRequests s.nextUnlockId = some (receiver, assets, s.now + cooldownPeriod) ∧
-      s'.totalSupply_apyUSD = s.totalSupply_apyUSD - withdrawShares assets s.exchangeRate ∧
-      (0 < withdrawShares assets s.exchangeRate →
+      s'.totalSupply_apyUSD = s.totalSupply_apyUSD - withdrawShares assets (computeExchangeRate (pullVestedYield s)) ∧
+      (0 < withdrawShares assets (computeExchangeRate (pullVestedYield s)) →
         s.apyUSDBal caller ≤ s.totalSupply_apyUSD →
         s'.totalSupply_apyUSD < s.totalSupply_apyUSD) ∧
-      (∀ y : Nat, 0 < y → 0 < withdrawShares assets s.exchangeRate →
+      (∀ y : Nat, 0 < y → 0 < withdrawShares assets (computeExchangeRate (pullVestedYield s)) →
         s.apyUSDBal caller ≤ s.totalSupply_apyUSD →
         y * s'.totalSupply_apyUSD < y * s.totalSupply_apyUSD) ∧
-      (∀ y : Nat, 0 < s.totalSupply_apyUSD - withdrawShares assets s.exchangeRate →
+      (∀ y : Nat, 0 < s.totalSupply_apyUSD - withdrawShares assets (computeExchangeRate (pullVestedYield s)) →
         y * ray / s.totalSupply_apyUSD
-          ≤ y * ray / (s.totalSupply_apyUSD - withdrawShares assets s.exchangeRate))) := by
+          ≤ y * ray / (s.totalSupply_apyUSD - withdrawShares assets (computeExchangeRate (pullVestedYield s))))) := by
   have hmul : ∀ (y a b : Nat), 0 < y → a < b → y * a < y * b := by
     intro y a b hy hab
     calc y * a < y * a + y := by omega
@@ -4058,9 +3397,9 @@ theorem req_cooldown_removal (s : State) :
     have hsup : (emitEvent (updateExchangeRate (createStandardUnlock
         { burnApyUSD (pullVestedYield s) caller shares with
           vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller shares).vaultApxUSDBal
-            - redeemAssets shares s.exchangeRate }
-        receiver (redeemAssets shares s.exchangeRate))) "Withdraw"
-        [caller, receiver, caller, redeemAssets shares s.exchangeRate, shares]).totalSupply_apyUSD
+            - redeemAssets shares (computeExchangeRate (pullVestedYield s)) }
+        receiver (redeemAssets shares (computeExchangeRate (pullVestedYield s))))) "Withdraw"
+        [caller, receiver, caller, redeemAssets shares (computeExchangeRate (pullVestedYield s)), shares]).totalSupply_apyUSD
         = s.totalSupply_apyUSD - shares := by
       simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
     refine ⟨?_, hsup, ?_, ?_, fun y hpos => Nat.div_le_div_left (Nat.sub_le _ _) hpos⟩
@@ -4074,12 +3413,12 @@ theorem req_cooldown_removal (s : State) :
     rw [pullVestedYield_apyUSDBal] at hshares
     subst hs'
     have hsup : (emitEvent (updateExchangeRate (createStandardUnlock
-        { burnApyUSD (pullVestedYield s) caller (withdrawShares assets s.exchangeRate) with
+        { burnApyUSD (pullVestedYield s) caller (withdrawShares assets (computeExchangeRate (pullVestedYield s))) with
           vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller
-            (withdrawShares assets s.exchangeRate)).vaultApxUSDBal - assets }
+            (withdrawShares assets (computeExchangeRate (pullVestedYield s)))).vaultApxUSDBal - assets }
         receiver assets)) "Withdraw"
-        [caller, receiver, caller, assets, withdrawShares assets s.exchangeRate]).totalSupply_apyUSD
-        = s.totalSupply_apyUSD - withdrawShares assets s.exchangeRate := by
+        [caller, receiver, caller, assets, withdrawShares assets (computeExchangeRate (pullVestedYield s))]).totalSupply_apyUSD
+        = s.totalSupply_apyUSD - withdrawShares assets (computeExchangeRate (pullVestedYield s)) := by
       simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
     refine ⟨?_, hsup, ?_, ?_, fun y hpos => Nat.div_le_div_left (Nat.sub_le _ _) hpos⟩
     · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
@@ -4105,7 +3444,7 @@ theorem req_erc4626_compliance (s : State) :
     -- (1) previews report exactly the conversions the operations use
     (∀ assets, previewDeposit s assets = convertToShares s assets) ∧
     (∀ shares, previewMint s shares = convertToAssets s shares) ∧
-    (∀ assets, previewWithdraw s assets = withdrawShares assets s.exchangeRate) ∧
+    (∀ assets, previewWithdraw s assets = withdrawShares assets (computeExchangeRate s)) ∧
     (∀ shares, previewRedeem s shares = convertToAssets s shares) ∧
     -- (2) conversions are mutually consistent: round-trips never credit value
     (∀ assets, convertToAssets s (convertToShares s assets) ≤ assets) ∧
@@ -4124,20 +3463,20 @@ theorem req_erc4626_compliance (s : State) :
   refine ⟨fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl, ?_, ?_, ?_, ?_, ?_⟩
   · intro assets
     unfold convertToAssets convertToShares redeemAssets lockShares
-    calc assets * ray / s.exchangeRate * s.exchangeRate / ray
+    calc assets * ray / computeExchangeRate s * computeExchangeRate s / ray
         ≤ assets * ray / ray := Nat.div_le_div_right (Nat.div_mul_le_self _ _)
       _ = assets := Nat.mul_div_cancel assets hray
   · intro shares
     unfold convertToShares convertToAssets lockShares redeemAssets
-    rcases Nat.eq_zero_or_pos s.exchangeRate with h0 | hpos
+    rcases Nat.eq_zero_or_pos (computeExchangeRate s) with h0 | hpos
     · simp [h0]
-    · calc shares * s.exchangeRate / ray * ray / s.exchangeRate
-          ≤ shares * s.exchangeRate / s.exchangeRate :=
+    · calc shares * computeExchangeRate s / ray * ray / computeExchangeRate s
+          ≤ shares * computeExchangeRate s / computeExchangeRate s :=
             Nat.div_le_div_right (Nat.div_mul_le_self _ _)
         _ = shares := Nat.mul_div_cancel shares hpos
   · intro assets
     unfold previewDeposit previewWithdraw convertToShares lockShares withdrawShares
-    rcases Nat.eq_zero_or_pos s.exchangeRate with h0 | hpos
+    rcases Nat.eq_zero_or_pos (computeExchangeRate s) with h0 | hpos
     · simp [h0]
     · exact Nat.div_le_div_right (by omega)
   · intro h a

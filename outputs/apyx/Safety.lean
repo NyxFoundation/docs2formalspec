@@ -108,8 +108,8 @@ private theorem inv_lockApxUSD (s : State) (amount : Nat) (caller : Address) (s'
     s' = emitEvent (updateExchangeRate (mintApyUSD
           { burnApxUSD s caller amount with
             vaultApxUSDBal := (burnApxUSD s caller amount).vaultApxUSDBal + amount }
-          caller (lockShares amount s.exchangeRate)))
-      "Deposit" [caller, caller, caller, amount, lockShares amount s.exchangeRate] := by
+          caller (lockShares amount (computeExchangeRate s))))
+      "Deposit" [caller, caller, caller, amount, lockShares amount (computeExchangeRate s)] := by
   simp only [step] at h
   split at h
   · exact absurd h (by simp)
@@ -209,12 +209,12 @@ private theorem inv_redeemApxUSD (s : State) (amount : Nat) (caller : Address) (
 private theorem inv_withdraw (s : State) (assets : Nat) (receiver caller : Address) (s' : State)
     (h : step s (Op.withdraw assets receiver) caller = some s') :
     s.globalPause = false ∧
-    withdrawShares assets s.exchangeRate ≤ (pullVestedYield s).apyUSDBal caller ∧
+    withdrawShares assets (computeExchangeRate (pullVestedYield s)) ≤ (pullVestedYield s).apyUSDBal caller ∧
     assets ≤ (pullVestedYield s).vaultApxUSDBal ∧
     s' = emitEvent (updateExchangeRate (createStandardUnlock
-          { burnApyUSD (pullVestedYield s) caller (withdrawShares assets s.exchangeRate) with
-            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller (withdrawShares assets s.exchangeRate)).vaultApxUSDBal - assets }
-          receiver assets)) "Withdraw" [caller, receiver, caller, assets, withdrawShares assets s.exchangeRate] := by
+          { burnApyUSD (pullVestedYield s) caller (withdrawShares assets (computeExchangeRate (pullVestedYield s))) with
+            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller (withdrawShares assets (computeExchangeRate (pullVestedYield s)))).vaultApxUSDBal - assets }
+          receiver assets)) "Withdraw" [caller, receiver, caller, assets, withdrawShares assets (computeExchangeRate (pullVestedYield s))] := by
   simp only [step, pvS_exchangeRate] at h
   split at h
   · exact absurd h (by simp)
@@ -228,11 +228,11 @@ private theorem inv_redeem (s : State) (shares : Nat) (receiver caller : Address
     (h : step s (Op.redeem shares receiver) caller = some s') :
     s.globalPause = false ∧
     shares ≤ (pullVestedYield s).apyUSDBal caller ∧
-    redeemAssets shares s.exchangeRate ≤ (pullVestedYield s).vaultApxUSDBal ∧
+    redeemAssets shares (computeExchangeRate (pullVestedYield s)) ≤ (pullVestedYield s).vaultApxUSDBal ∧
     s' = emitEvent (updateExchangeRate (createStandardUnlock
           { burnApyUSD (pullVestedYield s) caller shares with
-            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller shares).vaultApxUSDBal - redeemAssets shares s.exchangeRate }
-          receiver (redeemAssets shares s.exchangeRate))) "Withdraw" [caller, receiver, caller, redeemAssets shares s.exchangeRate, shares] := by
+            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller shares).vaultApxUSDBal - redeemAssets shares (computeExchangeRate (pullVestedYield s)) }
+          receiver (redeemAssets shares (computeExchangeRate (pullVestedYield s))))) "Withdraw" [caller, receiver, caller, redeemAssets shares (computeExchangeRate (pullVestedYield s)), shares] := by
   simp only [step, pvS_exchangeRate] at h
   split at h
   · exact absurd h (by simp)
@@ -695,11 +695,11 @@ favor of the protocol's solvency. -/
 theorem rounding_favors_protocol (s : State) :
     (∀ assets, convertToAssets s (convertToShares s assets) ≤ assets) ∧
     (∀ shares, convertToShares s (convertToAssets s shares) ≤ shares) ∧
-    (∀ assets, 0 < s.exchangeRate →
-      assets ≤ convertToAssets s (withdrawShares assets s.exchangeRate)) :=
+    (∀ assets, 0 < computeExchangeRate s →
+      assets ≤ convertToAssets s (withdrawShares assets (computeExchangeRate s))) :=
   ⟨(req_erc4626_compliance s).2.2.2.2.1,
    (req_erc4626_compliance s).2.2.2.2.2.1,
-   fun assets hrate => withdrawShares_rounds_up assets s.exchangeRate hrate⟩
+   fun assets hrate => withdrawShares_rounds_up assets (computeExchangeRate s) hrate⟩
 
 /-! ## S4 `no_dilution` — a new deposit does not reduce an existing holder's
 redeemable value
@@ -708,18 +708,21 @@ redeemable value
 *passage of time* (`s.now := s.now + dt`); it says nothing about monotonicity across a
 `lockApxUSD` deposit by someone else, which is the actual dilution question. That fact
 is established fresh here: floor-rounding the newly minted shares
-(`lockShares amount s.exchangeRate = amount * ray / s.exchangeRate`) means a deposit can
+(`lockShares amount (computeExchangeRate s) = amount * ray / s.exchangeRate`) means a deposit can
 only raise, never lower, the implied exchange rate of the enlarged pool — new shares
 are minted at a rate no more generous than the true backing ratio, so existing
 holders' claim per share cannot fall. Proved via the single-op inversion lemma
 `inv_lockApxUSD` plus this fresh arithmetic fact — no `cases op`. -/
 
-/-- Pure `Nat` fact underlying `no_dilution`: minting `amount * ray / R` new shares
-against `TA + amount` enlarged backing (a fresh `lockApxUSD amount` deposit priced at
-rate `R`) never lowers `R`, provided `R` does not already overstate the pre-deposit
-backing (`R * TS ≤ TA * ray`, satisfied whenever `R` is the true `computeExchangeRate`
-of the pre-state) and there is at least one pre-existing share (`TS > 0`, i.e. an
-existing holder to protect from dilution). -/
+/-- Pure `Nat` fact underlying `no_dilution`, stated for the live virtual-share rate:
+minting `amount * ray / R` new shares against `TA + amount` enlarged backing (a fresh
+`lockApxUSD amount` deposit priced at rate `R`) never lowers the rate, provided `R` does not
+already overstate the pre-deposit backing (`R * (TS + 1) ≤ (TA + 1) * ray`).
+
+That side condition holds **by construction** when `R` is the pre-state `computeExchangeRate`
+— it is just `Nat.div_mul_le_self` — so unlike the previous version this needs neither a
+`hbacked` hypothesis nor `0 < TS` at the call site: OpenZeppelin's `+1` virtual share makes
+the denominator positive unconditionally, so the first depositor is covered too. -/
 @[simp] private theorem computeExchangeRate_emitEvent (s : State) (n : String) (a : List Nat) :
     computeExchangeRate (emitEvent s n a) = computeExchangeRate s := by
   simp [emitEvent, computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount]
@@ -729,33 +732,47 @@ existing holder to protect from dilution). -/
   simp [updateExchangeRate, computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount]
 
 private theorem rate_non_decreasing_of_deposit
-    (TA TS amount R : Nat) (hTS : 0 < TS) (hbacked : R * TS ≤ TA * ray) :
-    R ≤ (TA + amount) * ray / (TS + amount * ray / R) := by
-  have hshpos : 0 < TS + amount * ray / R :=
-    calc 0 < TS := hTS
-      _ ≤ TS + amount * ray / R := Nat.le_add_right _ _
-  rw [Nat.le_div_iff_mul_le hshpos]
+    (TA TS amount R : Nat) (hbacked : R * (TS + 1) ≤ (TA + 1) * ray) :
+    R ≤ (TA + amount + 1) * ray / (TS + amount * ray / R + 1) := by
+  rw [Nat.le_div_iff_mul_le (Nat.succ_pos _)]
   have h2 : R * (amount * ray / R) ≤ amount * ray := by
     rw [Nat.mul_comm]; exact Nat.div_mul_le_self _ _
-  calc R * (TS + amount * ray / R)
-      = R * TS + R * (amount * ray / R) := Nat.mul_add R TS (amount * ray / R)
-    _ ≤ TA * ray + amount * ray := Nat.add_le_add hbacked h2
-    _ = (TA + amount) * ray := (Nat.add_mul TA amount ray).symm
+  have key : R * (TS + amount * ray / R + 1) ≤ (TA + 1) * ray + amount * ray := by
+    have he : TS + amount * ray / R + 1 = (TS + 1) + amount * ray / R := by omega
+    calc R * (TS + amount * ray / R + 1)
+        = R * ((TS + 1) + amount * ray / R) := by rw [he]
+      _ = R * (TS + 1) + R * (amount * ray / R) := Nat.mul_add _ _ _
+      _ ≤ (TA + 1) * ray + amount * ray := Nat.add_le_add hbacked h2
+  have hr : (TA + amount + 1) * ray = (TA + 1) * ray + amount * ray := by
+    have he : TA + amount + 1 = TA + 1 + amount := by omega
+    rw [he, Nat.add_mul]
+  rw [hr]
+  exact key
 
 /-- **S4 `no_dilution`** (docs/06-safety-properties.md, Tier A): a new deposit by a
 different caller does not reduce an existing holder's redeemable apxUSD value.
 
 For a holder `h` distinct from the depositing `caller`: (a) `h`'s apyUSD balance is
 untouched by the lock (`Op.lockApxUSD` mints only to `caller`, via `inv_lockApxUSD`),
-and (b) the implied exchange rate does not fall (`rate_non_decreasing_of_deposit`),
-given the pre-state rate `s.exchangeRate` does not already overstate backing
-(`hbacked`) and there is at least one existing share (`hTS`, i.e. someone to protect).
+and (b) the **live** exchange rate does not fall (`rate_non_decreasing_of_deposit`).
 Combining (a) and (b): `h`'s redeemable value under `convertToAssets`, computed at the
-same (unchanged) share balance, can only rise. -/
+same (unchanged) share balance, can only rise.
+
+**This is now a statement about the price the vault actually quotes.** It used to compare
+`convertToAssets` readings taken off the cached `exchangeRate` field, which `lockApxUSD`
+refreshed only *after* pricing its own mint — so a stale-low pre-state reading could report
+an increase across a step in which the true per-share price fell (witnessed in
+`review_witnesses/W2_honest_lifecycle_dilution.lean`). Since `convertToShares`/
+`convertToAssets` and every `step` branch now price off `computeExchangeRate`, matching the
+deployment's stateless `totalAssets()`-based reads, both sides of the inequality are the live
+price and the gap is closed.
+
+It is also strictly stronger than before: the old `hbacked` and `0 < totalSupply_apyUSD`
+hypotheses are gone. OpenZeppelin's virtual share (`+1`) makes the rate well-defined at zero
+supply, so the guarantee now covers the first depositor as well. -/
 theorem no_dilution (s : State) (amount : Nat) (caller h : Address) (s' : State)
     (h_step : step s (Op.lockApxUSD amount) caller = some s')
-    (hh : h ≠ caller) (hTS : 0 < s.totalSupply_apyUSD)
-    (hbacked : s.exchangeRate * s.totalSupply_apyUSD ≤ totalAssets s * ray) :
+    (hh : h ≠ caller) :
     s'.apyUSDBal h = s.apyUSDBal h ∧
     convertToAssets s (s.apyUSDBal h) ≤ convertToAssets s' (s'.apyUSDBal h) := by
   obtain ⟨-, -, hs'⟩ := inv_lockApxUSD s amount caller s' h_step
@@ -777,25 +794,24 @@ theorem no_dilution (s : State) (amount : Nat) (caller h : Address) (s' : State)
     unfold vestedAmount newlyVestedAmount; rw [hfv, hvs, hvt, hnow, hvp]
   have hTA : totalAssets s' = totalAssets s + amount := by
     unfold totalAssets; rw [hvbal, hva]; omega
-  have hTS' : s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount s.exchangeRate := by
+  have hTS' : s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount (computeExchangeRate s) := by
     rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD, lockShares]
-  have hTSpos : s'.totalSupply_apyUSD ≠ 0 := by rw [hTS']; omega
-  have hcomp : s'.exchangeRate = computeExchangeRate s' := by
-    rw [hs']
-    simp [emitEvent, updateExchangeRate, computeExchangeRate, totalAssets, vestedAmount,
-      newlyVestedAmount, mintApyUSD, burnApxUSD]
-  have hrate : s'.exchangeRate
-      = (totalAssets s + amount) * ray / (s.totalSupply_apyUSD + lockShares amount s.exchangeRate) := by
-    rw [hcomp]; unfold computeExchangeRate
-    rw [if_neg hTSpos, hTA, hTS']
-  have hmono : s.exchangeRate ≤ s'.exchangeRate := by
-    rw [hrate]
+  -- the pre-state rate never overstates the pre-state backing: that is `Nat.div_mul_le_self`
+  have hbacked : computeExchangeRate s * (s.totalSupply_apyUSD + 1)
+      ≤ (totalAssets s + 1) * ray := by
+    show ((totalAssets s + 1) * ray) / (s.totalSupply_apyUSD + 1) * (s.totalSupply_apyUSD + 1)
+      ≤ (totalAssets s + 1) * ray
+    exact Nat.div_mul_le_self _ _
+  have hlive : computeExchangeRate s ≤ computeExchangeRate s' := by
+    show computeExchangeRate s ≤ (totalAssets s' + 1) * ray / (s'.totalSupply_apyUSD + 1)
+    rw [hTA, hTS']
+    simp only [lockShares]
     exact rate_non_decreasing_of_deposit (totalAssets s) s.totalSupply_apyUSD amount
-      s.exchangeRate hTS hbacked
+      (computeExchangeRate s) hbacked
   refine ⟨hbal, ?_⟩
   rw [hbal]
   unfold convertToAssets redeemAssets
-  exact Nat.div_le_div_right (Nat.mul_le_mul_left _ hmono)
+  exact Nat.div_le_div_right (Nat.mul_le_mul_left _ hlive)
 
 /-! ## S5 `no_inflation_attack` — vault custody cannot be inflated for free
 
@@ -922,7 +938,7 @@ def valueAt (R : Nat) (s : State) (a : Address) : Nat :=
 
 /-- **`callerValue`**: the headline S6 ledger, `a`'s holdings priced at the state's own
 live (mark-to-market) exchange rate. -/
-def callerValue (s : State) (a : Address) : Nat := valueAt s.exchangeRate s a
+def callerValue (s : State) (a : Address) : Nat := valueAt (computeExchangeRate s) s a
 
 /-- Core arithmetic fact behind the `lockApxUSD` case: converting a fresh deposit of
 `amount` into shares (`lockShares`, floor rounding) and immediately pricing the enlarged
@@ -954,7 +970,7 @@ private theorem redemptionValue_div_ray_le (amount R : Nat) (h_rv : R ≤ ray) :
 unchanged — USDC converts to apxUSD 1:1, no rounding, no rate movement. -/
 theorem caller_value_depositUSDC (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.depositUSDC amount) caller = some s') :
-    valueAt s.exchangeRate s' caller = callerValue s caller := by
+    valueAt (computeExchangeRate s) s' caller = callerValue s caller := by
   obtain ⟨-, -, -, hle, hs'⟩ := inv_depositUSDC s amount caller s' h_step
   have hx : s'.apxUSDBal caller = s.apxUSDBal caller + amount := by
     rw [hs']; simp [emitEvent, mintApxUSD]
@@ -972,8 +988,9 @@ theorem caller_value_depositUSDC_live (s : State) (amount : Nat) (caller : Addre
     (h_step : step s (Op.depositUSDC amount) caller = some s') :
     callerValue s' caller = callerValue s caller := by
   obtain ⟨-, -, -, -, hs'⟩ := inv_depositUSDC s amount caller s' h_step
-  have hr : s'.exchangeRate = s.exchangeRate := by rw [hs']; simp [emitEvent, mintApxUSD]
-  show valueAt s'.exchangeRate s' caller = callerValue s caller
+  have hr : computeExchangeRate s' = computeExchangeRate s := by
+    rw [hs']; simp [emitEvent, mintApxUSD, computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount]
+  show valueAt (computeExchangeRate s') s' caller = callerValue s caller
   rw [hr]
   exact caller_value_depositUSDC s amount caller s' h_step
 
@@ -984,17 +1001,17 @@ manufacture redeemable value beyond what was paid in. The live-rate reading may 
 scoped, distinct effect, not the caller's own extraction from this step. -/
 theorem caller_value_lockApxUSD_fixedRate (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.lockApxUSD amount) caller = some s') :
-    valueAt s.exchangeRate s' caller ≤ callerValue s caller := by
+    valueAt (computeExchangeRate s) s' caller ≤ callerValue s caller := by
   obtain ⟨-, hle, hs'⟩ := inv_lockApxUSD s amount caller s' h_step
   have hx : s'.apxUSDBal caller = s.apxUSDBal caller - amount := by
     rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
-  have hy : s'.apyUSDBal caller = s.apyUSDBal caller + lockShares amount s.exchangeRate := by
+  have hy : s'.apyUSDBal caller = s.apyUSDBal caller + lockShares amount (computeExchangeRate s) := by
     rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
   have hu : s'.usdcBal caller = s.usdcBal caller := by
     rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
   unfold callerValue valueAt
   rw [hx, hy, hu]
-  have hb := redeemAssets_add_lockShares_le (s.apyUSDBal caller) amount s.exchangeRate
+  have hb := redeemAssets_add_lockShares_le (s.apyUSDBal caller) amount (computeExchangeRate s)
   omega
 
 /-- `redeemApxUSD` (ERC-20-style redemption): at the fixed pre-step rate (the op never
@@ -1005,7 +1022,7 @@ invariant `redemptionValue ≤ ray` (the same side-condition `S2`'s `WellFormed`
 never exceeds `amount`. -/
 theorem caller_value_redeemApxUSD (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.redeemApxUSD amount) caller = some s') (h_rv : s.redemptionValue ≤ ray) :
-    valueAt s.exchangeRate s' caller ≤ callerValue s caller := by
+    valueAt (computeExchangeRate s) s' caller ≤ callerValue s caller := by
   obtain ⟨-, -, hle, -, _, hs'⟩ := inv_redeemApxUSD s amount caller s' h_step
   have hx : s'.apxUSDBal caller = s.apxUSDBal caller - amount := by
     rw [hs']; simp [emitEvent, burnApxUSD]
@@ -1024,8 +1041,9 @@ theorem caller_value_redeemApxUSD_live (s : State) (amount : Nat) (caller : Addr
     (h_step : step s (Op.redeemApxUSD amount) caller = some s') (h_rv : s.redemptionValue ≤ ray) :
     callerValue s' caller ≤ callerValue s caller := by
   obtain ⟨-, -, -, -, _, hs'⟩ := inv_redeemApxUSD s amount caller s' h_step
-  have hr : s'.exchangeRate = s.exchangeRate := by rw [hs']; simp [emitEvent, burnApxUSD]
-  show valueAt s'.exchangeRate s' caller ≤ callerValue s caller
+  have hr : computeExchangeRate s' = computeExchangeRate s := by
+    rw [hs']; simp [emitEvent, burnApxUSD, computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount]
+  show valueAt (computeExchangeRate s') s' caller ≤ callerValue s caller
   rw [hr]
   exact caller_value_redeemApxUSD s amount caller s' h_step h_rv
 
@@ -1038,18 +1056,20 @@ caller's `callerValue` can only *fall* here: `apxUSDBal`/`usdcBal` are untouched
 caller-paid-for credit, not a gift. -/
 theorem caller_value_withdraw_fixedRate (s : State) (assets : Nat) (receiver caller : Address)
     (s' : State) (h_step : step s (Op.withdraw assets receiver) caller = some s') :
-    valueAt s.exchangeRate s' caller ≤ callerValue s caller := by
+    valueAt (computeExchangeRate s) s' caller ≤ callerValue s caller := by
   obtain ⟨-, -, -, hs'⟩ := inv_withdraw s assets receiver caller s' h_step
   have hx : s'.apxUSDBal caller = s.apxUSDBal caller := by
     rw [hs']; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-  have hy : s'.apyUSDBal caller = s.apyUSDBal caller - withdrawShares assets s.exchangeRate := by
+  have hy : s'.apyUSDBal caller = s.apyUSDBal caller - withdrawShares assets (computeExchangeRate (pullVestedYield s)) := by
     rw [hs']; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
   have hu : s'.usdcBal caller = s.usdcBal caller := by
     rw [hs']; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
   unfold callerValue valueAt
   rw [hx, hy, hu]
-  have hmono : redeemAssets (s.apyUSDBal caller - withdrawShares assets s.exchangeRate) s.exchangeRate
-      ≤ redeemAssets (s.apyUSDBal caller) s.exchangeRate :=
+  have hmono : redeemAssets (s.apyUSDBal caller
+        - withdrawShares assets (computeExchangeRate (pullVestedYield s)))
+        (computeExchangeRate s)
+      ≤ redeemAssets (s.apyUSDBal caller) (computeExchangeRate s) :=
     Nat.div_le_div_right (Nat.mul_le_mul_right _ (Nat.sub_le _ _))
   omega
 
@@ -1059,7 +1079,7 @@ fixed pre-step rate the caller's `callerValue` can only fall (`apyUSDBal` only s
 the burned `shares`). -/
 theorem caller_value_redeem_fixedRate (s : State) (shares : Nat) (receiver caller : Address)
     (s' : State) (h_step : step s (Op.redeem shares receiver) caller = some s') :
-    valueAt s.exchangeRate s' caller ≤ callerValue s caller := by
+    valueAt (computeExchangeRate s) s' caller ≤ callerValue s caller := by
   obtain ⟨-, -, -, hs'⟩ := inv_redeem s shares receiver caller s' h_step
   have hx : s'.apxUSDBal caller = s.apxUSDBal caller := by
     rw [hs']; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
@@ -1069,8 +1089,8 @@ theorem caller_value_redeem_fixedRate (s : State) (shares : Nat) (receiver calle
     rw [hs']; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
   unfold callerValue valueAt
   rw [hx, hy, hu]
-  have hmono : redeemAssets (s.apyUSDBal caller - shares) s.exchangeRate
-      ≤ redeemAssets (s.apyUSDBal caller) s.exchangeRate :=
+  have hmono : redeemAssets (s.apyUSDBal caller - shares) (computeExchangeRate s)
+      ≤ redeemAssets (s.apyUSDBal caller) (computeExchangeRate s) :=
     Nat.div_le_div_right (Nat.mul_le_mul_right _ (Nat.sub_le _ _))
   omega
 
@@ -1104,7 +1124,7 @@ theorem caller_net_nonpositive (s : State) (op : Op) (caller : Address) (s' : St
       (∃ amount, op = Op.redeemApxUSD amount) ∨
       (∃ amount r, op = Op.withdraw amount r) ∨
       (∃ shares r, op = Op.redeem shares r)) :
-    valueAt s.exchangeRate s' caller ≤ callerValue s caller := by
+    valueAt (computeExchangeRate s) s' caller ≤ callerValue s caller := by
   rcases h_case with ⟨amount, rfl⟩ | ⟨amount, rfl⟩ | ⟨amount, rfl⟩ | ⟨amount, r, rfl⟩ | ⟨shares, r, rfl⟩
   · exact Nat.le_of_eq (caller_value_depositUSDC s amount caller s' h_step)
   · exact caller_value_lockApxUSD_fixedRate s amount caller s' h_step
@@ -1447,21 +1467,26 @@ theorem caller_net_nonpositive_trace (R : Nat) (s : State) (σ : List (Op × Add
 
 /-! ## I7 — exchange-rate (share price) monotonicity (docs/08 pattern B/I; templates/invariants I7)
 
-The stored `exchangeRate` is a monotone accumulator: it moves only at the vault's own operations,
-and the two operations that move it meaningfully never lower it. A new deposit cannot dilute it
-(`exchange_rate_monotone_deposit`), and crediting yield preserves it in the same step while raising
-it over time (`exchange_rate_monotone_creditYield` + `req_exchange_rate_non_decreasing`). This is the
-share-price-monotonicity invariant whose violation is the ERC4626 inflation/dilution class. -/
+The **live** per-share price is monotone across the vault's own operations: a new deposit cannot
+dilute it (`exchange_rate_monotone_deposit`), and crediting yield preserves it in the same step
+while raising it over time (`exchange_rate_monotone_creditYield` +
+`req_exchange_rate_non_decreasing`). This is the share-price-monotonicity invariant whose
+violation is the ERC-4626 inflation/dilution class.
 
-/-- **I7 (deposit).** A `lockApxUSD` by any caller never lowers the stored exchange rate, provided
-the rate does not already overstate backing (`hbacked` — automatic when it is the pre-state's true
-`computeExchangeRate`) and there is at least one existing share (`hTS`). Exposes the rate-level
-monotonicity that `no_dilution` uses internally. -/
+These are stated about `computeExchangeRate`, not the recorded `exchangeRate` field. The earlier
+version tracked the field, which `lockApxUSD` refreshed only *after* pricing its own mint — so the
+"monotone accumulator" reading held of the cache while the true price could fall
+(`review_witnesses/W2_honest_lifecycle_dilution.lean`). Pricing is live now, and so is this. -/
+
+/-- **I7 (deposit).** A `lockApxUSD` by any caller never lowers the live per-share price.
+
+Unconditional: the old `hbacked` and `0 < totalSupply_apyUSD` side conditions are gone, because
+the rate is now *defined* as the pre-state's live price (so the backing condition is
+`Nat.div_mul_le_self`) and OpenZeppelin's `+1` virtual share keeps the denominator positive at
+zero supply. Exposes the rate-level monotonicity `no_dilution` uses internally. -/
 theorem exchange_rate_monotone_deposit (s : State) (amount : Nat) (caller : Address) (s' : State)
-    (h_step : step s (Op.lockApxUSD amount) caller = some s')
-    (hTS : 0 < s.totalSupply_apyUSD)
-    (hbacked : s.exchangeRate * s.totalSupply_apyUSD ≤ totalAssets s * ray) :
-    s.exchangeRate ≤ s'.exchangeRate := by
+    (h_step : step s (Op.lockApxUSD amount) caller = some s') :
+    computeExchangeRate s ≤ computeExchangeRate s' := by
   obtain ⟨-, -, hs'⟩ := inv_lockApxUSD s amount caller s' h_step
   have hnow : s'.now = s.now := by
     rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
@@ -1472,19 +1497,18 @@ theorem exchange_rate_monotone_deposit (s : State) (amount : Nat) (caller : Addr
     have hvbal : s'.vaultApxUSDBal = s.vaultApxUSDBal + amount := by
       rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
     unfold totalAssets; rw [hvbal, hva]; omega
-  have hTS' : s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount s.exchangeRate := by
+  have hTS' : s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount (computeExchangeRate s) := by
     rw [hs']; simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD, lockShares]
-  have hcomp : s'.exchangeRate = computeExchangeRate s' := by
-    rw [hs']
-    simp [emitEvent, updateExchangeRate, computeExchangeRate, totalAssets, vestedAmount,
-      newlyVestedAmount, mintApyUSD, burnApxUSD]
-  have hrate : s'.exchangeRate
-      = (totalAssets s + amount) * ray / (s.totalSupply_apyUSD + lockShares amount s.exchangeRate) := by
-    rw [hcomp]; unfold computeExchangeRate
-    rw [if_neg (by rw [hTS']; omega), hTA, hTS']
-  rw [hrate]
+  have hbacked : computeExchangeRate s * (s.totalSupply_apyUSD + 1)
+      ≤ (totalAssets s + 1) * ray := by
+    show ((totalAssets s + 1) * ray) / (s.totalSupply_apyUSD + 1) * (s.totalSupply_apyUSD + 1)
+      ≤ (totalAssets s + 1) * ray
+    exact Nat.div_mul_le_self _ _
+  show computeExchangeRate s ≤ (totalAssets s' + 1) * ray / (s'.totalSupply_apyUSD + 1)
+  rw [hTA, hTS']
+  simp only [lockShares]
   exact rate_non_decreasing_of_deposit (totalAssets s) s.totalSupply_apyUSD amount
-    s.exchangeRate hTS hbacked
+    (computeExchangeRate s) hbacked
 
 /-- **I7 (yield credit).** `creditYield` preserves the per-share `computeExchangeRate` in the same
 step — the accrue-first design keeps `totalAssets` (at the unchanged `now`) and the apyUSD supply
