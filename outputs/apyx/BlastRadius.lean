@@ -1540,7 +1540,7 @@ Two single-step characterizations that are the induction steps for the Tier-2
 ledger arguments. They also settle the *attribution* question for T6 in this model:
 the redemption price is not an oracle-controlled quantity at all — it is writable
 exclusively by the admin's `catastrophicBackstop` (the model's `updateRedemptionValue`
-is a placeholder no-op). The real-world analogue (Yearn's finding that Apyx's
+writes `redemptionValue` (it was a placeholder no-op in an earlier revision; `step_updateRedemptionValue_exact` and `admin_alone_moves_redemption_price` now pin its effect)). The real-world analogue (Yearn's finding that Apyx's
 `ApxUSDRateOracle.setRate` sits behind a 0-second timelock) therefore maps to the
 *admin coalition* here: worst case, `handleStressEvent` drives
 `totalCollateralValue` to 0 (raising the emergency flag the backstop requires) and
@@ -1859,7 +1859,7 @@ usdcReserve (full drain)" and the real-world analogue of Yearn's finding that Ap
 rate-limit / clamp. Attribution note (`redemption_price_admin_only`): in *this* model
 the redemption price is written by the admin's `catastrophicBackstop`, not the oracle
 op, so the extraction coalition is admin (price) + redeemer/RFQ-counterparty (drain);
-`updateRedemptionValue` is a placeholder no-op. -/
+`updateRedemptionValue` writes `redemptionValue` (it was a placeholder no-op in an earlier revision; `step_updateRedemptionValue_exact` and `admin_alone_moves_redemption_price` now pin its effect). -/
 
 /-- T6(a) `oracle_alone_preserves_balances`: an arbitrarily long trace whose operations
 are ALL oracle-gated leaves every balance, supply, and reserve field bitwise unchanged.
@@ -2404,7 +2404,7 @@ Yearn's real-world finding about `ApxUSDRateOracle.setRate`); the wrapper in the
 second half then *adds* the mechanism and proves what it buys. -/
 
 /-- T8 Half 1, universal form: **privileged repricing is instantaneous in the base
-model.** Whenever `catastrophicBackstop` (the sole writer of the redemption price,
+model.** Whenever `catastrophicBackstop` (one of the two writers of the redemption price (`redemption_price_writers`; the other is `updateRedemptionValue`),
 `redemption_price_admin_only`) succeeds, the new price is already in force in the
 post-state of that same step, and the clock has not advanced by even one unit
 (`s'.now = s.now`). There is no pending interval — no state in which the change is

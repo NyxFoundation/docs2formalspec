@@ -78,10 +78,32 @@
 | レビュー指摘 | 実装での事実 | 修正方針 |
 |---|---|---|
 | §1.0-a レート古さによる希釈 (W1/W2) | 実装は**ライブ計算、格納レートなし** | **モデルの人工物**。価格決定を `computeExchangeRate` に切り替える。これで W1/W2 は再現しなくなる |
-| §1.0-c `x/0 = 0` で vault 全額流出 (W4) | 実装の分母は `totalAssets + 1` / `totalSupply + 1` で**常に ≥ 1** | 分母に `+1` を入れて忠実化。ゼロ除算が構造的に消え W4 も消える |
+| §1.0-c `x/0 = 0` で vault 全額流出 (W4) | 実装の分母は `totalAssets + 1` / `totalSupply + 1` で**常に ≥ 1**。さらに `previewWithdraw = ceil(assets·(TS+1)/(TA+1))` なので `assets ≥ 1` なら結果は必ず ≥ 1 | **2段階必要だった。** `+1` は分母のゼロを消すだけで、商が 0 に floor する余地は残り W4 は再現した。`previewWithdraw ≥ 1` を `withdraw` のガードとして明示的に入れて初めて閉じた (`README` §9.3 項2、`Regression.lean` §R4b) |
 | §1.0-b inflation attack (W3/W5) | `_decimalsOffset = 0`、`deposit` は 0 株を revert しない | **実装に忠実な弱点**。`+1` 仮想株を入れた上で「dust は株価未満で 0 株」を境界付き定理として残し、`depositForMinShares` を推奨に格上げ |
-| §2.5 `mintForMaxAssets` が株数不足 | 実装は `previewMint` (Ceil) で資産を計算し `shares` を厳密に発行 | モデルを `mint(shares)` が厳密に `shares` を渡す形に直す |
+| §2.5 `mintForMaxAssets` が株数不足 | 実装は `previewMint` (Ceil) で資産を計算し `shares` を厳密に発行 | **見送った。** `previewMint` の Ceil 化は実施したが、株数厳密化には share 単位の `Op` コンストラクタが必要で、追加すると全網羅証明が kernel の深い再帰で壊れた。定義に逸脱を明記して境界付きで残している |
 | §2.3 手数料の起点 | vault 側 `unlockingFee` は別物、flexible 手数料は receipt 側 | 起点の扱いは docs 側と突き合わせて再確認が必要 |
 
-**未取得**: `LinearVestV0` のアドレス (apyUSD の `vesting()` getter から取得可能)、
-`RedemptionPoolV0` が実際にデプロイされ稼働中かどうか (model.md §5「Not verified」のまま)。
+## 追加で再取得できた値 (本セッション)
+
+| 呼び出し | 値 |
+|---|---|
+| `apyUSD.vesting()` | `0x0d62b4cc02b4b51ed19ddf41d7a7979cf394c99f` (LinearVest) |
+| `apyUSD.unlockingFee()` | `1000000000000000` = 1e15 = **10 bps** (コントラクトの docstring が言う production target と一致) |
+| `apxUSD.balanceOf(UnlockToken 0x93775E2d…BF4e6)` | 24,936.065068259672231340 apxUSD — `README` §4.4 の「24,936 apxUSD」と一致 |
+| `apxUSD.totalSupply()` | 327,073,514.822856436999740169 |
+
+## このファイルの範囲
+
+**ここに記録されているのは apyUSD / ERC-4626 周りと上表の読み取りだけです。** `README` §4.4-§4.6 と
+`model.md` §6-§7 が引用している残りの live 値 — `CommitToken` の
+6,226,697 apxUSD (供給の 1.90%)、`ApyxRedemptionOracle` の `cap() = 1e8` と published answer
+`90365900`、`AccessManager` のロール/遅延ラダー、`expiration() = 7 days`、スケジュール済み操作の
+896/169/5、Safe の 4-of-6 / 3-of-6、`MinterV0` の 50M/day — は**このファイルには記録されていません**。
+それらは以前のセッションでの読み取りで、artifact が残っていません。Lean 側の定数
+(`liveDeployments`, `liveAmount`, `queuedAmount`, `par`) は prose と一致していますが、
+チェーンからの再取得はされていません。docs 内のアドレスが省略形 (`0x17122d86…871e` など) で
+記載されているため本セッションでは呼び出せませんでした。「未記録の live read」として扱ってください。
+完全なアドレスを補えば同じ手順 (`eth_call` + sourcify v2) で再検証できます。
+
+`vesting()` = `0x0d62b4cc02b4b51ed19ddf41d7a7979cf394c99f` (LinearVest) は本セッションで取得済み。
+`RedemptionPoolV0` が実際にデプロイされ稼働中かどうかは未確認 (model.md §5「Not verified」のまま)。

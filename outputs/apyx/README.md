@@ -21,8 +21,8 @@ source by the Lean kernel, in four groups:
 | Group | Question answered | Count | File |
 |---|---|---|---|
 | **Requirement conformance** | Does the design behave as the documentation specifies? | 82 | [`Apyx.lean`](Apyx.lean) |
-| **Key-compromise blast radius** | If a privileged operator key is stolen, how much can be lost? | 56 | [`BlastRadius.lean`](BlastRadius.lean) |
-| **Design safety** | Can an ordinary user drain the protocol using only legitimate calls? | 30 | [`Safety.lean`](Safety.lean) |
+| **Key-compromise blast radius** | If a privileged operator key is stolen, how much can be lost? | 61 | [`BlastRadius.lean`](BlastRadius.lean) |
+| **Design safety** | Can an ordinary user drain the protocol using only legitimate calls? | 31 | [`Safety.lean`](Safety.lean) |
 | **Spec-defect / gap search** | Is the requirement set consistent, and are the economic parameters bounded? | 2 | [`SpecDefects.lean`](SpecDefects.lean) — §9 |
 
 Headline findings for Apyx:
@@ -98,7 +98,7 @@ Every requirement judged expressible as a state-machine property was formalized 
 `req_arbitrage_redeem_access`, `req_vault_operator_of_unlock_token`, `req_rfq_redemption_allowed`,
 `req_governance_deploy_buffer`, `req_yield_distributor_credit`, `req_no_rehypothecation`.
 
-- Mint and redeem are restricted to whitelisted, non-denylisted addresses; deposits revert while paused.
+- Deposit and mint are gated on both the whitelist and the denylist; **redeem is gated on the whitelist only** — the model carries no denylist check on `redeemApxUSD`, `requestUnlock`, `flexibleRequestUnlock` or `poolRedeem`. Deposits revert while paused.
 - The arbitrage mint pathway executes only while apxUSD trades **above** $1; the arbitrage redeem pathway
   only while it trades **below** $1 — and only for a whitelisted caller.
 - Vault-held apxUSD moves only through the accounting paths in the model (lock / withdraw / redeem):
@@ -129,9 +129,12 @@ Every requirement judged expressible as a state-machine property was formalized 
   apxUSD is possible only after the 20-day cooldown.
 - A claim requires `caller = owner ∨ caller = the vault operator`; before the deadline, a claim reverts,
   and after it, a claim succeeds.
-- **Each user holds at most one pending standard redemption.** A repeat request tops up the caller's
-  existing position and resets its cooldown on the aggregated amount, rather than opening a second one —
-  enforced by the transition function and proved as a reachable invariant.
+- **A repeat standard request tops up rather than opening a second position**, resetting the cooldown on
+  the aggregated amount (`req_multiple_unlocks_reset_cooldown`,
+  `req_single_pending_redemption_per_user`). **Uniqueness itself is not proved** — the theorem's
+  conclusion is an existence statement — and it does not hold across the whole model: `Op.withdraw` /
+  `Op.redeem` open a *fresh* position per call, faithfully mirroring `withdrawForReceipt` /
+  `redeemForReceipt`, so a user who both requests and withdraws holds two. See §9.3.
 - The redemption value applied is uniform across participants.
 
 ### Flexible redemption & fees
@@ -139,8 +142,10 @@ Every requirement judged expressible as a state-machine property was formalized 
 `req_flexible_redemption_early_fee`, `req_early_unlock_fee_linear_decline`.
 
 - Users may hold multiple concurrent flexible requests; a flexible claim is possible only after 3 days.
-- The early-exit fee is bounded in [0.1%, 3.5%], is monotonically non-increasing over time, and reaches
-  its 0.1% floor once the full cooldown has elapsed.
+- The early-exit fee is bounded in [0.1%, 3.5%] **as a function**, is monotonically non-increasing over
+  time, and reaches its 0.1% floor once the full cooldown has elapsed. The maximum actually *charged* on
+  any reachable claim is **2.99%**: the schedule is anchored at request time and claims are blocked for
+  the first three days (§6.0), so the 3.5% start is never reached.
 
 ### Unlock-token (NFT) integrity
 `req_singleton_unlock_token_instance`, `req_unlock_token_nontransferable`, `req_unlock_cannot_be_cancelled`.
@@ -193,7 +198,7 @@ Every requirement judged expressible as a state-machine property was formalized 
 
 ## 4. What was proved — adversarial analysis
 
-### 4.1 Key-compromise blast radius (56 theorems, [`BlastRadius.lean`](BlastRadius.lean))
+### 4.1 Key-compromise blast radius (61 theorems, [`BlastRadius.lean`](BlastRadius.lean))
 
 The requirement proofs assume every actor behaves as documented. This group answers the harder question the
 documentation never addresses: **if a privileged operator key is stolen, how much can the attacker take?**
@@ -211,9 +216,11 @@ The attacker is modeled as holding one or more role keys (`admin`, `oracle`, `pa
 | **all keys at once** | A passive, non-RFQ-targeted user loses nothing | `user_assets_immune_to_total_key_compromise`, `no_theft_ledger` |
 
 The non-custodial headline (`user_assets_immune_to_total_key_compromise`) is the machine-checked form of
-"we cannot move your funds even if we wanted to." Its active complement is also proved: no operation
-sequence lets any caller mint apxUSD for free — every credit is backed by an equal USDC payment or the
-settlement of the recipient's own pre-existing locked position (`apxUSD_credit_is_backed`).
+"we cannot move your funds even if we wanted to." Its active complement is proved **for one step**: no single
+operation credits apxUSD without an equal USDC payment or the settlement of the recipient's own
+pre-existing locked position (`apxUSD_credit_is_backed`). The trace form is **open**, and the gap is
+exploitable in-model — §9.3 gives a five-step admin+oracle sequence in which every step satisfies the
+theorem and the sequence extracts 100 USDC.
 
 Supporting theorems include the exact per-role effect frames (`admin_frame`, `oracle_frame`,
 `yield_distributor_frame`, and the `step_*_exact` family), the non-custodial lemmas
@@ -224,8 +231,12 @@ characterizations (`redemption_price_writers`, `reserve_outflow_only_via_redempt
 **The admin key alone is a total-loss path.** This report used to headline a two-key coalition
 (`admin_rfq_coalition_drains`: the admin crashes the redemption value via `catastrophicBackstop`, then an
 approved RFQ counterparty settles a victim's request at the crashed price for **0 USDC**). That coalition
-is still real and still proved, but it is no longer the cheapest route, and the reason it read as the
-cheapest was a gap in the model rather than a property of the protocol. Two operations now carry what the
+is still proved, but it is no longer the cheapest route, and the reason it read as the cheapest was a gap
+in the model rather than a property of the protocol. **Read its witness carefully**: the state it
+exhibits has `usdcReserve = 0`, so with `ray ≤ redemptionValue` the victim's claim was already
+unrealisable before the coalition acted — both redemption paths would have reverted on the reserve
+guard. The theorem demonstrates the *mechanism*, not an attributable loss; a funded witness is an open
+item (§9.3). Two operations now carry what the
 deployment carries:
 
 - **`admin_alone_drains_reserve`** — `withdrawReserve` moves the reserve to an address the admin names,
@@ -248,7 +259,7 @@ counterparty twice: settled immediately the user is paid 100, settled after one 
 user is paid 50. Both traces are permitted, both consume the request, and the counterparty picks — with no
 emergency and no compromised admin.
 
-### 4.2 Design safety — honest-actor attacks (30 theorems, [`Safety.lean`](Safety.lean))
+### 4.2 Design safety — honest-actor attacks (31 theorems, [`Safety.lean`](Safety.lean))
 
 This group assumes every actor is honest and asks whether the *design itself* lets an ordinary attacker
 extract value using only legitimate operations.
@@ -256,17 +267,17 @@ extract value using only legitimate operations.
 | Property | Guarantee | Theorem |
 |---|---|---|
 | No free value | No operation sequence lets any address mint apxUSD from nothing | `no_free_value_trace` |
-| Solvency preserved | Minted apxUSD never exceeds the collateral basket plus the USDC reserve across any trace (under stated well-formedness, and excluding the operations listed in §6.2) | `solvency_preserved` |
+| Solvency preserved | Minted apxUSD never exceeds the collateral basket plus the USDC reserve across any trace, excluding `claimUnlock`, `flexibleClaimUnlock`, `handleStressEvent`, `catastrophicBackstop` and `withdrawReserve`, and assuming `WellFormed` at every prefix (assumed, not shown inductive). Because `claimUnlock` is excluded, **no trace containing a completed request→claim cycle is in scope** — `requestUnlock` burns without booking the obligation, so the re-mint at claim necessarily breaks the invariant | `solvency_preserved` |
 | Rounding favors the protocol | Conversions never credit the user free value; withdrawals round up in shares | `rounding_favors_protocol`, `withdrawShares_rounds_up` |
 | No dilution | A deposit by someone else never lowers an existing holder's redeemable value, measured at the **live** per-share price. Unconditional — no backing or non-zero-supply side condition, so the first depositor is covered too | `no_dilution` |
 | No raw donation primitive | Every increase in vault custody is one of the three accounted channels; there is no transfer-into-custody operation | `donation_free`, `no_inflation_attack` |
 | Inflation attack: **mitigated, not impossible** | A deposit below the current share price still rounds partly into the pool. The deployment's only structural defence is OpenZeppelin's single virtual share (`_decimalsOffset() = 0`), which the model now carries; §9.3 quantifies the residue | `Regression.lean` §R3 |
-| No free extraction | A caller cannot end richer than they started (single-step, at the live rate) | `caller_net_nonpositive`, and the `caller_value_*` family |
-| No early yield drain | Vested yield cannot be pulled forward faster than its linear schedule | `vest_no_early_drain` |
-| Vesting conservation | Both crediting new yield and reconfiguring the vesting period preserve already-accrued yield | `creditYield_preserves_accrued_vest`, `setVestPeriod_preserves_accrued_vest` |
+| No free extraction | For the five conversion/redemption operations (`depositUSDC`, `lockApxUSD`, `redeemApxUSD`, `withdraw`, `redeem`), a caller's measured holdings do not increase across one step, with **both** states priced at the pre-state rate. The ledger omits pending unlock positions, which is where `withdraw`/`redeem` deposit the payout | `caller_net_nonpositive`, and the `caller_value_*` family |
+| No early yield drain | Vested yield cannot be pulled forward faster than its linear schedule, at a fixed state over varying `now`. Not a trace claim, and it does not cover `setVestPeriod 0`, which realizes the entire remaining stream in one admin step | `vest_no_early_drain` |
+| Vesting conservation | Both crediting new yield and reconfiguring the vesting period preserve already-accrued yield — **for a non-zero period**. Both carry `0 < period` hypotheses, and `setVestPeriod 0` is exactly the excluded case | `creditYield_preserves_accrued_vest`, `setVestPeriod_preserves_accrued_vest` |
 | No peg-spread round trip | The arbitrage mint (needs price > $1) and arbitrage redeem (needs price < $1) require opposite price regimes, so no single state enables both | `no_same_state_arbitrage_round_trip` |
-| Redemption request is backed | A redemption request burns exactly the requested apxUSD and leaves the caller one tracked position — the obligation exactly equals the burn (no free claim) | `requestUnlock_backs_claim_by_burn` |
-| No free extraction (trace) | Over arbitrary traces of non-share operations, no address's fixed-rate holdings can increase — no free money through the redemption / RFQ / request channels at any length (the share-op + live-rate closure is left open, see §6.2) | `caller_net_nonpositive_trace` |
+| Redemption request is backed | A redemption request burns **exactly** the requested apxUSD and leaves the caller a tracked position with a reset cooldown. The *burn* side is exact; the recorded obligation amount is existentially quantified and not pinned to the burn | `requestUnlock_backs_claim_by_burn` |
+| No free extraction (trace) | Over arbitrary traces, no address's fixed-rate holdings can increase — but the trace must avoid **nine** operation families: `mintApxUSD`, `lockApxUSD`, `withdraw`, `redeem`, `claimUnlock`, `flexibleClaimUnlock`, `catastrophicBackstop`, `withdrawReserve`, `poolRedeem`. That excludes the settlement legs of the redemption channel, so it covers the request/RFQ/arbitrage-redeem operations only. The live-rate closure is also open (§6.2) | `caller_net_nonpositive_trace` |
 | Share-price monotonicity | A new deposit never lowers the **live** per-share price, and crediting yield preserves it (raising it only as yield vests over time) — the ERC-4626 dilution invariant | `exchange_rate_monotone_deposit`, `exchange_rate_monotone_creditYield`, `req_exchange_rate_non_decreasing` |
 | Vault pricing is live | Conversions and every `step` branch price off `computeExchangeRate`, never off a stored field — matching the deployment, which has no stored rate | §9.3, `Regression.lean` §R1/R2 |
 
@@ -282,7 +293,7 @@ design is correct on this point.**
 
 ---
 
-### 4.4 The other async-redemption vault (8 theorems, [`CommitToken.lean`](CommitToken.lean))
+### 4.4 The other async-redemption vault (9 theorems, [`CommitToken.lean`](CommitToken.lean))
 
 Added after reading the deployed authority graph, which turned up a second async-redemption vault
 holding 250× what the modelled unlock path holds (§6.4 #18). `CommitToken` "CT-apxUSD"
@@ -299,8 +310,9 @@ This is also the first time `docs/06` §7's async family is instantiated against
 rather than the fictional `AsyncQueueVault` reference, and it needs the clock to say anything at
 all.
 
-Three properties hold and are worth having: `cycle_closes_after_the_live_delay` (request, wait the
-deployed 14 days, claim — in one trace), `claim_conserves` (a claim burns exactly what it pays),
+Three properties hold and are worth having: `cycle_closes_at_every_live_deployment` (request, wait the
+deployed 14 days, claim — in one trace; the underlying `cycle_closes_after_the_delay` is stated for an
+arbitrary configured delay), `claim_conserves` (a claim burns exactly what it pays),
 and `commitment_is_bounded_by_balance` (a holder can never be committed to more than they hold).
 
 Three describe behaviour a holder should know about, none of which violates anything the code
@@ -372,13 +384,16 @@ inside a large batch). `role41_trace_blast_radius` lifts the two pins to whole t
 
 ## 5. Design recommendations for Apyx
 
-These follow directly from the proofs above. Items 1–3 are the defenses whose *absence* is the reason the
-two-key coalition (§4.1) is unbounded; where a defense is formalized, the theorem naming what it would
-guarantee is cited.
+These follow directly from the proofs above. Items 1–3 are the defenses whose *absence* leaves the
+repricing and reserve-outflow losses unbounded — note that §4.1's headline is now the **admin-only**
+paths, not the two-key coalition, so a price floor alone is not sufficient. Where a defense is
+formalized, the theorem naming what it would guarantee is cited.
 
 1. **Add a redemption-price floor.** The single unbounded loss path exists purely because `redemptionValue`
    has no lower clamp; `catastrophicBackstop` can drive it to 0. A floor (or a bounded per-update move)
-   removes the total-loss outcome of the admin + RFQ coalition.
+   removes the total-loss outcome of the **repricing** route — both `updateRedemptionValue` and the
+   admin + RFQ coalition. It does **not** touch `withdrawReserve`, which moves the reserve without any
+   repricing at all; that one needs item 2.
 
 2. **Add a withdrawal / redemption rate limit** (ERC-7265-style circuit breaker). Formalized as a wrapper
    over the model and proved to bound cumulative reserve loss to `≤ cap × (epochs elapsed + 1)`
@@ -407,8 +422,9 @@ guarantee is cited.
    residual recommendation is about that one role, not about the scheme.
 
 4. **Minimize trust in the RFQ counterparty set.** With defenses 1–3 in place, user-fund safety against a
-   compromised admin still depends on the honesty of approved RFQ counterparties (they are the second key in
-   the only total-loss path). Keep this set small, audited, and ideally itself timelocked.
+   compromised admin still depends on the honesty of approved RFQ counterparties — they are the second key
+   in the *coalition* path (the admin-only paths need no second key). Keep this set small, audited, and
+   ideally itself timelocked.
 
 5. **Preserve the two-accumulator vesting pattern** (§4.3). The deployed design is correct; the model
    depends on `fullyVestedAmount` being realized *before* the vesting clock is reset in both `depositYield`
@@ -440,11 +456,19 @@ Reported honestly so the boundary of these guarantees is clear.
 Two questions decide what a machine-checked theorem is worth, and neither is answered by the
 count. **Over what does it quantify?** and **could the model have exhibited its failure?**
 
-**Quantifier scope.** **22 theorems quantify over an arbitrary operation sequence**
-(`execTrace`) — 4 in [`Safety.lean`](Safety.lean), 18 in
-[`BlastRadius.lean`](BlastRadius.lean). Those are the ones that rule out multi-step attacks.
-Every other theorem, **including all 82 requirement-conformance theorems**, is single-step: it
-says what one operation does from an arbitrary state satisfying its hypotheses. That is the
+**Quantifier scope.** **23 theorems quantify over an arbitrary operation sequence** — 4 in
+[`Safety.lean`](Safety.lean), 16 in [`BlastRadius.lean`](BlastRadius.lean), 2 in
+[`RedemptionOracle.lean`](RedemptionOracle.lean) and 1 in
+[`LiquidationBatcher.lean`](LiquidationBatcher.lean). Read the BlastRadius figure with two
+caveats that matter for how much it buys: **6 of the 16 are over the defense-wrapper state**
+(`execTrace2` / `execTraceTL`), i.e. machinery the protocol does not have, and **8 restrict the
+trace to a single role's operation class** (`PauserOp` = 2 ops, `DistributorOp` = 1,
+`OracleOp` = 1, `AdminOp` = 10). Those eight are sound *frame* results but are not upper bounds
+on what a stolen key can do, because a stolen key can also submit the non-role operations. Only
+`user_assets_immune_to_total_key_compromise` and its corollary `no_theft_ledger` quantify over
+unrestricted `Op` traces. Every other theorem here, **including all 82 requirement-conformance
+theorems**, is single-step: it says what one operation does from an arbitrary state satisfying
+its hypotheses. That is the
 right shape for most requirements — "`depositUSDC` mints apxUSD" is a single-step claim — but a
 single-step theorem cannot exclude a sequence, and citing one as if it could overstates it.
 Anywhere this report says "no operation can …" the statement is exhaustive over `Op` at one
@@ -554,8 +578,9 @@ cd lean
 lake build D2fsSpecs
 ```
 
-`D2fsSpecs` is the library of analyzed systems; naming it explicitly compiles exactly the four
-Apyx modules below and nothing else. (A bare `lake build` additionally compiles
+`D2fsSpecs` is the library of analyzed systems; naming it explicitly compiles the eight Apyx
+modules below, plus the regression tests in
+[`review_witnesses/Regression.lean`](review_witnesses/Regression.lean), and nothing else. (A bare `lake build` additionally compiles
 `TemplateExamples`, a fictional model that regression-tests the reusable proof templates in
 `templates/`; it is unrelated to Apyx.)
 
@@ -575,8 +600,8 @@ axioms of Lean's logic; none is an unproved assumption. Compile status is record
 | [`requirements.json`](requirements.json) | The 82 extracted requirements in structured form |
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine |
 | [`Apyx.lean`](Apyx.lean) | The formal model (`State`, `Op`, `step`) and the 82 requirement proofs |
-| [`BlastRadius.lean`](BlastRadius.lean) | The 56 key-compromise blast-radius proofs and the defense wrappers |
-| [`Safety.lean`](Safety.lean) | The 30 design-safety proofs |
+| [`BlastRadius.lean`](BlastRadius.lean) | The 61 key-compromise blast-radius proofs and the defense wrappers |
+| [`Safety.lean`](Safety.lean) | The 31 design-safety proofs |
 | [`SpecDefects.lean`](SpecDefects.lean) | The spec-consistency and parameter-bound gap-witness proofs (§9) |
 | [`CommitToken.lean`](CommitToken.lean) | The deployed `CommitToken` async-redemption vaults, all four instances — 9 proofs (§4.4) |
 | [`RedemptionOracle.lean`](RedemptionOracle.lean) | The deployed two-stage redemption-price pipeline — 8 proofs (§4.5) |
@@ -724,13 +749,26 @@ what is proved. And `req_single_pending_redemption_per_user` proves the cooldown
 its requirement, not uniqueness; its docstring says so now, and records that the vault path is
 deliberately multi-position because `withdrawForReceipt` mints a fresh receipt NFT per call.
 
-**Still open, and reported as open:** the two defense wrappers in
-[`BlastRadius.lean`](BlastRadius.lean) let the attacker supply their own clock —
-`rate_limit_linear_bound`'s `advanceEpoch` and `timelock_escape_guarantee`'s `tick` are free,
-permissionless counters with no relation to `Op.tick`, so neither theorem currently means "linear
-in elapsed time". Until that is repaired, §5 items 2 and 3 should be read as *design suggestions*
-rather than as quantified guarantees. The remaining items in
-[`code_review_lean.md`](code_review_lean.md) §1.2, §2.3 and §3 are also unfixed.
+**Still open.** An audit of this section's own first draft found that this list was incomplete and
+that four unfixed items were still being presented in the report body as settled results. That has
+been corrected in §3, §4.1 and §4.2, and the full list is below. Everything here is unfixed:
+
+| Item | What is unfixed | Where the prose now says so |
+|---|---|---|
+| §1.2 | **Both defense wrappers let the attacker supply the clock.** `rate_limit_linear_bound`'s `advanceEpoch` and `timelock_escape_guarantee`'s `tick` are free, permissionless counters with no relation to `Op.tick` or `base.now`, so neither theorem means "linear in elapsed time". The rate limiter also meters `usdcReserve` outflow only, so a reprice-to-zero drain passes it uncharged; and the timelock wrapper routes *every* operation through its queue, including a user's own exit, so it does not provide the window its name claims | §5 items 2-3, demoted to design suggestions |
+| §1.3 | **Single-pending is not a uniqueness theorem**, and uniqueness does not hold model-wide: the vault path opens a fresh position per call | §3, and the theorem's own docstring |
+| §1.5 | **`apxUSD_credit_is_backed` is single-step.** A five-step admin+oracle sequence — reprice to `2·ray`, open the above-peg gate, `mintApxUSD 100` for 100 USDC, open the below-peg gate, `redeemApxUSD 100` for 200 USDC — extracts 100 USDC from other users' deposits while every individual step satisfies the theorem | §4.1 |
+| §1.6 | **The coalition witness has `usdcReserve = 0`**, so it shows the mechanism rather than an attributable loss. A funded witness was recommended by an earlier human review and not applied | §4.1 |
+| §2.3 | **The early-exit fee is anchored at request time**, so the advertised 3.5% start is never charged on a reachable claim; the real maximum is 2.99% | §3, §6.0 |
+| §2.6 | **No denylist check on the redemption paths** (`redeemApxUSD`, `requestUnlock`, `flexibleRequestUnlock`, `poolRedeem`), and `claimUnlock` / `flexibleClaimUnlock` ignore `globalPause` | §3 |
+| §1.0-d | **`setVestPeriod 0` realizes the entire vest stream in one admin step.** Both conservation theorems hypothesise the non-zero period, i.e. exclude exactly this case | §4.2 |
+| §3 | **Quantifier scope**: 8 of the 16 BlastRadius trace theorems restrict the trace to one role's operation class, and 6 are over wrapper state rather than protocol state | §6.0 |
+
+Two further gaps are recorded rather than fixed because closing them would mean modelling something
+the chain does not do, or restructuring the state: the ERC-4626 dust residue above, and the
+`mintForMaxAssets` share-exactness deviation (the model has no share-denominated operation, and
+adding one broke the exhaustive-`Op` proofs with kernel deep-recursion — the deviation is documented
+on the definition instead).
 
 ---
 

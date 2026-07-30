@@ -726,7 +726,7 @@ redeemable value
 *passage of time* (`s.now := s.now + dt`); it says nothing about monotonicity across a
 `lockApxUSD` deposit by someone else, which is the actual dilution question. That fact
 is established fresh here: floor-rounding the newly minted shares
-(`lockShares amount (computeExchangeRate s) = amount * ray / s.exchangeRate`) means a deposit can
+(`lockShares amount (computeExchangeRate s) = amount * ray / computeExchangeRate s`) means a deposit can
 only raise, never lower, the implied exchange rate of the enlarged pool — new shares
 are minted at a rate no more generous than the true backing ratio, so existing
 holders' claim per share cannot fall. Proved via the single-op inversion lemma
@@ -929,7 +929,7 @@ address's holdings, summed in one common accounting unit, cannot rise for the ad
 *acting as caller* except by what it itself pays into the step. `valueAt R s a` is that
 common unit: apxUSD and USDC both at par (1 raw unit = 1 raw unit), apyUSD converted to
 its redeemable apxUSD via `redeemAssets` at an explicit rate `R`. `callerValue` is the
-headline reading of that ledger at a state's own *live* rate (`s.exchangeRate`) — the
+headline reading of that ledger at a state's own *live* rate (`computeExchangeRate s`) — the
 same rate `convertToAssets`/ERC4626 `previewRedeem` would quote right now.
 
 **Why `valueAt` takes `R` explicitly instead of always reading the live rate.** Three of

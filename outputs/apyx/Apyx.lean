@@ -134,9 +134,9 @@ def computeExchangeRate (s : State) : Nat :=
 /-- Record the live price into the `exchangeRate` field.
 
 The field is a *published record*, not a pricing input: every conversion and every `step` branch
-prices off `computeExchangeRate` directly, matching the deployment's stateless reads. Keeping the
-field lets `rate_consistent_step` state, as a machine-checked invariant, that the recorded value
-never drifts from the live one. -/
+prices off `computeExchangeRate` directly, matching the deployment's stateless reads. The field is
+written here and read by nothing, so it cannot drift into a pricing decision; no invariant relating
+it to the live rate is claimed. -/
 def updateExchangeRate (s : State) : State :=
   { s with exchangeRate := computeExchangeRate s }
 
@@ -568,7 +568,7 @@ inductive Op
   | voteBufferDeployment
   | submitRFQRequest (amount : Nat)
   | executeRFQRedemption (user : Address) (amount : Nat)
-  /-- The oracle publishes a new per-apxUSD redemption price. Mirrors the deployed setters
+  /-- The **admin** publishes a new per-apxUSD redemption price. Mirrors the deployed setters
       (`ApxUSDRateOracle.setRate`, `RedemptionPoolV0.setExchangeRate`): role-gated, and the
       only bound on the new value is that it be non-zero. No cap, no floor, no bounded
       per-update move, no cadence. -/
@@ -2199,9 +2199,11 @@ theorem req_flexible_redemption_early_fee (requestTime t1 t2 : Nat)
 minted never exceeds the market value of the collateral minus the required
 overcollateralization margin. (Model: stated as a preservation invariant of `step`. apxUSD
 is counted at its $1 par value; the market value of the collateral is the preferred-share
-basket (`totalCollateralValue`) plus the USDC reserve; the `overcollateralizationBuffer`
-State field is the required margin, so the invariant `minted + margin ≤ collateral` is
-exactly `minted ≤ collateral − margin`. Pre-state well-formedness: no balance exceeds
+basket (`totalCollateralValue`) plus the USDC reserve. **The margin is not carried.** This used
+to add the `overcollateralizationBuffer` State field to the left-hand side as a "required
+margin", but that field is written only by `catastrophicBackstop` and only to `0`, so the term
+was identically zero on every reachable trace; the statement is now the unmargined
+`minted ≤ collateral + reserve`. Pre-state well-formedness: no balance exceeds
 total supply and the redemption value is at most par. Scope: the unlock-claim operations
 are excluded because they re-mint apxUSD that was burned earlier when the unlock was
 requested — an outstanding obligation the aggregate state does not track — the
