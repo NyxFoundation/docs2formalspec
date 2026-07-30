@@ -3752,4 +3752,57 @@ theorem req_yield_distribution_period (s : State) (amount : Nat) (caller : Addre
     exact ⟨hper, rfl, rfl, hz, by rw [← h_cfg]; exact hfull, hmono⟩
   · exact absurd h_step (by simp)
 
+/-! ## The clock is a monopoly
+
+`docs/06` §7.3 E1 added `Op.tick` so that time-dependent properties are stateable at all. That
+buys nothing unless **only** `tick` can move the clock: if any other operation advanced `now`, a
+cooldown could be waited out for free and every maturity bound would be vacuous.
+
+The property held from the moment `tick` landed — `step`'s `tick` branch is the one place in the
+whole match that writes `now` — but it held **by inspection**, and the individual proofs that
+needed it re-derived it per-operation (`Safety.lean`, `BlastRadius.lean`, `HolderValue.lean` each
+carry their own `hnow`). Stated once, exhaustively over the closed `Op`, it becomes a fact a
+future branch cannot break silently: adding an operation that touches `now` breaks this proof
+rather than the invariant.
+-/
+
+/-- **No operation but `tick` moves the clock.** Exhaustive over the closed `Op`. -/
+theorem now_moves_only_by_tick (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') (h_not_tick : ∀ dt, op ≠ Op.tick dt) :
+    s'.now = s.now := by
+  cases op
+  case tick dt => exact absurd rfl (h_not_tick dt)
+  all_goals
+    simp only [step] at h_step
+    (repeat' split at h_step) <;>
+      first
+        | (cases Option.some.inj h_step; rfl)
+        | (cases Option.some.inj h_step; simp)
+        | (cases Option.some.inj h_step
+           simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD])
+        | exact absurd h_step (by simp)
+
+/-- And `tick` moves it by exactly its argument — it cannot be used to jump further. -/
+theorem tick_advances_now_exactly (s : State) (dt : Nat) (caller : Address) (s' : State)
+    (h_step : step s (Op.tick dt) caller = some s') :
+    s'.now = s.now + dt := by
+  simp only [step] at h_step
+  cases Option.some.inj h_step
+  rfl
+
+/-- The clock never runs backwards, whatever the operation. Together with
+`now_moves_only_by_tick` this is what makes "wait for the cooldown" a cost rather than a choice:
+elapsed time can only be bought with `tick`s, and never refunded. -/
+theorem now_nondecreasing (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') :
+    s.now ≤ s'.now := by
+  -- case split on the closed `Op` rather than `by_cases` on an existential: the latter would
+  -- pull in `Classical.choice` for a statement that needs no choice at all
+  cases op
+  case tick dt =>
+    rw [tick_advances_now_exactly s dt caller s' h_step]
+    omega
+  all_goals
+    exact Nat.le_of_eq (now_moves_only_by_tick s _ caller s' h_step (by simp)).symm
+
 end Apyx

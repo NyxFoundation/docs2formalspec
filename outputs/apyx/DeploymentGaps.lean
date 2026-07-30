@@ -34,8 +34,9 @@ channel.
 anchor. `pullVestedYield` moves only the latter, so **pulling does not move the finish line**.
 The model collapses both into `vestStart` and `pullVestedYield` sets `vestStart := now`, which
 restarts the schedule. The deployment pulls on *every* `withdraw`/`redeem`, so the model's yield
-is deferred again each time — that consequence is informal, the formal content being a single-pull
-deferral plus one closed witness.
+is deferred again each time — stated over a trace by `model_pullEvery_defers_without_bound`
+against `periodEnd_invariant_under_pullEvery`, which needed giving this module a clock of its own
+(`docs/06` §7.3 E1, the same move `Op.tick` made for the main model).
 -/
 
 namespace Apyx
@@ -244,17 +245,129 @@ point of contrast with the model, where the same fact is *false*
 theorem periodEnd_invariant_under_pull (v : VestState) :
     v.afterPull.periodEnd = v.periodEnd := rfl
 
+/-! ### A clock, so the repetition can be stated
+
+`docs/06` §7.3 E1's point, applied to this module: without a `tick` the "pulls keep deferring it"
+claim is not a property that can be expressed here, only a remark. `VestState.tick` advances the
+transcription's clock the way `Op.tick` advances the model's, and `pullEvery` interleaves a pull
+with each advance — which is the deployment's actual traffic, since `_withdraw` pulls on every
+`withdraw`/`redeem`.
+-/
+
+/-- The clock, matching `Op.tick`'s role in the main model. -/
+def VestState.tick (v : VestState) (dt : Nat) : VestState := { v with now := v.now + dt }
+
+/-- `n` rounds of "advance `dt`, then pull". -/
+def pullEvery (v : VestState) (dt : Nat) : Nat → VestState
+  | 0 => v
+  | n + 1 => ((pullEvery v dt n).tick dt).afterPull
+
+/-- **The finish line survives arbitrarily many pulls.** The trace-level form of
+`periodEnd_invariant_under_pull`: whatever the traffic, the transcribed deployment's `periodEnd`
+stays where the last *deposit* put it. -/
+theorem periodEnd_invariant_under_pullEvery (v : VestState) (dt : Nat) :
+    ∀ n, (pullEvery v dt n).periodEnd = v.periodEnd := by
+  intro n
+  induction n with
+  | zero => rfl
+  | succ k ih => exact ih
+
+/-- And the clock really does advance under that traffic, so the invariant above is not holding
+because nothing moved. -/
+theorem pullEvery_advances_the_clock (v : VestState) (dt : Nat) :
+    ∀ n, (pullEvery v dt n).now = v.now + n * dt := by
+  intro n
+  induction n with
+  | zero => simp [pullEvery]
+  | succ k ih =>
+    show (pullEvery v dt k).now + dt = v.now + (k + 1) * dt
+    rw [ih, Nat.succ_mul]
+    omega
+
+/-! ### The same traffic against the model's clock
+
+The model keeps no separate accrual anchor, so each pull rewrites `vestStart` to `now`. Under the
+same traffic its completion time therefore moves out once per round, without bound — the
+repetition the single-step `model_pull_defers_completion` could only gesture at.
+-/
+
+private theorem pv_now_here (s : State) : (pullVestedYield s).now = s.now := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+private theorem pv_vestPeriod_here (s : State) :
+    (pullVestedYield s).vestPeriod = s.vestPeriod := by
+  unfold pullVestedYield; dsimp only; split <;> rfl
+
+/-- `n` rounds of "advance `dt`, then pull", on the model's own `State`. -/
+def modelPullEvery (s : State) (dt : Nat) : Nat → State
+  | 0 => s
+  | n + 1 => pullVestedYield { modelPullEvery s dt n with
+      now := (modelPullEvery s dt n).now + dt }
+
+theorem modelPullEvery_now (s : State) (dt : Nat) :
+    ∀ n, (modelPullEvery s dt n).now = s.now + n * dt := by
+  intro n
+  induction n with
+  | zero => simp [modelPullEvery]
+  | succ k ih =>
+    show (pullVestedYield { modelPullEvery s dt k with
+        now := (modelPullEvery s dt k).now + dt }).now = s.now + (k + 1) * dt
+    rw [pv_now_here]
+    show (modelPullEvery s dt k).now + dt = s.now + (k + 1) * dt
+    rw [ih, Nat.succ_mul]
+    omega
+
+theorem modelPullEvery_vestPeriod (s : State) (dt : Nat) :
+    ∀ n, (modelPullEvery s dt n).vestPeriod = s.vestPeriod := by
+  intro n
+  induction n with
+  | zero => rfl
+  | succ k ih =>
+    show (pullVestedYield { modelPullEvery s dt k with
+        now := (modelPullEvery s dt k).now + dt }).vestPeriod = s.vestPeriod
+    rw [pv_vestPeriod_here]
+    exact ih
+
+/-- **The model's completion time moves out once per pull, without bound.**
+
+After `n + 1` rounds the model's schedule ends at `s.now + (n+1) * dt + vestPeriod`, which grows
+linearly in the number of pulls. The transcribed deployment's `periodEnd` does not move at all
+(`periodEnd_invariant_under_pullEvery`), so the gap between them is unbounded.
+
+The hypothesis is the same one `model_pull_defers_completion` carries, at the round in question:
+that round's pull must actually move yield, since `pullVestedYield` is the identity otherwise. -/
+theorem model_pullEvery_defers_without_bound (s : State) (dt n : Nat)
+    (h_moves : 0 < (modelPullEvery s dt n).fullyVestedAmount
+      + newlyVestedAmount { modelPullEvery s dt n with
+          now := (modelPullEvery s dt n).now + dt } ((modelPullEvery s dt n).now + dt)) :
+    (modelPullEvery s dt (n + 1)).vestStart + (modelPullEvery s dt (n + 1)).vestPeriod
+      = s.now + (n + 1) * dt + s.vestPeriod := by
+  have hvs : (modelPullEvery s dt (n + 1)).vestStart = (modelPullEvery s dt n).now + dt := by
+    show (pullVestedYield { modelPullEvery s dt n with
+        now := (modelPullEvery s dt n).now + dt }).vestStart = _
+    unfold pullVestedYield
+    dsimp only
+    rw [if_neg (by
+      show ¬ ((modelPullEvery s dt n).fullyVestedAmount
+        + newlyVestedAmount { modelPullEvery s dt n with
+            now := (modelPullEvery s dt n).now + dt } ((modelPullEvery s dt n).now + dt) = 0)
+      omega)]
+  rw [hvs, modelPullEvery_vestPeriod s dt (n + 1), modelPullEvery_now s dt n, Nat.succ_mul]
+  omega
+
 /-- **The model's finish line moves with every pull that actually moves yield**, taken after the
 clock has started. Both hypotheses are material: `pullVestedYield` is the identity when nothing
 has vested, and the jump is zero when `vestStart = now`. Under them, the model's completion time
 — `vestStart + vestPeriod` — moves forward by exactly the elapsed time, while the transcribed
 deployment's stays put (`periodEnd_invariant_under_pull`).
 
-*Not proved here.* The deployment pulls on every `withdraw`/`redeem`, so it follows informally
-that under steady unlock traffic the model's yield is perpetually deferred and it under-reports
-`totalAssets` and the share price. There is no repeated-pull theorem, no `totalAssets` comparison
-and no share-price comparison in this file; the single-pull equation below is the whole of the
-formal content. -/
+The repeated case is `model_pullEvery_defers_without_bound` above: under `n` rounds of
+"advance, then pull" — the deployment's own traffic, since it pulls on every `withdraw`/`redeem` —
+the model's completion time is `s.now + n * dt + vestPeriod`, growing linearly, while the
+transcription's `periodEnd` does not move at all
+(`periodEnd_invariant_under_pullEvery`). *Still not proved here:* that this makes the model
+under-report `totalAssets` and the share price. There is no `totalAssets` comparison and no
+share-price comparison in this file. -/
 theorem model_pull_defers_completion (s : State)
     (h_start : s.vestStart < s.now)
     (h_nonzero : 0 < s.fullyVestedAmount + newlyVestedAmount s s.now) :

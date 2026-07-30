@@ -57,6 +57,47 @@ def execTrace (s : State) : List (Op × Address) → State
     | some s' => execTrace s' σ
     | none => execTrace s σ
 
+/-! ### The clock monopoly, lifted to traces
+
+`Apyx.lean`'s `now_moves_only_by_tick` is single-step. Every maturity claim in this file and in
+`Safety.lean` is about a *trace*, so the useful form is the one below: a trace containing no
+`tick` leaves the clock exactly where it found it, and any trace at all can only move it forward.
+
+Without the first of these, an attacker's trace could be read as waiting out a cooldown for free
+by interleaving ordinary operations; with it, elapsed time is something a trace has to spend
+`tick`s to obtain.
+-/
+
+/-- **A trace with no `tick` in it cannot move the clock.** Revert-skip semantics included:
+failed operations leave the state alone, so they cannot move it either. -/
+theorem trace_now_fixed_without_tick (s : State) (σ : List (Op × Address))
+    (h_no_tick : ∀ p ∈ σ, ∀ dt, p.1 ≠ Op.tick dt) :
+    (execTrace s σ).now = s.now := by
+  induction σ generalizing s with
+  | nil => rfl
+  | cons p σ ih =>
+    obtain ⟨op, c⟩ := p
+    have h_tail : ∀ q ∈ σ, ∀ dt, q.1 ≠ Op.tick dt :=
+      fun q hq => h_no_tick q (List.mem_cons_of_mem _ hq)
+    simp only [execTrace]
+    cases hstep : step s op c with
+    | none => exact ih s h_tail
+    | some s1 =>
+      rw [ih s1 h_tail]
+      exact now_moves_only_by_tick s op c s1 hstep (h_no_tick (op, c) List.mem_cons_self)
+
+/-- **And no trace can turn the clock back**, whatever it contains. -/
+theorem trace_now_nondecreasing (s : State) (σ : List (Op × Address)) :
+    s.now ≤ (execTrace s σ).now := by
+  induction σ generalizing s with
+  | nil => exact Nat.le_refl _
+  | cons p σ ih =>
+    obtain ⟨op, c⟩ := p
+    simp only [execTrace]
+    cases hstep : step s op c with
+    | none => exact ih s
+    | some s1 => exact Nat.le_trans (now_nondecreasing s op c s1 hstep) (ih s1)
+
 /-! ## Role-gated operation classes
 
 Each predicate lists exactly the operations whose *authorization* is the given role.
