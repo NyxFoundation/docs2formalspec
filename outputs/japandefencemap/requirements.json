@@ -1,0 +1,244 @@
+[
+ {
+  "id": "source-url-https",
+  "category": "state",
+  "statement": "The system MUST ensure that every source URL starts with https://.",
+  "rationale": "The source table defines a CHECK constraint that the URL must match '^https://'.",
+  "source_quote": "CONSTRAINT chk_source_url_https CHECK (url ~ '^https://'),",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "source-confidence-enum",
+  "category": "state",
+  "statement": "The system MUST enforce that each source's confidence_level is one of 'primary', 'secondary', or 'derived'.",
+  "rationale": "A CHECK constraint limits confidence_level to those three values.",
+  "source_quote": "CONSTRAINT chk_source_confidence CHECK (confidence_level IN ('primary', 'secondary', 'derived'))",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "source-type-enum",
+  "category": "state",
+  "statement": "The system MUST restrict source_type values to the defined enumeration.",
+  "rationale": "The source_type column description lists an explicit enum of allowed values.",
+  "source_quote": "`source_type` | VARCHAR(50) | YES | 出典種別。Enum: `white_paper`, `budget_request`, `budget_settlement`, `procurement_notice`, `contract_result`, `press_release`, `news_article`, `procurement_site`, `mofa_transfer`, `mod_policy`",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "source-id-mandatory",
+  "category": "state",
+  "statement": "The system MUST require a non‑null source_id for every record in all tables.",
+  "rationale": "All tables that reference source declare source_id as NOT NULL, establishing mandatory provenance.",
+  "source_quote": "`source_id` | UUID | YES | FK → source",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "category-no-self-cycle",
+  "category": "state",
+  "statement": "The system MUST prevent a category from referencing itself as its parent.",
+  "rationale": "A CHECK constraint (or trigger) ensures parent_id ≠ id to avoid cycles.",
+  "source_quote": "`CHECK制約`: `parent_id ≠ id`（循環防止トリガー）",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "category-taxonomy-enum",
+  "category": "state",
+  "statement": "The system MUST restrict category taxonomy_type to one of 'mod_standard', 'nato_stanag', 'sipri', or 'custom'.",
+  "rationale": "The taxonomy_type column description enumerates the allowed values.",
+  "source_quote": "`taxonomy_type` | VARCHAR(50) | YES | `mod_standard`, `nato_stanag`, `sipri`, `custom`",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "equipment-status-enum",
+  "category": "state",
+  "statement": "The system MUST limit equipment status to the set {'active','planned','retired','prototype','cancelled','under_development'}.",
+  "rationale": "A CHECK constraint enumerates the permissible status values.",
+  "source_quote": "CONSTRAINT chk_equipment_status CHECK (status IN ('active', 'planned', 'retired', 'prototype', 'cancelled', 'under_development'))",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "equipment-year-order",
+  "category": "arithmetic",
+  "statement": "The system MUST ensure that an equipment's introduced_year is less than or equal to its retired_year, unless retired_year is null.",
+  "rationale": "A CHECK constraint enforces this temporal ordering.",
+  "source_quote": "CONSTRAINT chk_equipment_introduced_retired CHECK (retired_year IS NULL OR introduced_year <= retired_year),",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "equipment-unique-name-variant",
+  "category": "state",
+  "statement": "The system MUST enforce uniqueness of (canonical_name, variant_name, valid_from) across equipment records.",
+  "rationale": "A UNIQUE constraint is defined to prevent duplicate time‑stamped names.",
+  "source_quote": "**UNIQUE制約**: `(canonical_name, variant_name, valid_from)` — 同一名称・バリアントで時系列重複防止",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "equipment-specs-schema-validation",
+  "category": "state",
+  "statement": "The system MUST validate that equipment.specs_json conforms to the JSON schema referenced by its specs_schema_id.",
+  "rationale": "The design specifies schema validation at INSERT/UPDATE time.",
+  "source_quote": "equipment INSERT/UPDATE時に `category_id` に紐づく `equipment_spec_schema` を参照し、`specs_json` が `schema_json` に準拠するかをトリガーまたはアプリ層で検証。",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "procurement-amount-consistency",
+  "category": "arithmetic",
+  "statement": "The system MUST verify that procurement.total_amount_yen is within ±5 % of quantity × unit_price_yen, unless unit_price_yen is null.",
+  "rationale": "A CHECK constraint defines the acceptable range for total_amount_yen.",
+  "source_quote": "CONSTRAINT chk_procurement_amount CHECK ( total_amount_yen BETWEEN (unit_price_yen * quantity * 0.95) AND (unit_price_yen * quantity * 1.05) OR unit_price_yen IS NULL ),",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "procurement-delivery-order",
+  "category": "arithmetic",
+  "statement": "The system MUST ensure that procurement.delivery_end_year is null or not earlier than delivery_start_year.",
+  "rationale": "A CHECK constraint enforces chronological order of delivery dates.",
+  "source_quote": "CONSTRAINT chk_procurement_delivery_year CHECK (delivery_end_year IS NULL OR delivery_start_year <= delivery_end_year),",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "procurement-currency-enum",
+  "category": "state",
+  "statement": "The system MUST restrict procurement.currency to one of 'JPY', 'USD', 'EUR', or 'GBP'.",
+  "rationale": "A CHECK constraint enumerates the allowed currency codes.",
+  "source_quote": "CONSTRAINT chk_procurement_currency CHECK (currency IN ('JPY', 'USD', 'EUR', 'GBP'))",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "procurement-contract-type-enum",
+  "category": "state",
+  "statement": "The system MUST restrict procurement.contract_type to the defined enumeration.",
+  "rationale": "The contract_type column description lists the allowed values.",
+  "source_quote": "`contract_type` | VARCHAR(50) | YES | `open_competition`, `selective`, `negotiated`, `sole_source`",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "procurement-delivery-status-enum",
+  "category": "state",
+  "statement": "The system MUST restrict procurement.delivery_status to the defined enumeration.",
+  "rationale": "The delivery_status column description lists the allowed values.",
+  "source_quote": "`delivery_status` | VARCHAR(50) | YES | `pending`, `in_progress`, `completed`, `delayed`, `cancelled`, `partial`",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "budget-approved-not-less-than-requested",
+  "category": "economic",
+  "statement": "The system MUST ensure that budget.amount_approved_yen is greater than or equal to budget.amount_requested_yen, except where documented reductions apply.",
+  "rationale": "The data‑quality rule states this as a principle for budget records.",
+  "source_quote": "`budget.amount_approved_yen` ≥ `budget.amount_requested_yen` の原則（減額の例外あり）",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "location-latlon-range",
+  "category": "state",
+  "statement": "The system MUST enforce that location.latitude is between -90 and 90 and location.longitude is between -180 and 180.",
+  "rationale": "Application‑layer rule specifies valid geographic ranges.",
+  "source_quote": "`location.latitude` が -90〜90、`longitude` が -180〜180",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "fetch-domain-whitelist",
+  "category": "access-control",
+  "statement": "The system MUST fetch documents only from domains matching *.mod.go.jp, *.mofa.go.jp, or *.go.jp.",
+  "rationale": "Security guardrails define a domain whitelist for the fetch stage.",
+  "source_quote": "ドメインホワイトリスト: Fetch前 | `*.mod.go.jp`, `*.mofa.go.jp`, `*.go.jp` のみ許可。",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "fetch-url-blacklist",
+  "category": "access-control",
+  "statement": "The system MUST reject any URL whose path matches /internal/ or /confidential/ patterns.",
+  "rationale": "A URL‑pattern blacklist is specified for the fetch stage.",
+  "source_quote": "URLパターンブラックリスト: Fetch前 | 非公開文書のパスパターンをブロック（例: `/internal/`, `/confidential/`）",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "confidential-mark-rejection",
+  "category": "failure",
+  "statement": "The system MUST abort processing of any document that contains any of the confidential markers '機密', '秘密', '極秘', 'CONFIDENTIAL', 'SECRET', or 'TOP SECRET'.",
+  "rationale": "Confidential‑mark detection is a failure guard that stops the pipeline.",
+  "source_quote": "機密マーク検出: Extract後 | 「機密」「秘密」「極秘」「CONFIDENTIAL」「SECRET」「TOP SECRET」の文字列検出。ヒットした文書は全パイプラインを停止",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "blackout-area-warning",
+  "category": "failure",
+  "statement": "The system MUST issue a warning and halt ingestion when the proportion of blacked‑out area in an OCR‑processed image exceeds 5 %.",
+  "rationale": "A black‑out detection rule defines a threshold that triggers a warning and stops further processing.",
+  "source_quote": "黒塗り検出: OCR後 | 画像内の黒塗り領域の面積比率を計算。閾値（例: 5%）超過で警告",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ },
+ {
+  "id": "unknown-domain-manual-review",
+  "category": "access-control",
+  "statement": "The system MUST require manual review before loading data from an unknown domain or a newly introduced source_type.",
+  "rationale": "The guardrail mandates human verification for any previously unseen source.",
+  "source_quote": "人間レビュー: Load前 | 新規source_typeや初回の未知ドメインからの収集は必ず手動確認",
+  "formalizable": true,
+  "sources": [
+   "/tmp/japan-defence-map/docs/DESIGN.md"
+  ]
+ }
+]
