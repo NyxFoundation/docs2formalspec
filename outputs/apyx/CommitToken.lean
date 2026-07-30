@@ -190,9 +190,15 @@ theorem cycle_closes_after_the_delay (s : State) (caller : Address) (shares : Na
   · simp [step, h_up, h_ok, reqShares, h_fresh, Claimable]
 
 /-- Instantiated at every live deployment: the cooldown any of the four is configured with is a
-    cooldown a trace can actually wait out. -/
+    cooldown a trace can actually wait out.
+
+    **`_h_mem` is documentation, not a premise.** `cycle_closes_after_the_delay` already holds for
+    *any* configured delay, so membership in `liveDeployments` is not needed to prove this and the
+    hypothesis goes unused. It is retained to record which delays the statement is being claimed
+    about — dropping it would leave a theorem whose name promised more than its statement pinned.
+    The generality is the honest reading: the cycle closes at every delay, live ones included. -/
 theorem cycle_closes_at_every_live_deployment (s : State) (caller : Address) (shares : Nat)
-    (d : Deployment) (h_mem : d ∈ liveDeployments) (h_cfg : s.unlockingDelay = d.unlockingDelay)
+    (d : Deployment) (_h_mem : d ∈ liveDeployments) (h_cfg : s.unlockingDelay = d.unlockingDelay)
     (h_up : s.paused = false) (h_ok : s.denied caller = false)
     (h_pos : shares ≠ 0) (h_fresh : s.req caller = none) (h_bal : shares ≤ s.bal caller) :
     ∃ s₁ s₂, step s (Op.requestRedeem shares) caller = some s₁ ∧

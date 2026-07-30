@@ -202,7 +202,7 @@ Every requirement judged expressible as a state-machine property was formalized 
 
 ## 4. What was proved — adversarial analysis
 
-### 4.1 Key-compromise blast radius (62 theorems, [`BlastRadius.lean`](BlastRadius.lean))
+### 4.1 Key-compromise blast radius (64 theorems, [`BlastRadius.lean`](BlastRadius.lean))
 
 The requirement proofs assume every actor behaves as documented. This group answers the harder question the
 documentation never addresses: **if a privileged operator key is stolen, how much can the attacker take?**
@@ -615,7 +615,7 @@ axioms of Lean's logic; none is an unproved assumption. Compile status is record
 | [`requirements.json`](requirements.json) | The 82 extracted requirements in structured form |
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine |
 | [`Apyx.lean`](Apyx.lean) | The formal model (`State`, `Op`, `step`) and the 82 requirement proofs |
-| [`BlastRadius.lean`](BlastRadius.lean) | The 62 key-compromise blast-radius proofs and the defense wrappers |
+| [`BlastRadius.lean`](BlastRadius.lean) | The 64 key-compromise blast-radius proofs and the defense wrappers |
 | [`HolderValue.lean`](HolderValue.lean) | The complete signed per-holder value ledger, and the `caller_value_*` family restated over it (§9.3) |
 | [`DeploymentGaps.lean`](DeploymentGaps.lean) | The vesting-beneficiary single-key drain, the apxUSD supply cap and its coalition escape, and the vest-clock deviation — formalized from verified Solidity (§9.3) |
 | [`DeploymentFees.lean`](DeploymentFees.lean) | The two deployed fee mechanisms the corpus omits — the vault-side `unlockingFee` and the variable-unlock `FeeCurve` — formalized from verified Solidity (§9.3) |

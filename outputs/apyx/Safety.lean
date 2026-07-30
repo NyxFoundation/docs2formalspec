@@ -228,7 +228,7 @@ private theorem inv_withdraw (s : State) (assets : Nat) (receiver caller : Addre
           { burnApyUSD (pullVestedYield s) caller (withdrawShares assets (computeExchangeRate (pullVestedYield s))) with
             vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller (withdrawShares assets (computeExchangeRate (pullVestedYield s)))).vaultApxUSDBal - assets }
           receiver assets)) "Withdraw" [caller, receiver, caller, assets, withdrawShares assets (computeExchangeRate (pullVestedYield s))] := by
-  simp only [step, pvS_exchangeRate] at h
+  simp only [step] at h
   split at h
   · exact absurd h (by simp)
   · split at h
@@ -248,7 +248,7 @@ private theorem inv_redeem (s : State) (shares : Nat) (receiver caller : Address
           { burnApyUSD (pullVestedYield s) caller shares with
             vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller shares).vaultApxUSDBal - redeemAssets shares (computeExchangeRate (pullVestedYield s)) }
           receiver (redeemAssets shares (computeExchangeRate (pullVestedYield s))))) "Withdraw" [caller, receiver, caller, redeemAssets shares (computeExchangeRate (pullVestedYield s)), shares] := by
-  simp only [step, pvS_exchangeRate] at h
+  simp only [step] at h
   split at h
   · exact absurd h (by simp)
   · split at h
@@ -389,16 +389,16 @@ private theorem penniless_step (s : State) (op : Op) (caller : Address) (s' : St
   case claimUnlock id =>
     obtain ⟨owner, amount, cooldownEnd, hreq, -, -, -, hs'⟩ := inv_claimUnlock _ _ _ _ h_step
     subst hs'
-    refine ⟨?_, by simp [mintApxUSD, retireStandardUnlock, retireFlexibleUnlock, burnUnlockNFT, hu], ?_,
+    refine ⟨?_, by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hu], ?_,
       by simpa [mintApxUSD, retireStandardUnlock, retireFlexibleUnlock, burnUnlockNFT] using hflex⟩
     · by_cases hao : a = owner
       · subst hao
         have h0 : amount = 0 := hstd id amount cooldownEnd hreq
-        simp [mintApxUSD, retireStandardUnlock, retireFlexibleUnlock, burnUnlockNFT, h0, hx]
-      · simp [mintApxUSD, retireStandardUnlock, retireFlexibleUnlock, burnUnlockNFT, hao, hx]
+        simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, h0, hx]
+      · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hao, hx]
     · -- settling retires the entry, so the surviving positions are a subset of the old ones
       intro i am ce hi
-      simp only [mintApxUSD, retireStandardUnlock, retireFlexibleUnlock, burnUnlockNFT] at hi
+      simp only [mintApxUSD, retireStandardUnlock, burnUnlockNFT] at hi
       by_cases hii : i = id
       · simp [hii] at hi
       · exact hstd i am ce (by simpa [hii] using hi)
@@ -512,7 +512,7 @@ private theorem penniless_step (s : State) (op : Op) (caller : Address) (s' : St
         -- `poolRedeem amt r mo`: burns the caller and credits `r`, with `r ≠ a` by
         -- `h_no_pool_gift`. `a`'s own apxUSD is already 0, so the burn cannot move it either.
         | (cases Option.some.inj h_step
-           refine ⟨by simpa [burnApxUSD, hx] using hx, ?_,
+           refine ⟨by simp [burnApxUSD, hx], ?_,
                    by simpa [burnApxUSD] using hstd, by simpa [burnApxUSD] using hflex⟩
            dsimp only
            split

@@ -137,8 +137,9 @@ def mintUnderCap (cap supply amount : Nat) : Option Nat :=
   if supply + amount ≤ cap then some (supply + amount) else none
 
 /-- `setSupplyCap`'s only guard: the new cap may not fall below the current supply. It may rise
-without limit. -/
-def setCap (cap supply newCap : Nat) : Option Nat :=
+without limit — and note the old cap is **not** read, which is the whole point: nothing in the
+setter is relative to the bound currently in force. -/
+def setCap (_cap supply newCap : Nat) : Option Nat :=
   if newCap < supply then none else some newCap
 
 /-- **A lone compromised minter is bounded by the cap**, at every step and hence over any run:
@@ -180,6 +181,19 @@ theorem admin_minter_coalition_escapes_cap (cap supply target : Nat) (h : supply
   refine ⟨target, target, ?_, ?_, rfl⟩
   · unfold setCap; rw [if_neg (by omega)]
   · unfold mintUnderCap; rw [if_pos (by omega)]; congr 1; omega
+
+/-- **The coalition result is not vacuous at the live configuration.** Instantiated at the values
+read from mainnet — cap `750,000,000e18`, supply `327,073,514.822856436999740169e18` — the pair
+reaches a supply of one billion, well past the cap the lone minter is held to. -/
+theorem live_cap_escaped_at_one_billion :
+    ∃ cap' supply',
+      setCap 750000000000000000000000000 327073514822856436999740169
+          1000000000000000000000000000 = some cap' ∧
+      mintUnderCap cap' 327073514822856436999740169
+          (1000000000000000000000000000 - 327073514822856436999740169) = some supply' ∧
+      supply' = 1000000000000000000000000000 :=
+  admin_minter_coalition_escapes_cap 750000000000000000000000000 327073514822856436999740169
+    1000000000000000000000000000 (by decide)
 
 /-! ## §C. The vest clock — pulling should not move the finish line
 
@@ -237,6 +251,8 @@ schedule now runs to tick 15. -/
 theorem vest_stretch_witness :
     ∃ (s : State),
       s.vestTotal = 200 ∧ s.vestPeriod = 10 ∧ s.vestStart = 0 ∧ s.now = 5 ∧
+      -- `model_pull_defers_completion`'s two hypotheses hold here, so it is not vacuous
+      s.vestStart < s.now ∧ 0 < s.fullyVestedAmount + newlyVestedAmount s s.now ∧
       newlyVestedAmount s s.now = 100 ∧
       -- after the pull the model's clock restarts at 5 with 100 left …
       (pullVestedYield s).vestStart = 5 ∧ (pullVestedYield s).vestTotal = 100 ∧
@@ -245,6 +261,6 @@ theorem vest_stretch_witness :
       -- and the model does not finish until tick 15
       newlyVestedAmount (pullVestedYield s) 15 = 100 := by
   refine ⟨{ (default : State) with vestTotal := 200, vestPeriod := 10, vestStart := 0, now := 5 },
-    rfl, rfl, rfl, rfl, by decide, ?_, ?_, by decide, by decide⟩ <;> rfl
+    rfl, rfl, rfl, rfl, by decide, by decide, by decide, ?_, ?_, by decide, by decide⟩ <;> rfl
 
 end Apyx

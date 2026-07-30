@@ -259,6 +259,24 @@ theorem withdraw_receiver_unconstrained (s : State) (assets : Nat) (r1 r2 caller
           rw [if_neg g1, if_neg g2, if_neg g3, if_neg g4]
           exact ⟨_, rfl⟩
 
+/-- A funded, non-degenerate vault: one holder owns the whole 100-share supply against 100
+assets, so the live rate is exactly `ray` and a 100-asset withdrawal costs exactly 100 shares. -/
+def withdrawWitness : State :=
+  { (default : State) with
+      globalPause := false
+      totalSupply_apyUSD := 100
+      apyUSDBal := fun a => if a = 1 then 100 else 0
+      vaultApxUSDBal := 100 }
+
+/-- **`withdraw_receiver_unconstrained` is not vacuous.** Successful withdrawals exist, and the
+receiver really is free: the same caller, from the same state, succeeds while directing the
+receipt to two different third parties. On chain both of these revert with `InvalidCaller()`. -/
+theorem withdraw_third_party_receipts_succeed :
+    (step withdrawWitness (Op.withdraw 100 2) 1).isSome = true ∧
+    (step withdrawWitness (Op.withdraw 100 7) 1).isSome = true ∧
+    computeExchangeRate (pullVestedYield withdrawWitness) = ray := by
+  refine ⟨by decide, by decide, by decide⟩
+
 /-! ## B. The variable-unlock fee curve
 
 `FeeCurveLib.fee` clamps at both ends and decays in between. The interior shape depends on
@@ -334,8 +352,26 @@ theorem feeRate_le_maxFee (c : Curve) (powK : Nat → Nat) (elapsed : Nat) (h : 
     · exact Nat.le_refl _
     · exact Nat.sub_le _ _
 
+/-- **`tHat` never exceeds one**, which is the fact `feeRate_ge_minFee`'s hypothesis rests on:
+the numerator `elapsed - minDuration` is below the denominator `maxDuration - minDuration`
+everywhere the interior branch is taken, so the WAD-scaled ratio is at most `1e18`. The library
+relies on exactly this when it casts to `int256` for `powWad` ("`tHat <= 1e18` (numerator can't
+exceed denominator)"). -/
+theorem tHat_le_wad (c : Curve) (elapsed : Nat) (h : elapsed < c.maxDuration) :
+    c.tHat elapsed ≤ wad := by
+  unfold Curve.tHat
+  rcases Nat.eq_zero_or_pos (c.maxDuration - c.minDuration) with hd | hd
+  · rw [hd]; simp
+  · rw [Nat.div_le_iff_le_mul_add_pred hd]
+    have hnum : elapsed - c.minDuration ≤ c.maxDuration - c.minDuration := by omega
+    calc (elapsed - c.minDuration) * wad
+        ≤ (c.maxDuration - c.minDuration) * wad := Nat.mul_le_mul_right _ hnum
+      _ ≤ (c.maxDuration - c.minDuration) * wad + ((c.maxDuration - c.minDuration) - 1) := by omega
+
 /-- And never falls below `minFee`, given the one fact about `powWad` the library relies on:
-`tHat ≤ 1e18`, so `tHat ^ k ≤ 1e18` for the admissible exponents. -/
+`tHat ≤ 1e18` (`tHat_le_wad`), so `tHat ^ k ≤ 1e18` for the admissible exponents. Instantiating
+`powK` at the library's own linear shortcut (`curvature = 1e18`, where `powWad` is the identity)
+discharges the hypothesis outright, so the statement is not vacuous. -/
 theorem feeRate_ge_minFee (c : Curve) (powK : Nat → Nat) (elapsed : Nat) (h : c.isValid)
     (hpow : powK (c.tHat elapsed) ≤ wad) :
     c.minFee ≤ c.feeRate powK elapsed := by
@@ -354,6 +390,14 @@ theorem feeRate_ge_minFee (c : Curve) (powK : Nat → Nat) (elapsed : Nat) (h : 
   · split
     · exact hfee
     · omega
+
+/-- The linear shortcut `curvature = 1e18` is the identity on `tHat`, so `feeRate_ge_minFee`'s
+hypothesis holds for it with no side condition beyond the interior branch — the floor really is
+reachable rather than assumed. -/
+theorem feeRate_ge_minFee_linear (c : Curve) (elapsed : Nat) (h : c.isValid)
+    (hlt : elapsed < c.maxDuration) :
+    c.minFee ≤ c.feeRate id elapsed :=
+  feeRate_ge_minFee c id elapsed h (tHat_le_wad c elapsed hlt)
 
 /-- **The 5% ceiling is the real bound on the early-exit fee**, not the model's 3.5%: the
 admin-settable `maxFee` is capped only by `MAX_FEE`, and by `feeRate_at_first_claim` a claimant

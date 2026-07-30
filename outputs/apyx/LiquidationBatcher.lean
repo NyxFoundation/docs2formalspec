@@ -40,7 +40,13 @@ inductive Op
   | withdrawTokens (asset : Address) (amount : Nat)
 deriving DecidableEq
 
-def step (s : State) (op : Op) (caller : Address) : Option State :=
+/-- **`caller` is deliberately ignored.** On chain every operation below is role-gated
+(`restricted`), but this miniature admits any caller, so each theorem is quantified over an
+adversary who may call *anything*. That makes the invariants below **stronger** than their
+on-chain counterparts, not weaker — they survive even a total collapse of the role system. The
+parameter is kept so the signature matches the other machines' `step`, and so `execTrace` can
+carry caller-tagged traces. -/
+def step (s : State) (op : Op) (_caller : Address) : Option State :=
   match op with
   | Op.batchLiquidate markets asset proceeds =>
     if markets.any (fun m => ! s.allowed m) then none
