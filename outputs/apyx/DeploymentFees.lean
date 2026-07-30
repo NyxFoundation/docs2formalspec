@@ -65,23 +65,23 @@ decimal scaling"), so fee *rates* carry the WAD and fee *amounts* come back out 
 -/
 
 /-- `FeeCurveLib.FEE_PRECISION` / `ApyUSD.FEE_PRECISION` = `1e18`. -/
-def wad : Nat := 10 ^ 18
+def wad : Nat := 1000000000000000000
 
 /-- `FeeCurveLib.MAX_FEE` = `0.05e18` — the hard 5% ceiling both `setUnlockingFee` and
 `FeeCurveLib.requireValid` enforce. -/
-def maxFeeCap : Nat := 5 * 10 ^ 16
+def maxFeeCap : Nat := 50000000000000000
 
 /-- `FeeCurveLib.MAX_DURATION` = `90 days`. -/
 def maxCurveDuration : Nat := 90 * day
 
 /-- `FeeCurveLib.MIN_CURVATURE` = `0.1e18`. -/
-def minCurvature : Nat := 10 ^ 17
+def minCurvature : Nat := 100000000000000000
 
 /-- `FeeCurveLib.MAX_CURVATURE` = `10e18`. -/
-def maxCurvature : Nat := 10 * 10 ^ 18
+def maxCurvature : Nat := 10000000000000000000
 
 /-- The live `unlockingFee()` read from the proxy: `1e15` = 10 bps. -/
-def liveUnlockingFee : Nat := 10 ^ 15
+def liveUnlockingFee : Nat := 1000000000000000
 
 /-- Solidity's `Math.Rounding.Ceil` on a division. -/
 def ceilDiv (a b : Nat) : Nat := (a + b - 1) / b
@@ -375,6 +375,130 @@ theorem feeOnAssets_pos (c : Curve) (powK : Nat → Nat) (assets elapsed : Nat)
   apply Nat.div_pos _ hw
   have h1 : 1 * 1 ≤ assets * c.feeRate powK elapsed := Nat.mul_le_mul ha hr
   omega
+
+
+/-! ### The curve is read live, not snapshotted at mint
+
+`UnlockReceipt` stores only `(assets, createdAt)` per position. Both the claim gate and the fee
+read the **current** curve:
+
+```solidity
+function isClaimable(uint256 tokenId) public view returns (bool) {
+    ...
+    return uint48(block.timestamp) >= pos.createdAt + $.feeCurve.minDuration;
+}
+function currentFee(uint256 tokenId) public view returns (uint256 feeInAssets) {
+    ...
+    uint48 elapsed = uint48(block.timestamp) - pos.createdAt;
+    feeInAssets = $.feeCurve.feeOnAssets(pos.assets, elapsed);
+}
+function setFeeCurve(FeeCurve calldata curve) external restricted { ... }   // no timelock
+```
+
+`setFeeCurve` is a plain admin call whose only check is `requireValid`. Because `minDuration` is
+both the lock length and the curve's zero point, one call moves **both** at once on every
+outstanding receipt: positions that were claimable become locked again, and the fee they will
+eventually pay is reset to the new `maxFee` — up to the 5% ceiling.
+
+This is the same class as `CommitToken.lean`'s `raising_the_delay_unclaims_pending_requests`,
+which the model does carry for the commit-token vaults. It has no counterpart for the apyUSD
+unlock receipt: the model's `flexibleUnlockFee` is a fixed formula over constants, with no
+operation that can change it, so the model cannot state this at all.
+-/
+
+/-- An `UnlockReceipt` position: the contract stores nothing else. -/
+structure Receipt where
+  assets : Nat
+  createdAt : Nat
+
+/-- `claimableAfter(tokenId)` = `createdAt + feeCurve.minDuration`, off the **live** curve. -/
+def Receipt.claimableAt (r : Receipt) (c : Curve) : Nat := r.createdAt + c.minDuration
+
+/-- `isClaimable(tokenId)`, unpaused. -/
+def Receipt.isClaimable (r : Receipt) (c : Curve) (now : Nat) : Bool :=
+  decide (r.claimableAt c ≤ now)
+
+/-- `currentFee(tokenId)` — the live curve applied to the receipt's own age. -/
+def Receipt.feeNow (r : Receipt) (c : Curve) (powK : Nat → Nat) (now : Nat) : Nat :=
+  c.feeOnAssets powK r.assets (now - r.createdAt)
+
+/-- `previewClaim(tokenId)` = escrowed minus the live fee. -/
+def Receipt.payout (r : Receipt) (c : Curve) (powK : Nat → Nat) (now : Nat) : Nat :=
+  r.assets - r.feeNow c powK now
+
+/-- A receipt minted under a short, free curve. -/
+def curveBefore : Curve :=
+  { minFee := 0, maxFee := 0, minDuration := 1, maxDuration := 2, curvature := wad }
+
+/-- What one admin call can replace it with: a hundred-fold longer lock at the 5% ceiling. Both
+curves pass `requireValid`, so `setFeeCurve` accepts the swap. -/
+def curveAfter : Curve :=
+  { minFee := 0, maxFee := maxFeeCap, minDuration := 100, maxDuration := 200, curvature := wad }
+
+theorem curveBefore_valid : curveBefore.isValid := by
+  refine ⟨by decide, by decide, ?_, by decide, by decide, ?_, ?_⟩
+  · unfold curveBefore maxCurveDuration day; decide
+  · unfold curveBefore minCurvature wad; decide
+  · unfold curveBefore maxCurvature wad; decide
+
+theorem curveAfter_valid : curveAfter.isValid := by
+  refine ⟨by decide, by decide, ?_, by decide, by decide, ?_, ?_⟩
+  · unfold curveAfter maxCurveDuration day; decide
+  · unfold curveAfter minCurvature wad; decide
+  · unfold curveAfter maxCurvature wad; decide
+
+/-- **One admin call re-locks an outstanding receipt and reprices it at the ceiling.**
+
+The receipt (1000 units of escrow, created at 0) is claimable at time 1 under the curve in force when it
+was minted, and would pay out in full — that curve's `maxFee` is zero. After `setFeeCurve`, the
+*same* receipt is not claimable at time 1; its claim date has moved from 1 to 100; and when that
+date arrives the fee is the new `maxFee`, because `minDuration` is also the curve's zero point.
+The holder waits a hundred times longer and receives 95% instead of 100%.
+
+Nothing about the receipt changed — the contract snapshots neither the lock nor the fee at mint,
+storing only `(assets, createdAt)`. Both curves satisfy `requireValid`, so this is ordinary admin
+configuration rather than a misconfiguration, and there is no timelock on `setFeeCurve`.
+
+The statement holds for **every** `powK`, i.e. every admissible curvature: the two instants it
+speaks about are the clamp points, where the exponent plays no part. -/
+theorem receipt_relocked_by_curve_change :
+    ({ assets := 1000, createdAt := 0 } : Receipt).isClaimable curveBefore 1 = true ∧
+    ({ assets := 1000, createdAt := 0 } : Receipt).isClaimable curveAfter 1 = false ∧
+    ({ assets := 1000, createdAt := 0 } : Receipt).claimableAt curveBefore
+      < ({ assets := 1000, createdAt := 0 } : Receipt).claimableAt curveAfter :=
+  ⟨rfl, rfl, by decide⟩
+
+/-- And repriced: free under the curve in force at mint, 5% under the replacement, charged at
+the new claim date because `minDuration` is also the curve's zero point. Holds for every
+`powK`, i.e. every admissible curvature — both instants are clamp points. -/
+theorem receipt_repriced_by_curve_change (powK : Nat → Nat) :
+    ({ assets := 1000, createdAt := 0 } : Receipt).payout curveBefore powK 1 = 1000 ∧
+    ({ assets := 1000, createdAt := 0 } : Receipt).payout curveAfter powK
+      (({ assets := 1000, createdAt := 0 } : Receipt).claimableAt curveAfter) = 950 := by
+  constructor
+  · unfold Receipt.payout Receipt.feeNow Curve.feeOnAssets ceilDiv
+    have hrate : curveBefore.feeRate powK (1 - 0) = 0 := rfl
+    rw [hrate]
+    unfold wad
+    rfl
+  · unfold Receipt.payout Receipt.feeNow Receipt.claimableAt Curve.feeOnAssets ceilDiv
+    have hrate : curveAfter.feeRate powK (0 + curveAfter.minDuration - 0) = maxFeeCap := rfl
+    rw [hrate]
+    unfold maxFeeCap wad
+    rfl
+
+/-- **Both effects, from one `setFeeCurve` call**, with the curves' validity discharged so the
+swap is ordinary admin configuration rather than a misconfiguration. -/
+theorem admin_curve_change_relocks_and_reprices (powK : Nat → Nat) :
+    curveBefore.isValid ∧ curveAfter.isValid ∧
+    (({ assets := 1000, createdAt := 0 } : Receipt).isClaimable curveBefore 1 = true ∧
+      ({ assets := 1000, createdAt := 0 } : Receipt).payout curveBefore powK 1 = 1000) ∧
+    (({ assets := 1000, createdAt := 0 } : Receipt).isClaimable curveAfter 1 = false ∧
+      ({ assets := 1000, createdAt := 0 } : Receipt).payout curveAfter powK
+        (({ assets := 1000, createdAt := 0 } : Receipt).claimableAt curveAfter) = 950) :=
+  ⟨curveBefore_valid, curveAfter_valid,
+    ⟨receipt_relocked_by_curve_change.1, (receipt_repriced_by_curve_change powK).1⟩,
+    ⟨receipt_relocked_by_curve_change.2.1, (receipt_repriced_by_curve_change powK).2⟩⟩
 
 /-! ## Both fees compose on a single unlock
 

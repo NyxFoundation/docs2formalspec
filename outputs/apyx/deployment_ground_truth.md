@@ -224,3 +224,34 @@ payee と唯一の呼び出し権者がどちらも `beneficiary` なので、ad
 pull するので、モデル側の yield は恒常的に後ろ倒しになる(= `totalAssets` と株価を過小報告)。
 
 以上は [`DeploymentGaps.lean`](DeploymentGaps.lean) に形式化済み(9定理)。
+
+### 4. `UnlockReceipt` は手数料曲線をライブ参照する(mint 時スナップショット無し)
+
+`UnlockReceipt` の position は `(assets, createdAt)` しか保存しない。請求可否も手数料も
+**現在の** `$.feeCurve` を読む:
+
+```solidity
+function isClaimable(uint256 tokenId) public view returns (bool) {
+    ...
+    return uint48(block.timestamp) >= pos.createdAt + $.feeCurve.minDuration;
+}
+function currentFee(uint256 tokenId) public view returns (uint256 feeInAssets) {
+    ...
+    uint48 elapsed = uint48(block.timestamp) - pos.createdAt;
+    feeInAssets = $.feeCurve.feeOnAssets(pos.assets, elapsed);
+}
+function setFeeCurve(FeeCurve calldata curve) external restricted { ... }  // timelock 無し
+```
+
+`minDuration` がロック長と曲線ゼロ点を兼ねるため、admin が 1 回 `setFeeCurve` するだけで
+**発行済み receipt が再ロックされ、同時に手数料が新しい `maxFee`(上限 5%)に張り替わる**。
+`CommitToken.lean` の `raising_the_delay_unclaims_pending_requests` と同クラスだが、
+apyUSD の receipt 側には対応するモデル op が無い(モデルの `flexibleUnlockFee` は定数式)。
+
+形式化: [`DeploymentFees.lean`](DeploymentFees.lean) の
+`admin_curve_change_relocks_and_reprices`(両 curve とも `requireValid` を満たすことを込みで証明)。
+
+### 5. `CommitToken.setSupplyCap` — モデルの cap は不変
+
+`CommitToken.lean` は各デプロイの `supplyCap` を持ち deposit で強制するが、cap を動かす op が無い。
+実装は `setSupplyCap` が `restricted` なので、モデルの方が硬い上界に見えている。
