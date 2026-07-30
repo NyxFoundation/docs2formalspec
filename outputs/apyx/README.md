@@ -616,6 +616,7 @@ axioms of Lean's logic; none is an unproved assumption. Compile status is record
 | [`code_review_lean.md`](code_review_lean.md) | Self-review of this report's Lean source — every finding, fixed and unfixed (§9.3) |
 | [`deployment_ground_truth.md`](deployment_ground_truth.md) | Verified-source and live-read facts the §9.3 fixes are grounded in |
 | [`review_witnesses/Regression.lean`](review_witnesses/Regression.lean) | Kernel-checked regression tests pinning each §9.3 fix |
+| [`HolderValue.lean`](HolderValue.lean) | The complete, signed per-holder value ledger — positions included (`docs/06` §7.3 E3) |
 
 ---
 
@@ -780,6 +781,7 @@ been corrected in §3, §4.1 and §4.2, and the full list is below. Everything h
 | §1.0-d | **`setVestPeriod 0` realizes the entire vest stream in one admin step.** Both conservation theorems hypothesise the non-zero period, i.e. exclude exactly this case | §4.2 |
 | §3 | **Quantifier scope**: 8 of the 16 BlastRadius trace theorems restrict the trace to one role's operation class, and 6 are over wrapper state rather than protocol state | §6.0 |
 | new | **The ray-scaled rate is a fidelity deviation.** OpenZeppelin does a *single* `mulDiv`; this model materialises a rate and divides twice. The two agree exactly at deployment scale but not when the rate floors to 0, which is the whole source of the guards in §9.3 item 2 and R4c. Replacing `lockShares`/`redeemAssets`/`withdrawShares` with the single-`mulDiv` form would remove the class at the root instead of guarding three branches | §9.3 item 2 |
+| new (partly closed) | **The per-holder value measure dropped pending unlock positions.** `Safety.valueAt` omitted exactly where `requestUnlock`/`withdraw`/`redeem` put the payout, so the caller laws read as "the holder loses value" when the truth is "the holder is not extracting value". [`HolderValue.lean`](HolderValue.lean) adds the complete measure — including a `Σ` over positions, available because ids live below `nextUnlockId` — and its signed form `netValue : State → Address → Int` (`docs/06` §7.3 E3). What is **not** yet done is restating `Safety.lean`'s `caller_value_*` family against it; the new module carries kernel-checked witnesses instead of general theorems | [`HolderValue.lean`](HolderValue.lean) |
 | new | **`previewMint` / `previewWithdraw` quote off the un-pulled state** while the operations they wrap charge at the pulled state, so `withdrawForMaxShares` / `redeemForMinAssets` check slippage at a different price than they execute at. The two coincide unless `pullVestedYield` moves `totalAssets`, which needs `vestPeriod = 0 ∧ now < vestStart`; unreachable from `default`, but no invariant says so and every theorem quantifies over all states | — |
 | new | **`flexibleClaimUnlock` was not given the `retireStandardUnlock` treatment** — it still clears only the receipt, leaving `flexibleUnlockRequests id` set. Benign (no top-up path, and ids are never reused) but inconsistent with the standard path | — |
 

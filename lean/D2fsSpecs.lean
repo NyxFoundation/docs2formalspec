@@ -9,4 +9,5 @@ import D2fsSpecs.RedemptionOracle
 import D2fsSpecs.BlastRadius
 import D2fsSpecs.Safety
 import D2fsSpecs.SpecDefects
+import D2fsSpecs.HolderValue
 import D2fsSpecs.Regression
