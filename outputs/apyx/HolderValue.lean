@@ -123,7 +123,7 @@ theorem stdPositions_createStandardUnlock (s : State) (owner : Address) (amount 
 
 /-- A fresh standard position never touches the flexible sum: `createStandardUnlock` writes no
 flexible entry, so **provided** the fresh id carries no flexible entry — the hypothesis, which
-`unalloc_flex_of_registryBounded` discharges from the registry invariant — the flexible sum is
+`flex_unallocated_at_counter` discharges from the registry invariant — the flexible sum is
 unchanged. -/
 theorem flexPositions_createStandardUnlock (s : State) (owner : Address) (amount : Nat)
     (a : Address) (h_unalloc : s.flexibleUnlockRequests s.nextUnlockId = none) :
@@ -147,50 +147,15 @@ theorem flexPositions_createStandardUnlock (s : State) (owner : Address) (amount
 
 `stdPositions`/`flexPositions` fold over `List.range s.nextUnlockId`, so they **silently drop**
 any registry entry at an id at or above the counter. Calling `holderValue` "everything `a` owns"
-is therefore conditional on no such entry existing — which the module used to assert in prose and
-never prove. It is provable, and proving it also discharges the `h_unalloc_flex` hypothesis that
-several theorems below carry.
+is therefore conditional on no such entry existing — which this module used to assert in prose and
+never prove.
+
+It is proved now, and in the core model rather than here: `Apyx.RegistryBounded`, with
+`Apyx.flex_unallocated_at_counter` discharging the `h_unalloc_flex` hypothesis that several
+theorems below carry, and `Apyx.registryBounded_createStandardUnlock` showing fresh allocation
+preserves it. It sits in `Apyx.lean` because `BlastRadius.lean` needs the companion pointer
+invariant and does not import this module.
 -/
-
-/-- No registry entry sits at or above the id counter. -/
-def RegistryBounded (s : State) : Prop :=
-  (∀ i, s.nextUnlockId ≤ i → s.unlockRequests i = none) ∧
-  (∀ i, s.nextUnlockId ≤ i → s.flexibleUnlockRequests i = none)
-
-/-- The empty state satisfies it — both registries are constantly `none`. -/
-theorem registryBounded_default : RegistryBounded (default : State) :=
-  ⟨fun _ _ => rfl, fun _ _ => rfl⟩
-
-/-- **The hypothesis several theorems below take is a consequence of the invariant**, not an
-extra assumption about the world: the fresh id is at the counter, so it is at or above it. -/
-theorem unalloc_flex_of_registryBounded (s : State) (h : RegistryBounded s) :
-    s.flexibleUnlockRequests s.nextUnlockId = none :=
-  h.2 s.nextUnlockId (Nat.le_refl _)
-
-/-- And the standard side, for symmetry. -/
-theorem unalloc_std_of_registryBounded (s : State) (h : RegistryBounded s) :
-    s.unlockRequests s.nextUnlockId = none :=
-  h.1 s.nextUnlockId (Nat.le_refl _)
-
-/-- Allocating a fresh standard position preserves it: the entry lands exactly at the old counter
-and the counter moves past it. -/
-theorem registryBounded_createStandardUnlock (s : State) (owner : Address) (amount : Nat)
-    (h : RegistryBounded s) : RegistryBounded (createStandardUnlock s owner amount) := by
-  obtain ⟨hstd, hflex⟩ := h
-  constructor
-  · intro i hi
-    have hne : i ≠ s.nextUnlockId := by
-      have : s.nextUnlockId + 1 ≤ i := by simpa [createStandardUnlock] using hi
-      omega
-    have : s.nextUnlockId ≤ i := by
-      have : s.nextUnlockId + 1 ≤ i := by simpa [createStandardUnlock] using hi
-      omega
-    simp [createStandardUnlock, hne, hstd i this]
-  · intro i hi
-    have : s.nextUnlockId ≤ i := by
-      have : s.nextUnlockId + 1 ≤ i := by simpa [createStandardUnlock] using hi
-      omega
-    simpa [createStandardUnlock] using hflex i this
 
 /-! ## The holder-centric law, as a general theorem
 
@@ -201,7 +166,7 @@ position the burn turns into was unmeasured.
 
 /-- **Filing a standard redemption is value-neutral for the filer**, under the complete measure —
 on the fresh-position branch, with a balance that covers the amount and a registry whose fresh id
-carries no flexible entry (`h_unalloc_flex`, discharged by `unalloc_flex_of_registryBounded`).
+carries no flexible entry (`h_unalloc_flex`, discharged by `flex_unallocated_at_counter`).
 
 The fresh-position branch: the caller has no live standard position, so `requestUnlockStep` takes
 the `createStandardUnlock` route. The apxUSD leaves the balance and reappears in the position, at
@@ -911,7 +876,7 @@ and the step would (spuriously) read as a gain.
 Any `receiver`: if the position goes to someone else the caller pays (the bound is `≤`, and it is
 not strict at `assets = 0`); if to the caller, the ceil-rounded share cost covers the position
 credit (`withdrawShares_covers`), with the zero-share guard (`Regression.lean` §R4b) supplying the
-nonzero cost. Assumes `h_unalloc_flex`, which `unalloc_flex_of_registryBounded` discharges. -/
+nonzero cost. Assumes `h_unalloc_flex`, which `flex_unallocated_at_counter` discharges. -/
 theorem holder_value_withdraw (s : State) (assets : Nat) (receiver caller : Address)
     (s' : State) (h_step : step s (Op.withdraw assets receiver) caller = some s')
     (h_unalloc_flex : s.flexibleUnlockRequests s.nextUnlockId = none) :
@@ -1023,7 +988,7 @@ name each one and carry the exact (in)equality.
 its own is weaker than the per-op theorems it packages. Because the rate *differs by family*, these
 bounds do **not** chain along a trace — there is no `execTrace` statement anywhere in this module.
 And it inherits two hypotheses: `redemptionValue ≤ ray`, and a registry whose fresh id carries no
-flexible entry (`unalloc_flex_of_registryBounded` discharges the second).
+flexible entry (`flex_unallocated_at_counter` discharges the second).
 
 What it does do is retire the old umbrella's caveat that its ledger "does not track the
 unlock-registry column": the column is tracked now, and the single-step bound survives. -/

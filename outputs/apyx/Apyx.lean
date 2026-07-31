@@ -3845,6 +3845,95 @@ theorem req_yield_distribution_period (s : State) (amount : Nat) (caller : Addre
     exact ⟨hper, rfl, rfl, hz, by rw [← h_cfg]; exact hfull, hmono⟩
   · exact absurd h_step (by simp)
 
+/-! ## Registry invariants — turning carried hypotheses into consequences
+
+Several theorems across the tree carry a hypothesis of the shape "the registry is well-formed",
+described in their docstrings as an invariant of reachable states **assumed rather than proved**:
+`BlastRadius.no_role_seizes_unlock_position`'s `h_wf`, and `HolderValue`'s `h_unalloc_flex`. That
+is the weakest footing a theorem can have, and in both cases the invariant is actually provable
+about the two helpers that write the registry. Proving it here, in the core model, lets both
+modules discharge their hypotheses instead of carrying them.
+
+Two properties, both about the standard-unlock registry:
+
+* **`RegistryBounded`** — no entry sits at or above the id counter. This is what makes
+  `HolderValue`'s `Σ` over `List.range nextUnlockId` a *complete* sum rather than a truncation.
+* **`OwnerPointerSound`** — an address's pending-request pointer references a position that
+  address owns. This is what stops `requestUnlock`'s top-up branch from rewriting somebody
+  else's recorded amount.
+-/
+
+/-- No registry entry sits at or above the id counter. -/
+def RegistryBounded (s : State) : Prop :=
+  (∀ i, s.nextUnlockId ≤ i → s.unlockRequests i = none) ∧
+  (∀ i, s.nextUnlockId ≤ i → s.flexibleUnlockRequests i = none)
+
+/-- Every pending-request pointer references a **live position that its own holder owns** — both
+the receipt and the request entry. The request clause is what links a pointer to the id counter,
+and so to `RegistryBounded`. -/
+def OwnerPointerSound (s : State) : Prop :=
+  ∀ a i, s.unlockRequestId a = some i →
+    s.unlockTokenOwner i = some a ∧ ∃ amt ce, s.unlockRequests i = some (a, amt, ce)
+
+/-- The empty state satisfies both: every registry field is constantly `none`. -/
+theorem registryInvariants_default :
+    RegistryBounded (default : State) ∧ OwnerPointerSound (default : State) :=
+  ⟨⟨fun _ _ => rfl, fun _ _ => rfl⟩, fun _ _ h => by simp at h⟩
+
+/-- The fresh id is at the counter, hence at or above it — so the `h_unalloc_flex` hypothesis
+`HolderValue` carries is a consequence of `RegistryBounded`, not an extra assumption. -/
+theorem flex_unallocated_at_counter (s : State) (h : RegistryBounded s) :
+    s.flexibleUnlockRequests s.nextUnlockId = none :=
+  h.2 s.nextUnlockId (Nat.le_refl _)
+
+/-- Same on the standard side. -/
+theorem std_unallocated_at_counter (s : State) (h : RegistryBounded s) :
+    s.unlockRequests s.nextUnlockId = none :=
+  h.1 s.nextUnlockId (Nat.le_refl _)
+
+/-- **The hypothesis `BlastRadius.no_role_seizes_unlock_position` carries**, read off the
+invariant: a caller's pointer references a receipt that caller owns. -/
+theorem pointer_owns_receipt (s : State) (caller : Address) (h : OwnerPointerSound s) :
+    ∀ i, s.unlockRequestId caller = some i → s.unlockTokenOwner i = some caller :=
+  fun i hi => (h caller i hi).1
+
+/-- Allocating a fresh position preserves boundedness: the entry lands exactly at the old counter
+and the counter moves past it. -/
+theorem registryBounded_createStandardUnlock (s : State) (owner : Address) (amount : Nat)
+    (h : RegistryBounded s) : RegistryBounded (createStandardUnlock s owner amount) := by
+  obtain ⟨hstd, hflex⟩ := h
+  refine ⟨?_, ?_⟩ <;> intro i hi
+  · have hge : s.nextUnlockId + 1 ≤ i := by simpa [createStandardUnlock] using hi
+    have hne : i ≠ s.nextUnlockId := by omega
+    simp [createStandardUnlock, hne, hstd i (by omega)]
+  · have hge : s.nextUnlockId + 1 ≤ i := by simpa [createStandardUnlock] using hi
+    simpa [createStandardUnlock] using hflex i (by omega)
+
+/-- **Allocating a fresh position keeps every pointer sound.** The owner's pointer is redirected
+to the new id, whose receipt *and* request entry are both written for that same owner in the same
+update. Every other address's pointer is untouched, and cannot have referenced the new id: their
+request entries are live, while `RegistryBounded` puts the counter's entry at `none`. -/
+theorem ownerPointerSound_createStandardUnlock (s : State) (owner : Address) (amount : Nat)
+    (hb : RegistryBounded s) (h : OwnerPointerSound s) :
+    OwnerPointerSound (createStandardUnlock s owner amount) := by
+  intro a i hptr
+  by_cases ha : a = owner
+  · subst ha
+    have hi : i = s.nextUnlockId := by
+      simpa [createStandardUnlock] using hptr.symm
+    subst hi
+    exact ⟨by simp [createStandardUnlock], amount, s.now + cooldownPeriod, by
+      simp [createStandardUnlock]⟩
+  · have hptr' : s.unlockRequestId a = some i := by simpa [createStandardUnlock, ha] using hptr
+    obtain ⟨hown, amt, ce, hreq⟩ := h a i hptr'
+    have hne : i ≠ s.nextUnlockId := by
+      intro hcontra
+      rw [hcontra] at hreq
+      rw [std_unallocated_at_counter s hb] at hreq
+      exact absurd hreq (by simp)
+    exact ⟨by simp [createStandardUnlock, hne, hown], amt, ce, by
+      simp [createStandardUnlock, hne, hreq]⟩
+
 /-! ## The published redemption price has exactly two writers
 
 `Safety.lean`'s `solvency_preserved` needs `redemptionValue ≤ ray` at every state it visits, and

@@ -1474,11 +1474,13 @@ private theorem fee_le_start (rt now : Nat) : flexibleUnlockFee rt now ≤ 350 :
 
 /-- T4 companion — unlock positions cannot be seized.
 
-One hypothesis the earlier draft of this docstring did not mention: `h_wf`, that the acting
-caller's pending-request pointer references a position that caller owns. It is an invariant of
-reachable states and is **assumed here, not proved**; without it the caller's `requestUnlock`
-top-up branch could rewrite another user's recorded amount, so it is load-bearing rather than
-decorative.
+One hypothesis to name: `h_wf`, that the acting caller's pending-request pointer references a
+position that caller owns. Without it the caller's `requestUnlock` top-up branch could rewrite
+another user's recorded amount, so it is load-bearing rather than decorative. It used to be
+described here as an invariant of reachable states *assumed rather than proved*; it is proved
+now — `Apyx.OwnerPointerSound` is that invariant, `pointer_owns_receipt` extracts exactly this
+hypothesis from it, and `ownerPointerSound_createStandardUnlock` shows fresh allocation preserves
+it. Callers holding the invariant can discharge `h_wf` rather than assume it.
 
 Under it: if address `u` holds a live unlock position `id` (recorded below the id counter, as
 every position created by `step` is) and **anyone other than `u`** — any compromised role,
