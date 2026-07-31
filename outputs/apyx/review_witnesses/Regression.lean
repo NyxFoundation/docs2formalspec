@@ -596,4 +596,81 @@ example : (execTrace { dlf with denylist := fun _ => false }
 example : step dl (Op.requestUnlock 100) 2 ≠ none := by decide
 example : step dl (Op.flexibleRequestUnlock 100) 2 ≠ none := by decide
 
+/-! ## R14 — `solvency_preserved` is not vacuous
+
+S2 is the one trace theorem still resting on an **assumed** invariant: it requires `WellFormed` to
+hold at every prefix of the trace (`∀ n, WellFormed (execTrace s (σ.take n))`), because the
+aggregate ledger carries no `Σ balances = supply` fact to derive it from (§6.2). An assumed
+hypothesis is worth nothing if nothing satisfies it, so this section exhibits a state and a
+non-trivial trace that do.
+
+The trace is honest traffic: the clock advances, then a whitelisted holder deposits USDC and is
+minted apxUSD 1:1. Both the balance bound and the price bound survive it, and the conclusion
+`Solvent` is reached rather than assumed.
+-/
+
+/-- One holder owning the whole supply, fully backed, priced at par. -/
+def sv0 : State :=
+  { (default : State) with
+      globalPause := false
+      whitelist := fun _ => true
+      apxUSDBal := fun a => if a = 1 then 100 else 0
+      totalSupply_apxUSD := 100
+      usdcBal := fun a => if a = 1 then 50 else 0
+      usdcReserve := 0
+      totalCollateralValue := 100
+      redemptionValue := ray }
+
+def svTrace : List (Op × Address) := [(Op.tick 100, 0), (Op.depositUSDC 50, 1)]
+
+/-- The three distinct prefix states, named. -/
+def sv1 : State := execTrace sv0 [(Op.tick 100, 0)]
+def sv2 : State := execTrace sv0 svTrace
+
+/-- Balances are either zero or the whole supply in each state, which is what the balance half of
+`WellFormed` needs. -/
+private theorem svWF (t : State) (x : Nat)
+    (hb : t.apxUSDBal = fun a => if a = 1 then x else 0)
+    (hx : x ≤ t.totalSupply_apxUSD)
+    (hp : t.redemptionValue ≤ ray) : WellFormed t := by
+  refine ⟨fun a => ?_, hp⟩
+  rw [hb]
+  by_cases h : a = 1 <;> simp [h] <;> try omega
+
+private theorem sv0_bal : sv0.apxUSDBal = fun a => if a = 1 then 100 else 0 := rfl
+private theorem sv1_bal : sv1.apxUSDBal = fun a => if a = 1 then 100 else 0 := rfl
+private theorem sv2_bal : sv2.apxUSDBal = fun a => if a = 1 then 150 else 0 := by
+  funext a
+  by_cases h : a = 1 <;> simp [sv2, sv0, svTrace, execTrace, step, mintApxUSD, emitEvent, h]
+
+example : Solvent sv0 := by unfold Solvent sv0; decide
+
+/-- The deposit really happens: supply and reserve both rise by 50. -/
+example : sv2.totalSupply_apxUSD = 150 ∧ sv2.usdcReserve = 50 := by decide
+
+/-- **The assumed invariant is satisfiable along the whole trace.** Every prefix — and there are
+only three distinct ones — is well-formed. -/
+theorem svTrace_wellFormed : ∀ n, WellFormed (execTrace sv0 (svTrace.take n)) := by
+  have w0 : WellFormed sv0 := svWF sv0 100 sv0_bal (by decide) (by unfold sv0; decide)
+  have w1 : WellFormed sv1 := svWF sv1 100 sv1_bal (by decide) (by decide)
+  have w2 : WellFormed sv2 := svWF sv2 150 sv2_bal (by decide) (by decide)
+  intro n
+  match n with
+  | 0 => exact w0
+  | 1 => exact w1
+  | (k + 2) =>
+    have htake : svTrace.take (k + 2) = svTrace := by
+      apply List.take_of_length_le; simp [svTrace]
+    rw [htake]; exact w2
+
+/-- **So S2 applies, and its conclusion is reached rather than assumed.** The trace contains none
+of the five excluded operations, so `solvency_preserved` discharges to `Solvent` at the end. -/
+theorem svTrace_stays_solvent : Solvent (execTrace sv0 svTrace) := by
+  refine solvency_preserved sv0 svTrace (by unfold Solvent sv0; decide) svTrace_wellFormed ?_
+  intro p hp
+  have hcases : p = (Op.tick 100, 0) ∨ p = (Op.depositUSDC 50, 1) := by
+    simpa [svTrace] using hp
+  rcases hcases with rfl | rfl <;>
+    exact ⟨by simp, by simp, by simp, by simp, by simp⟩
+
 end Apyx
