@@ -679,6 +679,90 @@ theorem solvency_preserved (s : State) (σ : List (Op × Address))
       intro n
       simpa [execTrace, hstep] using h_wf (n + 1)
 
+/-! ### Halving what `solvency_preserved` assumes
+
+The hypothesis above — `WellFormed` at every prefix — is an *assumed* invariant, which is the
+weakest thing a trace theorem can rest on. It splits into two conjuncts with very different
+status.
+
+The price bound `redemptionValue ≤ ray` is **derivable**: `Apyx.lean`'s `redemptionValue_frame`
+shows only `updateRedemptionValue` and `catastrophicBackstop` write the field, and the latter is
+already excluded, so excluding the former lets the bound propagate from the initial state.
+
+The balance bound `∀ a, apxUSDBal a ≤ totalSupply_apxUSD` is **not** derivable, and this is a
+limit of the abstraction rather than a missing proof: with `apxUSDBal` a free function over an
+unbounded address type there is no `Σ` relating it to the supply, so a burn lowers the supply
+without any invariant keeping other holders' balances underneath it (§6.2).
+
+`solvency_preserved_price_derived` below therefore assumes strictly less than
+`solvency_preserved`: the price bound once at the start rather than at every prefix.
+-/
+
+/-- The balance half of `WellFormed`, isolated. -/
+def BalancesUnderSupply (s : State) : Prop := ∀ a, s.apxUSDBal a ≤ s.totalSupply_apxUSD
+
+/-- The price half, isolated. -/
+def PriceUnderPar (s : State) : Prop := s.redemptionValue ≤ ray
+
+theorem wellFormed_iff (s : State) :
+    WellFormed s ↔ BalancesUnderSupply s ∧ PriceUnderPar s := Iff.rfl
+
+/-- The price bound survives any step that is not one of its two writers. -/
+theorem priceUnderPar_step (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') (h : PriceUnderPar s)
+    (h_not_update : ∀ v, op ≠ Op.updateRedemptionValue v)
+    (h_not_backstop : op ≠ Op.catastrophicBackstop) :
+    PriceUnderPar s' := by
+  unfold PriceUnderPar at h ⊢
+  rw [redemptionValue_frame s op caller s' h_step h_not_update h_not_backstop]
+  exact h
+
+/-- And therefore along a whole trace that avoids them. -/
+theorem priceUnderPar_trace (s : State) (σ : List (Op × Address)) (h : PriceUnderPar s)
+    (h_excl : ∀ p ∈ σ, (∀ v, p.1 ≠ Op.updateRedemptionValue v) ∧
+      p.1 ≠ Op.catastrophicBackstop) :
+    PriceUnderPar (execTrace s σ) := by
+  induction σ generalizing s with
+  | nil => exact h
+  | cons p σ ih =>
+    obtain ⟨op, c⟩ := p
+    have hhead := h_excl (op, c) List.mem_cons_self
+    have htail : ∀ q ∈ σ, (∀ v, q.1 ≠ Op.updateRedemptionValue v) ∧
+        q.1 ≠ Op.catastrophicBackstop := fun q hq => h_excl q (List.mem_cons_of_mem _ hq)
+    simp only [execTrace]
+    cases hstep : step s op c with
+    | none => exact ih s h htail
+    | some s1 => exact ih s1 (priceUnderPar_step s op c s1 hstep h hhead.1 hhead.2) htail
+
+/-- **S2 with the price bound derived rather than assumed.**
+
+Same conclusion as `solvency_preserved`, from a strictly weaker hypothesis: `PriceUnderPar` is
+required only at the initial state, not at every prefix. The cost is one more excluded operation,
+`updateRedemptionValue` — which is not a real narrowing for a solvency argument, since that
+operation is precisely the admin's unbounded repricing lever (`admin_alone_moves_redemption_price`)
+and the report's headline recommendation is to put a floor on it.
+
+What is still assumed at every prefix is the balance bound, for the structural reason given
+above. -/
+theorem solvency_preserved_price_derived (s : State) (σ : List (Op × Address))
+    (h_solvent : Solvent s)
+    (h_price : PriceUnderPar s)
+    (h_bal : ∀ n, BalancesUnderSupply (execTrace s (σ.take n)))
+    (h_excl : ∀ p ∈ σ, (∀ id, p.1 ≠ Op.claimUnlock id) ∧
+      (∀ id, p.1 ≠ Op.flexibleClaimUnlock id) ∧ (∀ a, p.1 ≠ Op.handleStressEvent a) ∧
+      p.1 ≠ Op.catastrophicBackstop ∧ (∀ amt r, p.1 ≠ Op.withdrawReserve amt r) ∧
+      (∀ v, p.1 ≠ Op.updateRedemptionValue v)) :
+    Solvent (execTrace s σ) := by
+  refine solvency_preserved s σ h_solvent ?_ ?_
+  · intro n
+    refine ⟨h_bal n, ?_⟩
+    exact priceUnderPar_trace s (σ.take n) h_price (fun p hp =>
+      ⟨(h_excl p (List.mem_of_mem_take hp)).2.2.2.2.2,
+       (h_excl p (List.mem_of_mem_take hp)).2.2.2.1⟩)
+  · intro p hp
+    exact ⟨(h_excl p hp).1, (h_excl p hp).2.1, (h_excl p hp).2.2.1,
+      (h_excl p hp).2.2.2.1, (h_excl p hp).2.2.2.2.1⟩
+
 /-! ## S3 `rounding_favors_protocol` — vault conversions round in the protocol's favor
 
 Pure `Nat`-arithmetic strengthening of `req_erc4626_compliance` (`Apyx.lean`), which

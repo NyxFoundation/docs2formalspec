@@ -3752,6 +3752,40 @@ theorem req_yield_distribution_period (s : State) (amount : Nat) (caller : Addre
     exact ⟨hper, rfl, rfl, hz, by rw [← h_cfg]; exact hfull, hmono⟩
   · exact absurd h_step (by simp)
 
+/-! ## The published redemption price has exactly two writers
+
+`Safety.lean`'s `solvency_preserved` needs `redemptionValue ≤ ray` at every state it visits, and
+takes it as a hypothesis re-verified along the trace. Half of that assumption is avoidable: only
+`updateRedemptionValue` and `catastrophicBackstop` write the field at all, so on a trace that
+excludes them the bound propagates from the initial state instead of being assumed at each step.
+
+The other half — `∀ a, apxUSDBal a ≤ totalSupply_apxUSD` — genuinely cannot be derived here, and
+that is a property of the abstraction rather than an omission: `apxUSDBal` is a free function over
+an unbounded address type and `totalSupply_apxUSD` a free `Nat`, with no `Σ` tying them together,
+so burning from one holder lowers the supply without any invariant saying the *other* holders'
+balances still fit under it (`README` §6.2, the aggregate-ledger limitation).
+-/
+
+/-- **Only `updateRedemptionValue` and `catastrophicBackstop` move the published price.**
+Exhaustive over the closed `Op`; every other branch leaves the field bitwise alone. -/
+theorem redemptionValue_frame (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s')
+    (h_not_update : ∀ v, op ≠ Op.updateRedemptionValue v)
+    (h_not_backstop : op ≠ Op.catastrophicBackstop) :
+    s'.redemptionValue = s.redemptionValue := by
+  cases op
+  case updateRedemptionValue v => exact absurd rfl (h_not_update v)
+  case catastrophicBackstop => exact absurd rfl h_not_backstop
+  all_goals
+    simp only [step] at h_step
+    (repeat' split at h_step) <;>
+      first
+        | (cases Option.some.inj h_step; rfl)
+        | (cases Option.some.inj h_step; simp)
+        | (cases Option.some.inj h_step
+           simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD])
+        | exact absurd h_step (by simp)
+
 /-! ## The clock is a monopoly
 
 `docs/06` §7.3 E1 added `Op.tick` so that time-dependent properties are stateable at all. That
