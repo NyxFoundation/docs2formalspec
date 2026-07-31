@@ -3,10 +3,14 @@ import D2fsSpecs.HolderValue
 /-!
 # Regression tests for the ERC-4626 pricing fix
 
-These are the five counterexamples from `code_review_lean.md` §1.0, re-pointed at the **fixed**
-model. Before the fix each of these files proved the model *violated* a README §4.2 headline
-claim; each assertion below now pins the corrected behaviour instead, so the holes cannot
-silently reopen.
+These began as the five counterexamples from `code_review_lean.md` §1.0, re-pointed at the
+**fixed** model; the file now runs R1–R13 as later fixes landed. Before the fix each of the
+original five proved the model *violated* a README §4.2 headline claim; each assertion below pins
+the corrected behaviour instead.
+
+Read "pins" carefully: most assertions discriminate — they would fail if the fix were reverted —
+but a few are markers rather than discriminators, and those say so where they sit (§R4's
+denominator note is the clearest example).
 
 The fix, grounded in the verified deployment (`../deployment_ground_truth.md`):
 
@@ -16,7 +20,8 @@ The fix, grounded in the verified deployment (`../deployment_ground_truth.md`):
 * Every conversion and every `step` branch prices off it. The `exchangeRate` **field** is now a
   published record only — it is never a pricing input.
 
-All assertions are `by decide` / `rfl`; no `native_decide`.
+Assertions are `by decide` / `rfl` or term-mode applications of the theorems they exercise; no
+`native_decide` anywhere.
 
 Run with:
 ```
@@ -71,8 +76,9 @@ example : redeemAssets (w3.apyUSDBal 1) (computeExchangeRate w3)
     out — the floor rounding goes to the protocol, per `rounding_favors_protocol`. -/
 example : redeemAssets (w4.apyUSDBal 2) (computeExchangeRate w4) = 99 := by decide
 
-/-- `no_dilution` now applies here with **no** side conditions — the `hbacked` and
-    `0 < totalSupply_apyUSD` hypotheses it used to need are gone. -/
+/-- `no_dilution` now applies here with no *state* side conditions — the `hbacked` and
+    `0 < totalSupply_apyUSD` hypotheses it used to need are gone. The structural `h ≠ caller`
+    remains, and is what the trailing `by decide` discharges. -/
 example : ∀ s' , step w3 (Op.lockApxUSD 100) 2 = some s' →
     s'.apyUSDBal 1 = w3.apyUSDBal 1 ∧
     convertToAssets w3 (w3.apyUSDBal 1) ≤ convertToAssets s' (s'.apyUSDBal 1) :=
@@ -110,7 +116,7 @@ example : redeemAssets (t1.apyUSDBal 2) (computeExchangeRate t1) = 117
         ∧ redeemAssets (t0.apyUSDBal 3) (computeExchangeRate t0) = 100
         ∧ redeemAssets (t1.apyUSDBal 3) (computeExchangeRate t1) = 117 := by decide
 
-/-! ## R4 — the `x / 0 = 0` vault drain is structurally impossible
+/-! ## R4 — the `x / 0 = 0` vault drain is closed on the live rate
 
 Formerly `W4_zero_rate_drain.lean`: with `exchangeRate = 0` (the `default`), `withdrawShares`
 returned 0, the `apyUSDBal` guard read `0 < 0`, and an address holding **no shares** drained the
@@ -129,11 +135,15 @@ def u0 : State :=
 example : u0.exchangeRate = 0 ∧ withdrawShares 100 (computeExchangeRate (pullVestedYield u0)) = 100 := by
   decide
 
-/-- **The fix.** Address `9` holds no shares, so the withdrawal reverts. -/
+/-- **The fix.** The withdrawal reverts. The operative cause is the live rate being par, so
+    `withdrawShares 100 = 100 > 0` and the share-balance guard bites on address `9`, who holds
+    none — before the fix the rate floored to 0, the cost was 0, and the guard read `0 < 0`. -/
 example : step u0 (Op.withdraw 100 9) 9 = none := by decide
 
-/-- The *denominator* of the live rate is `totalSupply_apyUSD + 1`, so `computeExchangeRate` is
-    always well-defined. That is weaker than it first looks — see R4b. -/
+/-- `Nat.succ_pos` on the live rate's denominator expression. Retained as a marker of what the
+    `+1` buys, but note it is a tautology about any `Nat` and mentions `computeExchangeRate`
+    nowhere — it would pass with or without the fix, and R4b below is where the real content
+    is. -/
 example (s : State) : 0 < s.totalSupply_apyUSD + 1 := Nat.succ_pos _
 
 /-! ### R4b — the rate itself can still floor to zero, and that needed its own guard
@@ -362,7 +372,8 @@ def tb : State :=
 /-- Timelock of 500 clock units, empty queue. -/
 def tl0 : TLState := ⟨tb, [], 500⟩
 
-/-- **Privileged operations cannot bypass the queue.** -/
+/-- **`catastrophicBackstop` cannot bypass the queue.** (The general fact — `direct` refuses
+    every `AdminOp` — is `step2tl`'s `isAdminOp` guard; only this instance is exhibited here.) -/
 example : step2tl tl0 (TLOp.direct Op.catastrophicBackstop 7) = none := by decide
 
 /-- Queueing announces without applying: the base state is bitwise untouched. -/
@@ -381,9 +392,17 @@ example : (execTraceTL q [TLOp.direct (Op.tick 500) 0, TLOp.execute 0]).base.red
         ∧ (execTraceTL q [TLOp.direct (Op.tick 500) 0, TLOp.execute 0]).pending.length = 0 := by
   decide
 
-/-- **And the escape actually works.** Mid-window a holder exits through `direct` — no queueing,
-    no waiting — while the queued change is still pending and the old parameters are still in
-    force. This is what the wrapper previously could not do. -/
+/-- **And the escape route is usable mid-window.** A holder *initiates* an exit through `direct`
+    — unqueued, no `AdminOp` involved — while the queued change is still pending and the old
+    parameters are still in force. This is what the wrapper previously could not do, because
+    `direct` did not exist.
+
+    Read the postcondition narrowly. `requestUnlock` opens a position; it does **not** return
+    funds, and the position matures only after `cooldownPeriod` (20 days = 1728000 clock units)
+    against a `delay` of 500 here — some 3456 windows after the queued `catastrophicBackstop`
+    would land. So `apxUSDBal 1 = 0` below records the burn, not a completed exit, and it is what
+    a confiscation would also look like. What the wrapper buys is an unqueued *entry point*
+    during the window, not settlement within it. -/
 example :
     (execTraceTL q [TLOp.direct (Op.tick 100) 0, TLOp.direct (Op.requestUnlock 100) 1]).base.apxUSDBal 1
         = 0
@@ -494,7 +513,9 @@ example : (execTrace2 ⟨cb, 0, 100, 100, 0⟩ [(Op.executeRFQRedemption 1 100, 
         ∧ (execTrace2 ⟨cb, 0, 100, 100, 0⟩
             [(Op.executeRFQRedemption 1 100, 2)]).base.usdcReserve = 0 := by decide
 
-/-- Both halves of the charge are lower bounds on it, which is what makes neither escapable. -/
+/-- Each half lower-bounds the per-step charge, so no single step can be metered below either
+    quantity. Both are single-step results: there is no trace-level bound on claims destroyed,
+    only on reserve outflow (`rate_limit_linear_bound`). -/
 example (s s' : State) : s.usdcReserve - s'.usdcReserve ≤ stepCost s s' :=
   reserve_out_le_stepCost s s'
 example (s s' : State) : s.totalSupply_apxUSD - s'.totalSupply_apxUSD ≤ stepCost s s' :=
@@ -508,7 +529,10 @@ On-chain `ApyUSD` overrides `_update` against both `ERC20PausableUpgradeable` an
 `ERC20DenyListUpgradable`, so every mint, burn and transfer is gated structurally rather than by
 remembering to check in each entry point.
 
-Three of the four are gated now; the claim paths are still open (see `README` §9.3).
+All four are gated now, and so are both claim paths — the examples below check each direction,
+including that a clean owner on a live token still settles. (An earlier draft of this header said
+"three of the four … the claim paths are still open", which its own examples twenty lines down
+already refuted.)
 -/
 
 def dl : State :=

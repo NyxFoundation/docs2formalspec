@@ -21,12 +21,15 @@ ended 50 worse off" has to be encoded as a pair of inequalities and any statemen
 
 `holderValue` below is the complete measure, and `netValue` is its signed form. The summation
 `docs/06` said the aggregate ledger could not express is available after all: positions live at
-ids below `nextUnlockId`, so `List.range s.nextUnlockId` is a finite domain to fold over.
+ids below `nextUnlockId`, so `List.range s.nextUnlockId` is a finite domain to fold over. That
+last clause is the load-bearing one and it is **proved** rather than assumed — `RegistryBounded`
+below, preserved by fresh allocation, is what makes "complete" mean complete.
 
-Scope: Apyx holders carry no debt, so `netValue` is never negative in a reachable state — the
-`Int` is here to make *changes* honest, not to model insolvency. The per-account solvency family
-of `docs/06` §8 remains inapplicable to Apyx by design (§8.1: aggregate ledger, no per-position
-collateral).
+Scope: `netValue` is a coercion of a `Nat`, so it is non-negative in **every** state by
+construction — not because Apyx holders carry no debt, though they do not. The signedness
+therefore buys expressiveness only one level up, at `netDelta`, which is where a deficit becomes
+representable. The per-account solvency family of `docs/06` §8 remains inapplicable to Apyx by
+design (§8.1: aggregate ledger, no per-position collateral).
 -/
 
 namespace Apyx
@@ -119,7 +122,9 @@ theorem stdPositions_createStandardUnlock (s : State) (owner : Address) (amount 
   simp [stdAmt, createStandardUnlock]
 
 /-- A fresh standard position never touches the flexible sum: `createStandardUnlock` writes no
-flexible entry, and the one new id it opens carries none. -/
+flexible entry, so **provided** the fresh id carries no flexible entry — the hypothesis, which
+`unalloc_flex_of_registryBounded` discharges from the registry invariant — the flexible sum is
+unchanged. -/
 theorem flexPositions_createStandardUnlock (s : State) (owner : Address) (amount : Nat)
     (a : Address) (h_unalloc : s.flexibleUnlockRequests s.nextUnlockId = none) :
     flexPositions (createStandardUnlock s owner amount) a = flexPositions s a := by
@@ -138,6 +143,55 @@ theorem flexPositions_createStandardUnlock (s : State) (owner : Address) (amount
   rw [hagree]
   simp [hlast]
 
+/-! ## The invariant the measure's completeness rests on
+
+`stdPositions`/`flexPositions` fold over `List.range s.nextUnlockId`, so they **silently drop**
+any registry entry at an id at or above the counter. Calling `holderValue` "everything `a` owns"
+is therefore conditional on no such entry existing — which the module used to assert in prose and
+never prove. It is provable, and proving it also discharges the `h_unalloc_flex` hypothesis that
+several theorems below carry.
+-/
+
+/-- No registry entry sits at or above the id counter. -/
+def RegistryBounded (s : State) : Prop :=
+  (∀ i, s.nextUnlockId ≤ i → s.unlockRequests i = none) ∧
+  (∀ i, s.nextUnlockId ≤ i → s.flexibleUnlockRequests i = none)
+
+/-- The empty state satisfies it — both registries are constantly `none`. -/
+theorem registryBounded_default : RegistryBounded (default : State) :=
+  ⟨fun _ _ => rfl, fun _ _ => rfl⟩
+
+/-- **The hypothesis several theorems below take is a consequence of the invariant**, not an
+extra assumption about the world: the fresh id is at the counter, so it is at or above it. -/
+theorem unalloc_flex_of_registryBounded (s : State) (h : RegistryBounded s) :
+    s.flexibleUnlockRequests s.nextUnlockId = none :=
+  h.2 s.nextUnlockId (Nat.le_refl _)
+
+/-- And the standard side, for symmetry. -/
+theorem unalloc_std_of_registryBounded (s : State) (h : RegistryBounded s) :
+    s.unlockRequests s.nextUnlockId = none :=
+  h.1 s.nextUnlockId (Nat.le_refl _)
+
+/-- Allocating a fresh standard position preserves it: the entry lands exactly at the old counter
+and the counter moves past it. -/
+theorem registryBounded_createStandardUnlock (s : State) (owner : Address) (amount : Nat)
+    (h : RegistryBounded s) : RegistryBounded (createStandardUnlock s owner amount) := by
+  obtain ⟨hstd, hflex⟩ := h
+  constructor
+  · intro i hi
+    have hne : i ≠ s.nextUnlockId := by
+      have : s.nextUnlockId + 1 ≤ i := by simpa [createStandardUnlock] using hi
+      omega
+    have : s.nextUnlockId ≤ i := by
+      have : s.nextUnlockId + 1 ≤ i := by simpa [createStandardUnlock] using hi
+      omega
+    simp [createStandardUnlock, hne, hstd i this]
+  · intro i hi
+    have : s.nextUnlockId ≤ i := by
+      have : s.nextUnlockId + 1 ≤ i := by simpa [createStandardUnlock] using hi
+      omega
+    simpa [createStandardUnlock] using hflex i this
+
 /-! ## The holder-centric law, as a general theorem
 
 This is what the module exists for: under the *complete* measure, filing a standard redemption
@@ -145,7 +199,9 @@ does not move the filer's value. `Safety.valueAt` reported a strict fall here, p
 position the burn turns into was unmeasured.
 -/
 
-/-- **Filing a standard redemption is value-neutral for the filer**, under the complete measure.
+/-- **Filing a standard redemption is value-neutral for the filer**, under the complete measure —
+on the fresh-position branch, with a balance that covers the amount and a registry whose fresh id
+carries no flexible entry (`h_unalloc_flex`, discharged by `unalloc_flex_of_registryBounded`).
 
 The fresh-position branch: the caller has no live standard position, so `requestUnlockStep` takes
 the `createStandardUnlock` route. The apxUSD leaves the balance and reappears in the position, at
@@ -342,8 +398,9 @@ theorem redeem_receiver_position_gain (s : State) (shares : Nat) (receiver calle
 
 Making the relationship explicit, rather than leaving readers to compare two definitions by eye.
 `Safety.callerValue` is exactly `holderValue` minus the two position sums — so every
-`caller_value_*` theorem in `Safety.lean` is a statement about a strict *under*-count of what the
-address owns, and the gap is precisely the pending-redemption channel.
+`caller_value_*` theorem in `Safety.lean` is a statement about an *under*-count of what the
+address owns, strict exactly when the address has a pending position and an equality otherwise.
+The gap is precisely the pending-redemption channel.
 -/
 
 /-- `Safety.callerValue` is `holderValue` with the positions removed. -/
@@ -359,7 +416,9 @@ theorem callerValue_le_holderValue (s : State) (a : Address) :
   omega
 
 /-- **What `caller_value_withdraw_fixedRate`'s "fall" actually is.** Withdrawing to yourself moves
-nothing of yours except shares, and the payout appears in your position sum at face value.
+none of your apxUSD or USDC, and the payout appears in your standard-position sum at face value.
+(The flexible column is not among the conjuncts below — for that see `holder_value_withdraw`,
+which needs `h_unalloc_flex` to say anything about it.)
 
 `Safety.caller_value_withdraw_fixedRate` records this step as a decrease, and that reading is an
 artifact of the missing term: `apxUSDBal` and `usdcBal` are untouched, so everything the old
@@ -480,8 +539,12 @@ def hvRLate : State :=
 
 example : netDelta hvr0 hvRNow 1 = 0 := by decide
 
-/-- **The loss is a first-class quantity.** `-50`, not a truncated `Nat` subtraction — and the
-    counterparty chose which of the two traces to run. -/
+/-- **The loss is a first-class quantity.** `-50`, not a truncated `Nat` subtraction.
+
+    Note who does what: the lossy trace begins with `updateRedemptionValue`, which is **admin**-
+    gated (address `7` is `hvr0.admin`), so the counterparty alone cannot produce it. The two
+    traces differ by an admin reprice, not by a counterparty choice — the timing option is real
+    but it is the *second* half of a two-role sequence. -/
 example : netDelta hvr0 hvRLate 1 = -50 := by decide
 
 /-- Both traces consume the request, so the holder has no second attempt. -/
@@ -845,9 +908,10 @@ at — `computeExchangeRate (pullVestedYield s)`, the rate the share cost is cei
 Pricing at any other rate mixes denominators: a stale rate under-prices the burned shares
 and the step would (spuriously) read as a gain.
 
-Any `receiver`: if the position goes to someone else the caller strictly pays; if to the
-caller, the ceil-rounded share cost covers the position credit (`withdrawShares_covers`),
-with the zero-share guard (`Regression.lean` §R4b) supplying the nonzero cost. -/
+Any `receiver`: if the position goes to someone else the caller pays (the bound is `≤`, and it is
+not strict at `assets = 0`); if to the caller, the ceil-rounded share cost covers the position
+credit (`withdrawShares_covers`), with the zero-share guard (`Regression.lean` §R4b) supplying the
+nonzero cost. Assumes `h_unalloc_flex`, which `unalloc_flex_of_registryBounded` discharges. -/
 theorem holder_value_withdraw (s : State) (assets : Nat) (receiver caller : Address)
     (s' : State) (h_step : step s (Op.withdraw assets receiver) caller = some s')
     (h_unalloc_flex : s.flexibleUnlockRequests s.nextUnlockId = none) :
@@ -949,15 +1013,20 @@ theorem holder_value_redeem (s : State) (shares : Nat) (receiver caller : Addres
     omega
 
 /-- **S6, complete-measure umbrella**: for each of the five op families
-`Safety.caller_net_nonpositive` covers, there is a single pricing rate — the rate the step
-executes at — under which the caller's *complete* holdings (balances, shares, and pending
-positions) do not rise. For `depositUSDC`/`lockApxUSD`/`redeemApxUSD` that rate is
-`computeExchangeRate s`; for `withdraw`/`redeem` it is
-`computeExchangeRate (pullVestedYield s)` — the per-op theorems above carry the exact rate
-and the exact (in)equality.
+`Safety.caller_net_nonpositive` covers, **there exists** a pricing rate under which one step does
+not raise the caller's *complete* holdings (balances, shares, and pending positions). For
+`depositUSDC`/`lockApxUSD`/`redeemApxUSD` that rate is `computeExchangeRate s`; for
+`withdraw`/`redeem` it is `computeExchangeRate (pullVestedYield s)` — the per-op theorems above
+name each one and carry the exact (in)equality.
 
-This discharges the old umbrella's honesty caveat that its ledger "does not track the
-unlock-registry column": the column is tracked now, and the bound survives. -/
+**Three things this does not say.** The rate is existentially quantified here, so the statement on
+its own is weaker than the per-op theorems it packages. Because the rate *differs by family*, these
+bounds do **not** chain along a trace — there is no `execTrace` statement anywhere in this module.
+And it inherits two hypotheses: `redemptionValue ≤ ray`, and a registry whose fresh id carries no
+flexible entry (`unalloc_flex_of_registryBounded` discharges the second).
+
+What it does do is retire the old umbrella's caveat that its ledger "does not track the
+unlock-registry column": the column is tracked now, and the single-step bound survives. -/
 theorem caller_net_nonpositive_complete (s : State) (op : Op) (caller : Address) (s' : State)
     (h_step : step s op caller = some s') (h_rv : s.redemptionValue ≤ ray)
     (h_unalloc_flex : s.flexibleUnlockRequests s.nextUnlockId = none)
