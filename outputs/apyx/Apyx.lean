@@ -281,8 +281,23 @@ direction for a safety report.
 
 `TokenMoveAllowed s a` is that hook for the party whose balance the move touches: the token is not
 paused and `a` is not deny-listed. Each affected guard is written in the direct
-`s.globalPause || s.denylist a` form so `simp` can discharge it; `token_moves_are_hook_gated`
-below states that the balance-moving operations really are gated by this predicate. -/
+`s.globalPause || s.denylist a` form so `simp` can discharge it.
+
+**Two honest notes.** An earlier draft of this docstring cited a theorem
+`token_moves_are_hook_gated` "below" — no such theorem was ever written, and `TokenMoveAllowed`
+itself is referenced by no branch of `step`. It is documentation of the deployment's hook, not a
+predicate the model dispatches on; the guards are inlined per branch instead.
+
+And the list of once-missing checks above was itself incomplete. An audit of this file found four
+further balance-moving branches with **no** deny-list guard at all — `lockApxUSD` (burns apxUSD,
+mints apyUSD), `withdraw` and `redeem` (burn apyUSD, name a receiver), and `executeRFQRedemption`
+(burns the targeted user's apxUSD). All four pass `_update` on chain, so the model was again more
+permissive than the chain, in the same direction and for the same reason. They are gated now,
+folded into each branch's pause test so that no inversion lemma's split chain changed. The
+liveness requirements that assert such a step *succeeds* — `req_lock_apxusd`,
+`req_deposit_permissionless`, `req_synchronous_withdraw_return_token`, and the third conjunct of
+`req_rfq_redemption_allowed` — accordingly now carry the deny-list side conditions they always
+needed. -/
 def TokenMoveAllowed (s : State) (a : Address) : Bool :=
   !s.globalPause && !s.denylist a
 
@@ -704,7 +719,11 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
       let s3 := emitEvent s2 "Deposit" [caller, to, to, amount, amount]
       some s3
   | Op.lockApxUSD amount =>
-    if s.globalPause then none
+    -- burns the caller's apxUSD and mints them apyUSD, so it passes BOTH tokens' `_update`
+    -- hooks — `ApxUSD` and `ApyUSD` each override it against `ERC20DenyListUpgradable`.
+    -- Folded into the pause test rather than given its own branch so the guard count, and
+    -- therefore every inversion lemma's split chain, is unchanged.
+    if s.globalPause || s.denylist caller then none
     else if s.apxUSDBal caller < amount then none
     else
       -- priced at the LIVE rate, as the deployment's `previewDeposit` is
@@ -769,7 +788,9 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
           let s3 := emitEvent s2 "Redeem" [caller, amount, usdcAmount]
           some s3
   | Op.withdraw assets receiver =>
-    if s.globalPause then none
+    -- burns the caller's apyUSD and names a receiver, so it passes `ApyUSD._update`; the
+    -- deployment additionally runs `checkNotDenied` on caller, receiver and owner in `_withdraw`
+    if s.globalPause || s.denylist caller || s.denylist receiver then none
     else
       -- the deployment pulls vested yield BEFORE pricing ("so liquid assets match
       -- totalAssets()"), then prices off the live rate
@@ -793,7 +814,8 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
         let s6 := emitEvent s5 "Withdraw" [caller, receiver, caller, assets, shares]
         some s6
   | Op.redeem shares receiver =>
-    if s.globalPause then none
+    -- same hook as `withdraw`: the caller's apyUSD is burned and a receiver named
+    if s.globalPause || s.denylist caller || s.denylist receiver then none
     else
       let s1 := pullVestedYield s
       if s1.apyUSDBal caller < shares then none
@@ -900,8 +922,10 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     -- an approved RFQ counterparty executes `user`'s previously submitted redemption
     -- request (model.md guard: caller ∈ rfqCounterparties ∧ whitelist[user]); the
     -- execution is capped by the user's outstanding request, which it consumes —
-    -- a counterparty cannot redeem against a user who has not asked for it
-    if s.globalPause then none
+    -- a counterparty cannot redeem against a user who has not asked for it.
+    -- The burn is of the targeted user's apxUSD, so it passes `ApxUSD._update` and the
+    -- deny-list with it
+    if s.globalPause || s.denylist user then none
     else if ¬ (s.rfqCounterparties.contains caller) then none
     else if ¬ s.whitelist user then none
     else if s.rfqRequests user < amount then none
@@ -2633,7 +2657,8 @@ theorem req_rfq_redemption_allowed (s : State) (user caller : Address) (amount :
         s'.rfqRequests user = s.rfqRequests user + amount) ∧
     (∀ s', step s (Op.executeRFQRedemption user amount) caller = some s' →
       s.rfqCounterparties.contains caller = true ∧ amount ≤ s.rfqRequests user) ∧
-    (s.globalPause = false → s.rfqCounterparties.contains caller = true →
+    (s.globalPause = false → s.denylist user = false →
+      s.rfqCounterparties.contains caller = true →
       s.whitelist user = true → amount ≤ s.rfqRequests user →
       amount ≤ s.apxUSDBal user → (amount * s.redemptionValue) / ray ≤ s.usdcReserve →
       ∃ s', step s (Op.executeRFQRedemption user amount) caller = some s') := by
@@ -2646,10 +2671,10 @@ theorem req_rfq_redemption_allowed (s : State) (user caller : Address) (amount :
   · intro s' h
     obtain ⟨_, hcp, _, hreq, _⟩ := step_executeRFQRedemption_some _ _ _ _ _ h
     exact ⟨hcp, hreq⟩
-  · intro h1 h2 hwl hreq h3 h4
+  · intro h1 hdl h2 hwl hreq h3 h4
     have h2' : caller ∈ s.rfqCounterparties := by simpa using h2
     rcases ho : step s (Op.executeRFQRedemption user amount) caller with _ | s'
-    · exact absurd ho (by simp [step, h1, h2', hwl, Nat.not_lt.mpr hreq,
+    · exact absurd ho (by simp [step, h1, hdl, h2', hwl, Nat.not_lt.mpr hreq,
         Nat.not_lt.mpr h3, Nat.not_lt.mpr h4])
     · exact ⟨s', rfl⟩
 
@@ -2837,14 +2862,15 @@ theorem req_redemption_value (s : State) (amount : Nat) (caller : Address)
 
 /-- REQ lock-apxusd: The protocol MUST allow a user to lock apxUSD in the vault and receive apyUSD. -/
 theorem req_lock_apxusd (s : State) (amount : Nat) (caller : Address)
-    (h1 : s.globalPause = false) (h2 : s.apxUSDBal caller ≥ amount)
+    (h1 : s.globalPause = false) (h_dl : s.denylist caller = false)
+    (h2 : s.apxUSDBal caller ≥ amount)
     -- The degenerate zero-rate state now reverts rather than silently minting no shares, so
     -- liveness needs a live price. On-chain this is automatic: OpenZeppelin's single `mulDiv`
     -- has a denominator of at least 1, so it never produces a zero rate at all.
     (h3 : 0 < computeExchangeRate s) :
     ∃ s', step s (Op.lockApxUSD amount) caller = some s' := by
   rcases ho : step s (Op.lockApxUSD amount) caller with _ | s'
-  · exact absurd ho (by simp [step, h1, Nat.not_lt.mpr h2, Nat.pos_iff_ne_zero.mp h3])
+  · exact absurd ho (by simp [step, h1, h_dl, Nat.not_lt.mpr h2, Nat.pos_iff_ne_zero.mp h3])
   · exact ⟨s', rfl⟩
 
 -- /-- REQ price-may-include-spreads: The protocol MAY reflect spreads and offchain execution expenses in the price during minting and redemption. -/
@@ -2893,11 +2919,12 @@ theorem req_issuance_price_one (s : State) (caller : Address) (amount : Nat) (s'
 /-- REQ deposit-permissionless: The vault MUST allow any address to deposit apxUSD and receive apyUSD without requiring KYB/KYC. -/
 theorem req_deposit_permissionless (s : State) (amount : Nat) (caller : Address)
     (h_pause : s.globalPause = false)
+    (h_denylist : s.denylist caller = false)
     (h_balance : s.apxUSDBal caller ≥ amount)
     (h_rate : 0 < computeExchangeRate s) :
     ∃ s', step s (Op.lockApxUSD amount) caller = some s' := by
   rcases ho : step s (Op.lockApxUSD amount) caller with _ | s'
-  · exact absurd ho (by simp [step, h_pause, Nat.not_lt.mpr h_balance,
+  · exact absurd ho (by simp [step, h_pause, h_denylist, Nat.not_lt.mpr h_balance,
       Nat.pos_iff_ne_zero.mp h_rate])
   · exact ⟨s', rfl⟩
 
@@ -3108,6 +3135,7 @@ theorem req_new_locked_receives_yield (s : State) (amount : Nat) (caller : Addre
 /-- REQ synchronous_withdraw_return_token: The apyUSD vault MUST execute withdrawals and redeems synchronously and MUST return apxUSD_unlock tokens immediately. -/
 theorem req_synchronous_withdraw_return_token (s : State) (assets : Nat) (receiver caller : Address)
     (h1 : s.globalPause = false)
+    (h_dl : s.denylist caller = false) (h_dlr : s.denylist receiver = false)
     (h2 : (pullVestedYield s).apyUSDBal caller ≥ withdrawShares assets (computeExchangeRate (pullVestedYield s)))
     (h3 : (pullVestedYield s).vaultApxUSDBal ≥ assets)
     -- A positive withdrawal costs positive shares. On-chain this is automatic —
@@ -3123,7 +3151,7 @@ theorem req_synchronous_withdraw_return_token (s : State) (assets : Nat) (receiv
       rintro ⟨ha, hz⟩
       have := h4 ha
       omega
-    exact absurd ho (by simp [step, h1, h2', h3', h4'])
+    exact absurd ho (by simp [step, h1, h_dl, h_dlr, h2', h3', h4'])
   · refine ⟨s', rfl, s.nextUnlockId, ?_⟩
     obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ ho
     subst hs'

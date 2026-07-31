@@ -2980,6 +2980,7 @@ RFQ request covering the amount — the call succeeds, and its exact effect is t
 private theorem step_executeRFQRedemption_forward (s : State) (user : Address)
     (amount : Nat) (caller : Address)
     (hgp : s.globalPause = false)
+    (hdl : s.denylist user = false)
     (hcp : s.rfqCounterparties.contains caller = true)
     (hwl : s.whitelist user = true)
     (hrq : amount ≤ s.rfqRequests user)
@@ -2995,7 +2996,7 @@ private theorem step_executeRFQRedemption_forward (s : State) (user : Address)
               (burnApxUSD s user amount).usdcBal a + amount * s.redemptionValue / ray
             else (burnApxUSD s user amount).usdcBal a } := by
   simp only [step]
-  rw [if_neg (by rw [hgp]; decide), if_neg (by rw [hcp]; decide),
+  rw [if_neg (by rw [hgp, hdl]; decide), if_neg (by rw [hcp]; decide),
       if_neg (by rw [hwl]; decide), if_neg (by omega), if_neg (by omega),
       if_neg (by omega)]
 
@@ -3148,6 +3149,7 @@ theorem admin_rfq_coalition_drains :
   have h1 : step coalWitness Op.catastrophicBackstop coalWitness.admin = some R :=
     step_catastrophicBackstop_forward coalWitness rfl
   have hgp : R.globalPause = false := rfl
+  have hdl : R.denylist 0 = false := rfl
   have hcp : R.rfqCounterparties.contains 2 = true := rfl
   have hwl : R.whitelist 0 = true := rfl
   have hrq : (100 : Nat) ≤ R.rfqRequests 0 := Nat.le_refl _
@@ -3157,7 +3159,7 @@ theorem admin_rfq_coalition_drains :
     exact Nat.zero_le _
   -- step 2: the counterparty settles the victim's pending request at price 0,
   -- burning all 100 apxUSD for 0 USDC
-  have h2 := step_executeRFQRedemption_forward R 0 100 2 hgp hcp hwl hrq hbal hres
+  have h2 := step_executeRFQRedemption_forward R 0 100 2 hgp hdl hcp hwl hrq hbal hres
   obtain ⟨hapx, husdc⟩ := rfq_payout_formula R 0 100 2 _ h2
   refine ⟨coalWitness, R, _, 0, 2, 100, by decide, rfl, rfl, rfl, rfl, rfl, rfl,
     Nat.le_refl _, by decide, h1, rfl, h2, ?_, ?_⟩
@@ -3274,6 +3276,7 @@ theorem admin_rfq_coalition_drains_funded :
   have h1 : step coalWitnessFunded Op.catastrophicBackstop coalWitnessFunded.admin = some R :=
     step_catastrophicBackstop_forward coalWitnessFunded rfl
   have hgp : R.globalPause = false := rfl
+  have hdl : R.denylist 0 = false := rfl
   have hcp : R.rfqCounterparties.contains 2 = true := rfl
   have hwl : R.whitelist 0 = true := rfl
   have hrq : (100 : Nat) ≤ R.rfqRequests 0 := Nat.le_refl _
@@ -3283,7 +3286,7 @@ theorem admin_rfq_coalition_drains_funded :
     exact Nat.zero_le _
   -- step 2: the counterparty settles the victim's pending request at price 0,
   -- burning all 100 apxUSD for 0 USDC — while the victim's pro-rata credit is only 50
-  have h2 := step_executeRFQRedemption_forward R 0 100 2 hgp hcp hwl hrq hbal hres
+  have h2 := step_executeRFQRedemption_forward R 0 100 2 hgp hdl hcp hwl hrq hbal hres
   obtain ⟨hapx, husdc⟩ := rfq_payout_formula R 0 100 2 _ h2
   refine ⟨coalWitnessFunded, R, _, 0, 2, 100, by decide, rfl, rfl, rfl, rfl, rfl,
     Nat.le_refl _, by decide, ⟨_, rfl, rfl, rfl⟩, h1, rfl, h2, ?_, ?_, ⟨4, by decide, rfl, ?_⟩⟩

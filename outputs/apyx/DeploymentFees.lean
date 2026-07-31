@@ -246,24 +246,30 @@ arbitrary receiver and never compares it to the share owner, so it admits steps 
 — the same "model more permissive than the chain" direction as the deny-list gaps of §9.3.
 -/
 
-/-- **The model's withdrawal never constrains the receiver.** If a withdrawal succeeds for one
-receiver it succeeds, from the same state and the same caller, for *every* receiver — the four
-guards on `Op.withdraw` (`globalPause`, the zero-share check, the share balance, the vault
-balance) mention only the caller and the amount.
+/-- **The model constrains the receiver only through the deny-list.** If a withdrawal succeeds for
+one receiver it succeeds, from the same state and the same caller, for **every non-denied**
+receiver: the deny-list is the sole guard on `Op.withdraw` that mentions the receiver at all, the
+rest (`globalPause`, the zero-share check, the share balance, the vault balance) speaking only of
+the caller and the amount.
 
-The deployment compares `receiver` to **`owner`**, not to the caller: `_withdraw` reverts with
-`InvalidCaller()` unless `receiver == owner`, "to prevent third parties from minting the
-UnlockReceipt to themselves". ERC-4626 keeps the two apart — a spender with allowance calls with
-`caller ≠ owner` — and the model has no `owner` parameter at all, so identifying its `caller`
-with the chain's `owner` is a modelling choice rather than a chain fact. Under that
-identification the model is **more permissive than the chain** here, the same direction as the
-deny-list gaps §9.3 closed, and it is why `holder_value_withdraw` carries a `receiver ≠ caller`
-branch.
+That is still weaker than the chain, but the gap is now exactly one comparison. The deployment
+checks `receiver` against **`owner`**: `_withdraw` reverts with `InvalidCaller()` unless
+`receiver == owner`, "to prevent third parties from minting the UnlockReceipt to themselves".
+ERC-4626 keeps caller and owner apart — a spender with allowance calls with `caller ≠ owner` —
+and the model has no `owner` parameter at all, so identifying its `caller` with the chain's
+`owner` is a modelling choice rather than a chain fact. Under that identification the model
+remains **more permissive than the chain** on this path, and it is why `holder_value_withdraw`
+carries a `receiver ≠ caller` branch.
+
+(The deny-list half of the gap **was** closed, in the same pass that gated `lockApxUSD`,
+`withdraw`, `redeem` and `executeRFQRedemption` through the `_update` hook; this theorem's
+`h_dl` hypothesis is what that fix left behind.)
 
 Stated as a general receiver-independence result rather than a single witness: it says the guard
 is absent from the model, not merely that one state slips through. -/
 theorem withdraw_receiver_unconstrained (s : State) (assets : Nat) (r1 r2 caller : Address)
-    (s1 : State) (h : step s (Op.withdraw assets r1) caller = some s1) :
+    (s1 : State) (h : step s (Op.withdraw assets r1) caller = some s1)
+    (h_dl : s.denylist r2 = false) :
     ∃ s2, step s (Op.withdraw assets r2) caller = some s2 := by
   simp only [step] at h ⊢
   split at h
@@ -275,7 +281,12 @@ theorem withdraw_receiver_unconstrained (s : State) (assets : Nat) (r1 r2 caller
       · split at h
         · exact absurd h (by simp)
         · rename_i g1 g2 g3 g4
-          rw [if_neg g1, if_neg g2, if_neg g3, if_neg g4]
+          -- the first guard is the only one mentioning the receiver, so it has to be rebuilt
+          -- for `r2` from `h_dl`; the other three are receiver-free and transfer unchanged
+          have g1' : ¬(s.globalPause || s.denylist caller || s.denylist r2) = true := by
+            simp only [Bool.or_eq_true, not_or, h_dl] at g1 ⊢
+            simp_all
+          rw [if_neg g1', if_neg g2, if_neg g3, if_neg g4]
           exact ⟨_, rfl⟩
 
 /-- A funded, non-degenerate vault: one holder owns the whole 100-share supply against 100
