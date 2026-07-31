@@ -1711,8 +1711,13 @@ theorem req_redeem_no_share_transfer (s : State) (amount : Nat) (caller : Addres
   simp [emitEvent, burnApxUSD]
 
 /-- REQ exchange-rate-non-decreasing: The exchange rate between apyUSD and apxUSD MUST be
-non-decreasing over time. (Model: passing time only vests more yield into `totalAssets`,
-so the implied exchange rate cannot fall.) -/
+non-decreasing over time. (Model: passing time only vests more yield into `totalAssets`, so the
+implied exchange rate cannot fall.)
+
+Read the statement literally: it advances the `now` field of a **fixed** state and holds every
+other field frozen. It is not a trace property — operations that move `totalAssets` or
+`totalSupply_apyUSD` (`lockApxUSD`, `withdraw`, `redeem`) are not covered. `Op.tick` exists, so
+the trace form is stateable; it is not stated here. -/
 theorem req_exchange_rate_non_decreasing (s : State) (dt : Nat) :
     computeExchangeRate s ≤ computeExchangeRate { s with now := s.now + dt } :=
   computeExchangeRate_mono_now s dt
@@ -2006,16 +2011,24 @@ theorem req_unlock_cooldown (s : State) (id : Nat) (owner : Address) (amount coo
   simp [step, h_req, h_early]
 
 /-- REQ denylist-blocks-deposit: If the caller or the receiver address is present in the
-deny list, deposit and mint operations MUST revert. -/
+deny list, deposit and mint operations MUST revert.
+
+All three deposit-shaped entry points are covered: the two apxUSD-issuance paths
+(`depositUSDC`, `mintApxUSD`) and the vault's own ERC-4626 deposit, which this model calls
+`Op.lockApxUSD` (see `req_deposit_immediate`). The third conjunct was added once `lockApxUSD`
+was gated through the `_update` hook; before that it would have been false. -/
 theorem req_denylist_blocks_deposit (s : State) (amount : Nat) (to caller : Address) :
     (s.denylist caller = true → step s (Op.depositUSDC amount) caller = none) ∧
     (s.denylist caller = true ∨ s.denylist to = true →
-      step s (Op.mintApxUSD to amount) caller = none) := by
-  constructor
+      step s (Op.mintApxUSD to amount) caller = none) ∧
+    (s.denylist caller = true → step s (Op.lockApxUSD amount) caller = none) := by
+  refine ⟨?_, ?_, ?_⟩
   · intro h
     simp [step, h]
   · intro h
     rcases h with h | h <;> simp [step, h]
+  · intro h
+    simp [step, h]
 
 /-- REQ early-unlock-fee-linear-decline: The early unlock fee MUST decline linearly over
 time from 3.5% down to 0.1%. (Model: within the claim window the fee is bounded by
@@ -2631,10 +2644,16 @@ theorem req_catastrophic_backstop (s : State) (s' : State)
     exact ⟨hc.2, rfl, fun a => rfl, rfl, rfl⟩
   · exact absurd h_step (by simp)
 
-/-- REQ governance_deploy_buffer: The system MUST restrict voting on buffer deployment to holders of the governance token. -/
-theorem req_governance_deploy_buffer (s : State) (s' : State)
-    (h_step : step s Op.voteBufferDeployment s.governance = some s') :
-    s.governanceTokenBal s.governance > 0 := by
+/-- REQ governance_deploy_buffer: The system MUST restrict voting on buffer deployment to holders
+of the governance token.
+
+Quantified over **every** caller. An earlier version pinned the caller to `s.governance`, which
+proved nothing about the restriction the requirement states — that only *holders* may vote — since
+it spoke about a single distinguished address. The guard in `step` tests the caller's own balance,
+so the general form is what it actually supports. -/
+theorem req_governance_deploy_buffer (s : State) (s' : State) (caller : Address)
+    (h_step : step s Op.voteBufferDeployment caller = some s') :
+    s.governanceTokenBal caller > 0 := by
   simp only [step] at h_step
   split at h_step
   · exact absurd h_step (by simp)
@@ -2714,25 +2733,47 @@ theorem req_mint_immediate (s : State) (amount : Nat) (caller : Address) (s' : S
 theorem req_total_assets_includes_vault_balance_and_vested (s : State) :
     totalAssets s = s.vaultApxUSDBal + vestedAmount s s.now := rfl
 
-/-- REQ global-pause-blocks-deposit: If the global pause is active, any deposit or mint transaction MUST revert. -/
+/-- REQ global-pause-blocks-deposit: If the global pause is active, any deposit or mint
+transaction MUST revert. Stated here for `Op.depositUSDC`; `mintApxUSD` and `lockApxUSD` carry the
+same guard in `step` but are not conjuncts of this theorem. -/
 theorem req_global_pause_blocks_deposit (s : State) (amount : Nat) (caller : Address)
     (h : s.globalPause = true) :
     step s (.depositUSDC amount) caller = none := by
   simp [step, h]
 
-/-- REQ unlock-token-redeemable-1to1-after-20d: apxUSD_unlock tokens MUST be redeemable 1:1 for apxUSD after a 20‑day cooldown period. -/
-theorem req_unlock_token_redeemable_1to1_after_20d (s : State) (requestId : Nat) (caller : Address)
-    (h_request : s.unlockRequests requestId = some (caller, (s.unlockTokenAmount requestId), s.now - cooldownPeriod))
+/-- REQ unlock-token-redeemable-1to1-after-20d: apxUSD_unlock tokens MUST be redeemable 1:1 for
+apxUSD after a 20-day cooldown period.
+
+Two things this statement used to get wrong, both now fixed. It concluded with a disjunction whose
+left branch was `step … = none` — a "MUST be redeemable" requirement discharged by a statement
+that tolerates the claim reverting. The proof always took the right branch, so the disjunction was
+pure weakening; it is gone. And the recorded deadline `s.now - cooldownPeriod` is **truncated**
+`Nat` subtraction, so at `s.now < cooldownPeriod` it collapsed to `0` and the claim succeeded with
+no time elapsed at all. Bolting on an `cooldownPeriod ≤ s.now` hypothesis did not fix that — the
+proof never used it, which the linter caught. The statement now quantifies over the **recorded**
+deadline instead of pinning it to a truncated expression: `h_full` says the position carries a
+full cooldown (which is exactly what `createStandardUnlock` records) and `h_matured` says it has
+passed. The first conclusion `cooldownPeriod ≤ s.now` is then earned rather than assumed — a full
+cooldown really has elapsed. -/
+theorem req_unlock_token_redeemable_1to1_after_20d (s : State) (requestId : Nat)
+    (caller : Address) (cooldownEnd : Nat)
+    (h_request : s.unlockRequests requestId
+      = some (caller, s.unlockTokenAmount requestId, cooldownEnd))
     (h_owner : s.unlockTokenOwner requestId = some caller)
+    -- the position carries a full cooldown: `createStandardUnlock` records
+    -- `now + cooldownPeriod`, so every position `step` can create satisfies this
+    (h_full : cooldownPeriod ≤ cooldownEnd)
+    -- and that deadline has passed
+    (h_matured : cooldownEnd ≤ s.now)
     -- the mint to `owner` passes the ERC-20 `_update` hook, so a paused token or a
     -- deny-listed owner reverts the settlement — exactly as on-chain
     (h1 : s.globalPause = false) (hd : s.denylist caller = false) :
-    step s (.claimUnlock requestId) caller = none ∨
-    (∃ s', step s (.claimUnlock requestId) caller = some s' ∧
-           s'.apxUSDBal caller = s.apxUSDBal caller + s.unlockTokenAmount requestId) := by
-  right
-  refine ⟨mintApxUSD (retireStandardUnlock s requestId caller) caller (s.unlockTokenAmount requestId), ?_, ?_⟩
-  · simp [step, h_request, h_owner, h1, hd, Nat.not_lt.mpr (Nat.sub_le s.now cooldownPeriod)]
+    cooldownPeriod ≤ s.now ∧
+    ∃ s', step s (.claimUnlock requestId) caller = some s' ∧
+      s'.apxUSDBal caller = s.apxUSDBal caller + s.unlockTokenAmount requestId := by
+  refine ⟨by omega, mintApxUSD (retireStandardUnlock s requestId caller) caller
+    (s.unlockTokenAmount requestId), ?_, ?_⟩
+  · simp [step, h_request, h_owner, h1, hd, Nat.not_lt.mpr h_matured]
   · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
 
 /-- REQ unlock-token-no-yield: apxUSD_unlock tokens MUST NOT earn yield. -/
@@ -2903,7 +2944,13 @@ theorem req_mint_access_whitelist (s : State) (to : Address) (amount : Nat) (cal
     (h_not_whitelisted : ¬ s.whitelist caller) :
     step s (Op.mintApxUSD to amount) caller = none := by simp_all [step]
 
-/-- REQ redeem-access-whitelist: Only participants who are eligible, located in permitted jurisdictions, and whitelisted SHALL be allowed to redeem apxUSD. -/
+/-- REQ redeem-access-whitelist: Only participants who are eligible, located in permitted
+jurisdictions, and whitelisted SHALL be allowed to redeem apxUSD.
+
+Proved for the arbitrage pathway `Op.redeemApxUSD`. The settlement leg `Op.poolRedeem` also burns
+apxUSD against the reserve and is **not** whitelist-gated — it is gated on the RFQ-counterparty
+list instead — so this statement does not cover it, and the model permits a non-whitelisted
+counterparty to redeem through that path. -/
 theorem req_redeem_access_whitelist (s : State) (amount : Nat) (caller : Address)
     (h_not_whitelisted : ¬ s.whitelist caller) :
     step s (Op.redeemApxUSD amount) caller = none := by simp_all [step]
@@ -2957,7 +3004,9 @@ theorem req_mint_redeem_at_redemption_value (s : State) (amount : Nat) (to calle
     subst hs'
     simp [emitEvent, burnApxUSD]
 
-/-- REQ buffer-non-decreasing (corrected 2026-07-08 to match `corpus.md`): outside of a
+/-- (Scope: the four apxUSD-burning operations enumerated in the hypothesis. `Op.poolRedeem`, the
+on-chain settlement leg, also burns apxUSD against the reserve and is **not** among them.)
+REQ buffer-non-decreasing (corrected 2026-07-08 to match `corpus.md`): outside of a
 catastrophic backstop, the overcollateralization buffer MUST NOT decrease during routine
 redemptions or stress events; it MAY increase over time via yield spreads and collateral
 appreciation. A catastrophic backstop is the sole exception and distributes the entire buffer
@@ -2996,15 +3045,25 @@ be configurable. (Model: `Op.setVestPeriod` accrues the currently-streaming port
 `fullyVestedAmount` first — same pattern as `creditYield` — before applying the new
 period, so reconfiguring never forfeits already-accrued yield.) -/
 theorem req_configurable_vesting_period (s : State) (p : Nat) (hp : 0 < p) :
-    ∃ s', step s (Op.setVestPeriod p) s.admin = some s' ∧ s'.vestPeriod = p :=
+    ∃ s', step s (Op.setVestPeriod p) s.admin = some s' ∧ s'.vestPeriod = p ∧
+      -- the non-forfeiture half, which the docstring used to assert without proving:
+      -- the currently-streaming portion is banked into the realized accumulator first
+      s'.fullyVestedAmount = s.fullyVestedAmount + newlyVestedAmount s s.now :=
   ⟨{ s with
       fullyVestedAmount := s.fullyVestedAmount + newlyVestedAmount s s.now
       vestTotal := s.vestTotal - newlyVestedAmount s s.now
       vestStart := s.now
       vestPeriod := p },
-   by simp [step, Nat.pos_iff_ne_zero.mp hp], rfl⟩
+   by simp [step, Nat.pos_iff_ne_zero.mp hp], rfl, rfl⟩
 
-/-- REQ deposit-emits-event: The deposit(assets, receiver) function MUST emit a Deposit event with parameters (sender, receiver, owner, assets, shares) upon successful execution. -/
+/-- REQ deposit-emits-event: The deposit(assets, receiver) function MUST emit a Deposit event with
+parameters (sender, receiver, owner, assets, shares) upon successful execution.
+
+Discharged against `Op.depositUSDC`, the 1:1 USDC→apxUSD issuance path — **not** the ERC-4626
+vault `deposit`, which this model calls `Op.lockApxUSD` and which emits its own Deposit with
+`shares = lockShares …`. On the path proved here `assets = shares` by construction, so the tuple
+is pinned but the shares/assets distinction the ERC-4626 event exists to carry is not
+exercised. -/
 theorem req_deposit_emits_event (s s' : State) (amount : Nat) (caller : Address)
     (h_step : step s (Op.depositUSDC amount) caller = some s') :
     ("Deposit", [caller, caller, caller, amount, amount]) ∈ s'.eventLog := by
@@ -3012,7 +3071,13 @@ theorem req_deposit_emits_event (s s' : State) (amount : Nat) (caller : Address)
   subst hs'
   simp [emitEvent]
 
-/-- REQ mint-emits-event: The mint(shares, receiver) function MUST emit a Deposit event with parameters (sender, receiver, owner, assets, shares) upon successful execution. (The exact tuple is pinned: sender = the minting `caller`, receiver = owner = `to`, and assets = shares = `amount`.) -/
+/-- REQ mint-emits-event: The mint(shares, receiver) function MUST emit a Deposit event with
+parameters (sender, receiver, owner, assets, shares) upon successful execution. (The exact tuple
+is pinned: sender = the minting `caller`, receiver = owner = `to`, and assets = shares = `amount`.)
+
+Same caveat as `req_deposit_emits_event`: this is the apxUSD arbitrage mint `Op.mintApxUSD`, not
+the vault's ERC-4626 `mint`. `assets = shares` holds because that path is hard-coded 1:1, which is
+exactly the degenerate case in which the distinction cannot be tested. -/
 theorem req_mint_emits_event (s s' : State) (to : Address) (amount : Nat) (caller : Address)
     (h_step : step s (Op.mintApxUSD to amount) caller = some s') :
     ("Deposit", [caller, to, to, amount, amount]) ∈ s'.eventLog := by
