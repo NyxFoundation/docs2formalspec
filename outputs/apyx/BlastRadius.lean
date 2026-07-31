@@ -45,6 +45,12 @@ Contents:
 * **Tier-2 stepping stones**: redemption-price provenance and the reserve-outflow
   law, the single-step characterizations behind T5/T6.
 
+**Naming convention.** Section headers cite `docs/05-blast-radius.md`'s memo labels — `T2
+yield_distributor_cannot_extract`, `T6 oracle_blast_radius`, `T10 coalition_bound` and so on.
+Those are names of memo *items*, not of Lean theorems, and no declaration in this file carries
+them; each item is discharged by one or more differently-named theorems below it. Grep for the
+memo name and you will find only the header.
+
 Everything here is additive: the ground-truth model and its 82 requirement theorems
 in `D2fsSpecs/Apyx.lean` are untouched. Because that file's helper lemmas are
 `private`, the small set of step-inversion lemmas needed here is re-derived locally
