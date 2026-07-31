@@ -8,23 +8,34 @@ upper bounds on user-asset loss when a privileged role's key is fully compromise
 (the social-engineering threat model, cf. Bybit 2025).
 
 Threat model: the attacker holds the private key of one or more role addresses
-(`pauseController`, `yieldDistributor`, `admin`, `oracle`, ...) and can submit an
-arbitrary sequence of operations with those callers, interleaved with honest traffic.
-A failed operation reverts (state unchanged), so a trace executes with revert-skip
-semantics (`execTrace`).
+(`pauseController`, `yieldDistributor`, `admin`, `oracle`, ...) and can submit an arbitrary
+sequence of operations with those callers. A failed operation reverts (state unchanged), so a
+trace executes with revert-skip semantics (`execTrace`).
+
+**Read the trace hypotheses before reading the bounds.** The Tier-1 role results — and
+`single_key_bounds`, and the compartmentalization theorems — are stated over traces containing
+**only** that role's operations (`∀ p ∈ σ, AdminOp p.1` and its siblings), i.e. with *no* honest
+or other-role traffic interleaved. That matters most for the oracle, whose damage this file
+elsewhere describes as mediated by other parties' subsequent operations — traffic the
+`OracleOp`-only hypothesis excludes by construction. The results that genuinely admit arbitrary
+interleaved traces are T4's `user_assets_immune_to_total_key_compromise`, T5's `no_theft_ledger`,
+and T7's `rate_limit_linear_bound`.
 
 Contents:
 
 * **Exact-effect (frame) theorems** for every role-gated operation: a successful
-  `pause`/`unpause`/`creditYield`/admin-op/oracle-op is shown to equal the
-  pre-state with only its named non-asset fields overridden, so no balance, supply,
-  reserve, or unlock-position field can move.
+  `pause`/`unpause`/`creditYield`/admin-op/oracle-op is shown to equal the pre-state with only its
+  named fields overridden. For the pauser, distributor and oracle those fields are all non-asset.
+  For the **admin** they are not: `admin_frame` binds fifteen fields including both USDC fields,
+  because `withdrawReserve` and `catastrophicBackstop` are `AdminOp`s. No apxUSD/apyUSD balance,
+  no supply, and no unlock-position field moves under any role.
 * **Balance-field forms** (T1-T3): the frame results instantiated on every balance
   and supply field, by exhaustive case analysis over the closed `Op` inductive —
   the same pattern as the requirement theorems in `Apyx.lean`.
 * **Trace forms**: the frame results are lifted by induction to arbitrarily
-  long attack traces (`execTrace`), giving the memo's headline shape
-  `userLoss(execSeq s₀ σ) ≤ B(R, s₀)` with `B` read off the surviving fields.
+  long attack traces (`execTrace`). These are **field frames**, not loss bounds: they say which
+  fields survive a role-only trace bitwise, which is how the memo's `B(R, s₀)` is read off, but no
+  theorem here is literally of the form `userLoss(σ) ≤ B`.
 * **Non-custodial theorems (T4)**: the single-step debit analyses
   (`no_role_transfers_user_funds`, `no_role_burns_user_shares`,
   `no_role_debits_usdc`), governance-token immutability, unlock-position seizure
@@ -34,7 +45,7 @@ Contents:
 * **Tier-2 stepping stones**: redemption-price provenance and the reserve-outflow
   law, the single-step characterizations behind T5/T6.
 
-Everything here is additive: the ground-truth model and its 81 requirement theorems
+Everything here is additive: the ground-truth model and its 82 requirement theorems
 in `D2fsSpecs/Apyx.lean` are untouched. Because that file's helper lemmas are
 `private`, the small set of step-inversion lemmas needed here is re-derived locally
 (named `inv_*`).
@@ -597,8 +608,11 @@ is **not** monotone — a credit can shrink `vestTotal` (when the already-stream
 portion `newlyVestedAmount` exceeds `amount`) — but no value is ever lost: exactly
 that streamed portion moves into `fullyVestedAmount` instead, so the combined pool
 `fullyVestedAmount + vestTotal` always grows by exactly the credited `amount`.
-`usdcReserve` increases unconditionally. No user balance, supply, or unlock
-position is reachable.
+`usdcReserve` is **not** touched: `yield_distributor_frame` proves `s'.usdcReserve =
+s.usdcReserve`, because `IVesting.depositYield` moves apxUSD into the vesting contract rather than
+into `RedemptionPoolV0`. (An earlier draft of this header said it "increases unconditionally",
+contradicting the frame lemma two screens below.) No user balance, supply, or unlock position is
+reachable.
 
 Liveness caveat (documented, not a safety violation): because `creditYield` resets
 `vestStart := now`, a compromised distributor can repeatedly credit `0` to postpone
@@ -692,12 +706,17 @@ theorem yield_distributor_trace_blast_radius (s : State) (σ : List (Op × Addre
 
 /-! ## T3: `admin_cannot_touch_balances`, frame and trace forms
 
-Full compromise of the `admin` key reaches exactly nine fields — the two access
-lists and seven pricing/schedule parameters — and no balance, supply, reserve, or
-unlock-position field. Each of the eight admin-gated operations gets an
-*exact-effect* lemma (the entire post-state is the pre-state with named fields
+Full compromise of the `admin` key reaches the **fifteen** fields `admin_frame` binds — the two
+access lists, the pricing/schedule parameters, **and both USDC fields** — leaving every apxUSD and
+apyUSD balance, both supplies, and the unlock registry untouched. Each of the **ten** admin-gated
+operations gets an *exact-effect* lemma (the entire post-state is the pre-state with named fields
 overridden), the frames are combined into the single-step balance statement
 `admin_cannot_touch_balances`, and lifted to arbitrary-length admin-only traces.
+
+An earlier draft of this header said "nine fields … and no balance, supply, **reserve**, or
+unlock-position field", and listed eight operations. Both were written before `withdrawReserve`
+and `updateRedemptionValue` joined `AdminOp`; the reserve is reachable, and
+`admin_alone_drains_reserve` empties it.
 
 Scope caveats (what a compromised admin CAN do, all deferred effects on future
 operations rather than debits of recorded holdings):
@@ -837,7 +856,8 @@ the three vest-clock accumulator fields `setVestPeriod` also touches
 backstop's compensation leg touches (`usdcBal`, `usdcReserve` — the pro-rata
 distribution of the reserve to holders; see `step_catastrophicBackstop_exact`).
 In particular no apxUSD/apyUSD balance, supply, vault-custody, or unlock-registry
-field is reachable from the admin role, and the only USDC movement is the
+field is reachable from the admin role; the USDC movements are `withdrawReserve`'s outflow to a
+named address and the
 backstop's credit-only payout (`admin_cannot_touch_balances` pins its direction). -/
 theorem admin_frame (s : State) (op : Op) (caller : Address) (s' : State)
     (h_gated : AdminOp op) (h_step : step s op caller = some s') :
@@ -894,19 +914,23 @@ theorem admin_frame (s : State) (op : Op) (caller : Address) (s' : State)
 single-step balance-field form.
 
 Threat model: the `admin` key is fully compromised. The operations gated on
-`caller = s.admin` in `step` are exactly the eight of `AdminOp`: `addToWhitelist`,
+`caller = s.admin` in `step` are the **ten** of `AdminOp`: `addToWhitelist`,
 `removeFromWhitelist`, `addToDenylist`, `removeFromDenylist`, `setYieldRate`,
-`handleStressEvent`, `catastrophicBackstop`, and `setVestPeriod`.
+`handleStressEvent`, `catastrophicBackstop`, `setVestPeriod`, `updateRedemptionValue`,
+and `withdrawReserve`.
 
-Claim: none of these operations debits anyone — every apxUSD and apyUSD balance,
-both total supplies, and the vault's apxUSD holdings are bitwise unchanged; every
-USDC balance is non-decreasing (pointwise); and the USDC reserve is non-increasing.
-The one admin operation that moves USDC at all is `catastrophicBackstop`, whose
-model.md-mandated compensation leg pays the entire reserve **out to apxUSD holders
-pro-rata** — a credit-only distribution (and only under a pre-set emergency flag);
-every other `AdminOp` leaves both USDC fields bitwise unchanged. A compromised
-admin cannot *directly* move or destroy a single unit of anyone's funds — the only
-reachable movement is reserve → holders, never holder → anywhere.
+Claim, and read it narrowly: none of these operations **debits an individual account** — every
+apxUSD and apyUSD balance, both total supplies, and the vault's apxUSD holdings are bitwise
+unchanged; every USDC *balance* is non-decreasing pointwise; and the USDC *reserve* is
+non-increasing.
+
+**The admin has two USDC channels, not one.** `catastrophicBackstop` pays the reserve out to
+apxUSD holders pro-rata (credit-only, and only under a pre-set emergency flag). But
+`withdrawReserve amount receiver` moves the reserve to **an address the admin names**, who need
+hold nothing — see `admin_alone_drains_reserve`, which empties it. So "the only reachable movement
+is reserve → holders" is false, and this theorem does not say it: what it says is that no
+individual USDC balance falls and the reserve does not rise. A compromised admin cannot debit a
+user's column; it can still empty the reserve into its own.
 
 Scope note (what is NOT claimed): the admin can still attack *future liveness and
 economics* — denylisting/de-whitelisting blocks a user's future deposits and
@@ -954,7 +978,7 @@ key can rewrite access lists and pricing/schedule parameters (and, once the
 emergency flag is up, pay the reserve out to holders via the backstop) — with the
 deferred consequences listed in the section header — but cannot move a single unit
 of any apxUSD/apyUSD balance, supply, vault custody, or unlock position, and its
-only USDC channel is the backstop's credit-only pro-rata payout
+USDC channels are `withdrawReserve` and the backstop's credit-only pro-rata payout
 (`admin_cannot_touch_balances`). -/
 theorem admin_trace_blast_radius (s : State) (σ : List (Op × Address))
     (h_gated : ∀ p ∈ σ, AdminOp p.1) :
@@ -1011,8 +1035,11 @@ theorem admin_trace_blast_radius (s : State) (σ : List (Op × Address))
 
 /-! ## Oracle role: direct frame (the indirect channel is Tier 2's T6)
 
-The oracle's two operations are `updateRedemptionValue` (a no-op placeholder in
-this model — notably, `redemptionValue` is writable only through the admin's
+The oracle has exactly **one** operation in `OracleOp`: `setApxUSDMarketPrice`.
+`updateRedemptionValue` is **admin**-gated and is **not** a no-op — it publishes its argument
+verbatim (`step_updateRedemptionValue_exact`). An earlier draft of this header got all three of
+those wrong. Kept here for the reader who arrives expecting the oracle to own the redemption
+price: it does not. (Historic note — `redemptionValue` is writable only through the admin's
 `catastrophicBackstop`) and `setApxUSDMarketPrice`. Their *direct* blast radius is
 exactly the reported market-price field; the security-relevant channel is indirect:
 `apxUSDMarketPrice` gates the arbitrage mint pathway (`ray < apxUSDMarketPrice` in
@@ -1020,7 +1047,8 @@ exactly the reported market-price field; the security-relevant channel is indire
 Quantifying worst-case extraction through mispricing is T6 (`oracle_blast_radius`,
 Tier 2). -/
 
-/-- Exact effect of `updateRedemptionValue`: demands the oracle role, rejects zero, and
+/-- Exact effect of `updateRedemptionValue`: demands the **admin** role (`caller = s.admin`, as
+the statement below says and `Roles.assignAdminTargetsFor` confirms on chain), rejects zero, and
 publishes the supplied value verbatim as the new redemption price.
 
 Until the clock work this case was a no-op placeholder, which made `catastrophicBackstop`
@@ -1723,8 +1751,9 @@ theorem redemption_price_writers (s : State) (op : Op) (caller : Address) (s' : 
         | exact absurd h_step (by simp)
 
 /-- The original admin-only characterization, kept under its own name and now carrying the
-hypothesis that makes it true: rule the oracle's own setter out and the backstop is the
-only remaining writer. Reports citing this must state the exclusion. -/
+hypothesis that makes it true: rule the admin's quiet setter `updateRedemptionValue` out and the
+backstop is the only remaining writer. (Both writers are admin-gated — `redemption_price_writers`
+— so "oracle" would be the wrong word for either.) Reports citing this must state the exclusion. -/
 theorem redemption_price_admin_only (s : State) (op : Op) (caller : Address) (s' : State)
     (h_step : step s op caller = some s')
     (h_not_oracle_setter : ∀ v, op ≠ Op.updateRedemptionValue v)
@@ -1735,8 +1764,10 @@ theorem redemption_price_admin_only (s : State) (op : Op) (caller : Address) (s'
   · exact h
   · exact absurd hv (h_not_oracle_setter v)
 
-/-- Reserve outflows happen only through redemption **or the catastrophic
-backstop's wind-down distribution**. On the redemption paths, every unit that
+/-- Reserve outflows happen through **four** channels. An earlier draft of this docstring named
+only redemption and the backstop's wind-down; the statement has always carried two more —
+`withdrawReserve` (no burn, no payee, an address the admin names) and `poolRedeem` (where the burn
+and the credit land on **different** addresses, so the payee is not the burned party). On the redemption paths, every unit that
 leaves the reserve is paid to the address whose apxUSD is simultaneously burned,
 priced at the recorded `redemptionValue` — via `redeemApxUSD` (self-initiated) or
 `executeRFQRedemption` (counterparty-initiated against the user's outstanding RFQ
@@ -2035,7 +2066,8 @@ For any target `N`, there is a state and a single-token (`amount = 1`) redemptio
 USDC payout to the redeemer is at least `N`: the witness sets `redemptionValue = N * ray`
 (everything else at defaults, whitelisted caller with one apxUSD and an `N`-unit
 reserve), so one apxUSD redeems for `N` USDC. Because `redeemApxUSD` has **no guard**
-bounding `redemptionValue`, and its only writer `catastrophicBackstop` sets it to the
+bounding `redemptionValue`, and one of its two writers (`redemption_price_writers`)
+`catastrophicBackstop` sets it to the
 unbounded `totalCollateralValue * ray / totalSupply_apxUSD`
 (`redemption_price_admin_only`), there is no
 in-model invariant capping the payout — no upper bound is provable, because none
@@ -2618,7 +2650,12 @@ theorem step2tl_queue_exact (tl : TLState) (op : Op) (caller : Address) :
     step2tl tl (TLOp.queue op caller)
       = some { tl with pending := tl.pending ++ [(op, caller, tl.base.now)] } := rfl
 
-/-- `direct` refuses privileged operations: the queue is the only route for those. -/
+/-- `direct` refuses **`AdminOp`s** — and only those. `isAdminOp` is false for `pause`,
+`unpause`, `creditYield` and `setApxUSDMarketPrice`, so a compromised **pauser** can `direct
+Op.pause` and freeze every exit for the whole window, and a compromised oracle can move the market
+price unqueued. The escape window `timelock_escape_guarantee` buys is therefore usable only if the
+non-admin keys are honest: the queue is the only route for *admin* changes, not for privileged
+changes in general. -/
 theorem step2tl_direct_rejects_privileged (tl : TLState) (op : Op) (caller : Address)
     (h : AdminOp op) : step2tl tl (TLOp.direct op caller) = none := by
   simp only [step2tl, (isAdminOp_iff op).mpr h, if_true]
@@ -2970,17 +3007,21 @@ solely of one role's operations:
 * **pauser alone** (`pauser_compartmentalized`): likewise unchanged — extraction 0;
 * **distributor alone** (`distributor_compartmentalized`): user apxUSD balances
   unchanged and the reserve is untouched — the role pays into the vesting contract, not the reserve, extraction 0;
-* **admin alone** (`admin_trace_blast_radius` /
-  `admin_trace_reserve_nonincreasing`): every apxUSD balance unchanged, and the
-  reserve is non-increasing — the only admin channel that moves it is the
-  backstop's wind-down payout, which distributes it **to the apxUSD holders
-  themselves**, pro-rata, never to the admin's discretion (each holder's USDC
-  balance is credit-only under every `AdminOp`; `admin_cannot_touch_balances`) —
-  extraction of user principal is 0.
+* **admin alone** (`admin_trace_blast_radius` / `admin_trace_reserve_nonincreasing`): every
+  apxUSD balance unchanged, and the reserve is non-increasing. **That is the whole claim, and it
+  is not "extraction is 0".** Two admin channels move the reserve: the backstop's wind-down, which
+  distributes it to apxUSD holders pro-rata, and `withdrawReserve`, which sends it to an address
+  the admin names — `admin_alone_drains_reserve`, a thousand lines above, empties it with one key.
+  What the row establishes is that no individual account is *debited* (each holder's USDC balance
+  is credit-only under every `AdminOp`; `admin_cannot_touch_balances`), not that nothing leaves the
+  system.
 
-The contrast with `admin_rfq_coalition_drains` (two keys ⇒ 100% loss of a pending
-RFQ request) is the value of key separation: it takes a *coalition* to touch
-principal. -/
+The contrast with `admin_rfq_coalition_drains` (two keys ⇒ 100% loss of a pending RFQ request)
+shows what key separation buys **on the redemption channel specifically**. It is not a general
+"it takes a coalition": the admin alone empties the reserve via `withdrawReserve`
+(`admin_alone_drains_reserve`) and alone reprices every claim
+(`admin_alone_moves_redemption_price`). The oracle, pauser and distributor rows are the ones that
+really are zero-extraction. -/
 theorem single_key_bounds (s : State) (σO σP σD σA : List (Op × Address))
     (hO : ∀ p ∈ σO, OracleOp p.1) (hP : ∀ p ∈ σP, PauserOp p.1)
     (hD : ∀ p ∈ σD, DistributorOp p.1) (hA : ∀ p ∈ σA, AdminOp p.1) :

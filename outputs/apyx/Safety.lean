@@ -302,16 +302,27 @@ of positive amount — and receives no third-party gift, ends **any** trace with
 zero apxUSD, no matter what operations it (or anyone else) executes, in any order,
 with any amounts. There is no free-mint path at trace level.
 
-The "no third-party gift" hypotheses are honest exclusions, not weaknesses: the
-three excluded shapes (`mintApxUSD a _`, `withdraw _ a`, `redeem _ a`) all direct
-value to `a` that is fully paid for by the *caller* (USDC at 1:1, or the caller's
-own burned apyUSD shares), so they are transfers, not creation. Everything else —
-including `a` itself calling every operation with every amount — is quantified
-over. -/
+**The exclusions, stated exactly.** There are **five** recipient-naming shapes, and they are
+not all of one kind. `mintApxUSD a _`, `withdraw _ a` and `redeem _ a` direct value to `a` that
+the *caller* pays for (USDC at 1:1, or the caller's own burned apyUSD shares), so they are
+transfers rather than creation. `withdrawReserve _ a` and `poolRedeem _ a _` are **privileged
+credits `a` does not pay for** — the first is the admin's bare reserve outflow to a named address
+(`ValuePreservingOp` below says so), the second the on-chain settlement leg. Calling all five
+"third-party gifts" understated two of them.
 
-/-- `a` holds no extractable value: no apxUSD, no USDC to pay in to a mint, and
-every unlock position recorded for `a` (standard or flexible) has amount zero, so
-no claim can ever credit `a` with a positive settlement. -/
+**And they are hypotheses on the operation, not on the caller**, so they bar `a` from running
+them too: an `a` holding apyUSD shares cannot `redeem _ a` its way out, because that shape is
+excluded whoever signs it. Note also that `Penniless` constrains apxUSD, USDC and the two unlock
+registries but **not `apyUSDBal`** — so "penniless" does not mean "holds nothing", and the
+theorem does not cover a share-holding `a`. Everything else `a` can sign is quantified over. -/
+
+/-- `a` holds no **apxUSD-denominated** extractable value: no apxUSD, no USDC to pay in to a
+mint, and every unlock position recorded for `a` (standard or flexible) has amount zero, so no
+claim can ever credit `a` with a positive settlement.
+
+Deliberately silent on `apyUSDBal`: a `Penniless` address may hold arbitrarily many vault shares.
+Their exit routes are `withdraw`/`redeem`, which `no_free_value_trace` excludes by shape, so the
+theorem above says nothing about a share-holder. -/
 def Penniless (a : Address) (s : State) : Prop :=
   s.apxUSDBal a = 0 ∧
   s.usdcBal a = 0 ∧
@@ -320,10 +331,10 @@ def Penniless (a : Address) (s : State) : Prop :=
   (∀ id amount requestTime cooldownEnd,
     s.flexibleUnlockRequests id = some (a, amount, requestTime, cooldownEnd) → amount = 0)
 
-/-- Induction step for S1: a single successful operation preserves `Penniless a`,
-provided the operation is not a third-party gift directed at `a` (an arbitrage
-mint to `a`, or a vault withdraw/redeem naming `a` as receiver — those are paid
-for by the caller, hence transfers, and are excluded from the headline). -/
+/-- Induction step for S1: a single successful operation preserves `Penniless a`, provided the
+operation is none of the five that can name `a` as recipient — `mintApxUSD a _`, `withdraw _ a`,
+`redeem _ a` (caller-paid transfers), `withdrawReserve _ a` and `poolRedeem _ a _` (privileged
+credits `a` does not pay for). The exclusions are on the operation, not the caller. -/
 private theorem penniless_step (s : State) (op : Op) (caller : Address) (s' : State)
     (h_step : step s op caller = some s') (a : Address) (h : Penniless a s)
     (h_no_mint_gift : ∀ n, op ≠ Op.mintApxUSD a n)
@@ -549,12 +560,17 @@ theorem penniless_invariant (s : State) (σ : List (Op × Address)) (a : Address
 /-- **S1 `no_free_value_trace`** (docs/06-safety-properties.md, Tier A): no apxUSD
 value can be created from nothing, at trace level.
 
-There is no operation sequence `σ` — of any length, any callers, any amounts,
-including arbitrary operations signed by `a` itself — by which an address `a`
-that starts with zero apxUSD, has zero USDC to pay in, holds no unlock position
-of positive amount, and is not the target of a third-party gift
-(`mintApxUSD a _` / `withdraw _ a` / `redeem _ a`, each fully paid by its caller),
-ends `execTrace` holding a single unit of apxUSD.
+There is no operation sequence `σ` — of any length, any callers, any amounts — by which an
+address `a` that starts `Penniless` (zero apxUSD, zero USDC to pay in, no unlock position of
+positive amount) ends `execTrace` holding a single unit of apxUSD, **provided the trace contains
+none of the five operations that name `a` as recipient**: `mintApxUSD a _`, `withdraw _ a`,
+`redeem _ a`, `withdrawReserve _ a`, `poolRedeem _ a _`.
+
+Two scope facts the wording used to blur. The exclusions are on the *operation*, not on who
+signs it, so `a` running `redeem _ a` on its own shares is excluded as well — the theorem does
+not cover an `a` that holds apyUSD, and `Penniless` does not constrain `apyUSDBal`. And two of
+the five (`withdrawReserve`, `poolRedeem`) are privileged credits `a` does not pay for, not
+caller-funded transfers.
 
 This is the trace-level contrapositive of the single-step
 `apxUSD_credit_is_backed` (`BlastRadius.lean`): since every apxUSD credit is
@@ -571,9 +587,9 @@ theorem no_free_value_trace (s : State) (σ : List (Op × Address)) (a : Address
 /-! ## S2 `solvency_preserved` — aggregate overcollateralization is maintained
 
 Trace-level lift of the single-step `req_overcollateralization_limit` (`Apyx.lean`):
-the total apxUSD claim outstanding (supply plus the required overcollateralization
-margin) never exceeds the market value of what backs it (the collateral basket plus
-the USDC reserve).
+the outstanding apxUSD supply never exceeds the market value of what backs it (the collateral
+basket plus the USDC reserve). Note there is **no margin term**: `Solvent` below records why one
+was removed rather than left as rhetoric.
 
 `req_overcollateralization_limit` needs two side-conditions at the pre-state, beyond
 the invariant itself: `h_bal` (no single address's apxUSD balance exceeds total
@@ -600,7 +616,10 @@ the margin, and `catastrophicBackstop` is excluded because it is the documented
 wind-down operation: per model.md/corpus.md it pays the **entire** USDC reserve —
 buffer included — out to holders pro-rata and zeroes the recorded buffer, which
 deliberately ends the overcollateralized regime `Solvent` describes rather than
-operating inside it. -/
+operating inside it. **`withdrawReserve` is excluded too** — a fifth operation the earlier
+draft of this paragraph omitted — because it moves the reserve to an address the admin names
+without settling any claim, so it lowers the backing side of `Solvent` with nothing on the other
+side of the ledger to match. -/
 
 /-- `Solvent s`: aggregate collateralization is maintained — outstanding apxUSD claims never
 exceed the collateral basket plus the USDC reserve.
@@ -627,9 +646,10 @@ condition. -/
 def WellFormed (s : State) : Prop :=
   (∀ a, s.apxUSDBal a ≤ s.totalSupply_apxUSD) ∧ s.redemptionValue ≤ ray
 
-/-- Induction step for S2: a single successful operation preserves `Solvent`, given
-`WellFormed` at the pre-state and that the operation is none of the three
-`req_overcollateralization_limit` must exclude. This *is*
+/-- Induction step for S2: a single successful operation preserves `Solvent`, given `WellFormed`
+at the pre-state and that the operation is none of the **five** `req_overcollateralization_limit`
+must exclude — `claimUnlock`, `flexibleClaimUnlock`, `handleStressEvent`, `catastrophicBackstop`,
+and `withdrawReserve` (the admin's bare reserve outflow). This *is*
 `req_overcollateralization_limit`, restated with the `Solvent`/`WellFormed` names. -/
 theorem solvency_step (s : State) (op : Op) (caller : Address) (s' : State)
     (h_step : step s op caller = some s') (h_solvent : Solvent s) (h_wf : WellFormed s)
@@ -694,8 +714,10 @@ limit of the abstraction rather than a missing proof: with `apxUSDBal` a free fu
 unbounded address type there is no `Σ` relating it to the supply, so a burn lowers the supply
 without any invariant keeping other holders' balances underneath it (§6.2).
 
-`solvency_preserved_price_derived` below therefore assumes strictly less than
-`solvency_preserved`: the price bound once at the start rather than at every prefix.
+`solvency_preserved_price_derived` below therefore **trades** one assumption for another rather
+than assuming strictly less: it needs the price bound only at the initial state, but excludes one
+more operation (`updateRedemptionValue`). Neither hypothesis set subsumes the other — a trace
+that reprices is covered by `solvency_preserved` and not by the derived form.
 -/
 
 /-- The balance half of `WellFormed`, isolated. -/
@@ -836,6 +858,15 @@ are minted at a rate no more generous than the true backing ratio, so existing
 holders' claim per share cannot fall. Proved via the single-op inversion lemma
 `inv_lockApxUSD` plus this fresh arithmetic fact — no `cases op`. -/
 
+/-- Emitting an event cannot move the live rate: `eventLog` is not a pricing input. -/
+@[simp] private theorem computeExchangeRate_emitEvent (s : State) (n : String) (a : List Nat) :
+    computeExchangeRate (emitEvent s n a) = computeExchangeRate s := by
+  simp [emitEvent, computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount]
+
+@[simp] private theorem computeExchangeRate_updateExchangeRate (s : State) :
+    computeExchangeRate (updateExchangeRate s) = computeExchangeRate s := by
+  simp [updateExchangeRate, computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount]
+
 /-- Pure `Nat` fact underlying `no_dilution`, stated for the live virtual-share rate:
 minting `amount * ray / R` new shares against `TA + amount` enlarged backing (a fresh
 `lockApxUSD amount` deposit priced at rate `R`) never lowers the rate, provided `R` does not
@@ -845,14 +876,6 @@ That side condition holds **by construction** when `R` is the pre-state `compute
 — it is just `Nat.div_mul_le_self` — so unlike the previous version this needs neither a
 `hbacked` hypothesis nor `0 < TS` at the call site: OpenZeppelin's `+1` virtual share makes
 the denominator positive unconditionally, so the first depositor is covered too. -/
-@[simp] private theorem computeExchangeRate_emitEvent (s : State) (n : String) (a : List Nat) :
-    computeExchangeRate (emitEvent s n a) = computeExchangeRate s := by
-  simp [emitEvent, computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount]
-
-@[simp] private theorem computeExchangeRate_updateExchangeRate (s : State) :
-    computeExchangeRate (updateExchangeRate s) = computeExchangeRate s := by
-  simp [updateExchangeRate, computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount]
-
 private theorem rate_non_decreasing_of_deposit
     (TA TS amount R : Nat) (hbacked : R * (TS + 1) ≤ (TA + 1) * ray) :
     R ≤ (TA + amount + 1) * ray / (TS + amount * ray / R + 1) := by
