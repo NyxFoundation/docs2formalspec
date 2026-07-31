@@ -12,10 +12,13 @@ Live values at ≈ block 25,641,600: `rateLimitAmount = 5e25` (**50,000,000 apxU
 `rateLimitMinted() = 0`. A `setRateLimit(1e24, 86400)` — a **50× tightening** — is scheduled in the
 manager's queue (`model.md` §6).
 
-Scope: this module models the guard and the two ways it can be surprised. The trace-level
-"damage is linear in elapsed time" statement is not re-proved here; `BlastRadius.lean`'s
-`rate_limit_linear_bound` already establishes that shape generically over a wrapper, and what was
-missing was the tie to a real contract's guard.
+Scope: this module models the guard, the two ways it can be surprised, and — as of the clock
+pass — what the guard actually buys **over a trace**. That last part used to be delegated to
+`BlastRadius.lean`'s `rate_limit_linear_bound`, on the grounds that it "establishes that shape
+generically". It does not: that wrapper meters an **epoch** allowance (`cap * (elapsed / window + 1)`,
+released in steps), whereas `MinterV0` runs a true **sliding window** in which each record expires
+on its own schedule. The two coincide only at the boundaries, so the real contract's cumulative
+behaviour needed proving here rather than borrowing.
 -/
 
 namespace MinterRateLimit
@@ -85,6 +88,50 @@ def step (s : State) (op : Op) (_caller : Address) : Option State :=
   | Op.pause   => some { s with paused := true }
   | Op.unpause => some { s with paused := false }
 
+/-- Execute a list of `(op, caller)` pairs in order; failed operations revert and the trace
+continues, matching the other machines' `execTrace`. -/
+def execTrace (s : State) : List (Op × Address) → State
+  | [] => s
+  | (op, c) :: σ =>
+    match step s op c with
+    | some s' => execTrace s' σ
+    | none    => execTrace s σ
+
+/-! ## The clock is a monopoly here too
+
+Same discipline as `Apyx.lean`: a rate limit measured against a clock is worthless if any
+operation can advance that clock, since the window could then be rolled for free. Stated
+single-step and over traces, exhaustively over the closed `Op`.
+-/
+
+/-- **No operation but `tick` moves the clock.** -/
+theorem now_moves_only_by_tick (s : State) (op : Op) (c : Address) (s' : State)
+    (h : step s op c = some s') (h_not_tick : ∀ dt, op ≠ Op.tick dt) :
+    s'.now = s.now := by
+  cases op
+  case tick dt => exact absurd rfl (h_not_tick dt)
+  all_goals
+    simp only [step] at h
+    (repeat' split at h) <;> first | (cases Option.some.inj h; rfl) | exact absurd h (by simp)
+
+/-- **A trace containing no `tick` cannot roll the window.** This is what makes the limit a limit:
+elapsed time has to be bought, and no amount of minting, pausing or reconfiguring buys it. -/
+theorem trace_now_fixed_without_tick (s : State) (σ : List (Op × Address))
+    (h_no_tick : ∀ p ∈ σ, ∀ dt, p.1 ≠ Op.tick dt) :
+    (execTrace s σ).now = s.now := by
+  induction σ generalizing s with
+  | nil => rfl
+  | cons p σ ih =>
+    obtain ⟨op, c⟩ := p
+    have h_tail : ∀ q ∈ σ, ∀ dt, q.1 ≠ Op.tick dt :=
+      fun q hq => h_no_tick q (List.mem_cons_of_mem _ hq)
+    simp only [execTrace]
+    cases hstep : step s op c with
+    | none => exact ih s h_tail
+    | some s1 =>
+      rw [ih s1 h_tail]
+      exact now_moves_only_by_tick s op c s1 hstep (h_no_tick (op, c) List.mem_cons_self)
+
 /-! ## The guard -/
 
 /-- A mint that would exceed the remaining allowance is rejected. This is the whole of the
@@ -109,6 +156,110 @@ theorem mint_records_the_order (s : State) (c : Address) (amount : Nat) (s' : St
       · rename_i hav
         cases Option.some.inj h
         exact ⟨rfl, Nat.not_lt.mp hav⟩
+
+/-! ## What the guard buys over a trace
+
+`mint_over_available_is_rejected` is one call. The property the contract exists for is the
+invariant it maintains: **at every point of every trace, the volume inside the window is within
+the ceiling**. Nothing above establishes that — a single rejected call says nothing about what a
+long run accumulates.
+
+The one operation that can break it is `setRateLimit`, and that is not an oversight but the
+content of `tightening_does_not_unwind_the_window` below: lowering the ceiling leaves history
+untouched, so the invariant is stated over traces that do not reconfigure the limiter.
+-/
+
+/-- Ticking can only shrink the window's contents: a record leaves when `now` passes
+`time + period`, and never comes back. -/
+theorem mintedInWindow_antitone_in_now (h : List Record) (period : Nat) :
+    ∀ n₁ n₂, n₁ ≤ n₂ → mintedInWindow h n₂ period ≤ mintedInWindow h n₁ period := by
+  intro n₁ n₂ hle
+  induction h with
+  | nil => exact Nat.le_refl _
+  | cons r rs ih =>
+    simp only [mintedInWindow]
+    have hterm : (if n₂ ≤ r.time + period then r.amount else 0)
+        ≤ (if n₁ ≤ r.time + period then r.amount else 0) := by
+      split
+      · rw [if_pos (by omega)]; exact Nat.le_refl _
+      · exact Nat.zero_le _
+
+    exact Nat.add_le_add hterm ih
+
+/-- A fresh record is always inside the window it was made in, so a successful mint adds exactly
+its amount to the metered volume. -/
+theorem minted_after_mint (s : State) (c : Address) (amount : Nat) (s' : State)
+    (h : step s (Op.requestMint amount) c = some s') :
+    minted s' = amount + minted s := by
+  obtain ⟨hhist, -⟩ := mint_records_the_order s c amount s' h
+  have hnow : s'.now = s.now := now_moves_only_by_tick s _ c s' h (by simp)
+  have hper : s'.rateLimitPeriod = s.rateLimitPeriod := by
+    simp only [step] at h
+    (repeat' split at h) <;> first | (cases Option.some.inj h; rfl) | exact absurd h (by simp)
+  unfold minted
+  rw [hhist, hnow, hper]
+  simp only [mintedInWindow]
+  rw [if_pos (by omega)]
+
+/-- Operations other than `setRateLimit` never raise the metered volume above the ceiling, given
+that it was within the ceiling to begin with. The three cases are the three things that can
+happen: the clock moves and the window shrinks; a mint lands and the guard has already checked it
+fits; or nothing relevant changes. -/
+theorem minted_le_cap_step (s : State) (op : Op) (c : Address) (s' : State)
+    (h : step s op c = some s') (h_inv : minted s ≤ s.rateLimitAmount)
+    (h_no_cfg : ∀ a p, op ≠ Op.setRateLimit a p) :
+    minted s' ≤ s'.rateLimitAmount := by
+  cases op
+  case setRateLimit a p => exact absurd rfl (h_no_cfg a p)
+  case tick dt =>
+    have hs' : s' = { s with now := s.now + dt } := by
+      simp only [step] at h; exact (Option.some.inj h).symm
+    subst hs'
+    exact Nat.le_trans (mintedInWindow_antitone_in_now s.history s.rateLimitPeriod
+      s.now (s.now + dt) (by omega)) h_inv
+  case requestMint amount =>
+    obtain ⟨-, hav⟩ := mint_records_the_order s c amount s' h
+    have hcap : s'.rateLimitAmount = s.rateLimitAmount := by
+      simp only [step] at h
+      (repeat' split at h) <;> first | (cases Option.some.inj h; rfl) | exact absurd h (by simp)
+    have hfits : amount + minted s ≤ s.rateLimitAmount := by
+      unfold available at hav; omega
+    rw [minted_after_mint s c amount s' h, hcap]
+    exact hfits
+  case pause =>
+    have hs' : s' = { s with paused := true } := by
+      simp only [step] at h; exact (Option.some.inj h).symm
+    subst hs'; exact h_inv
+  case unpause =>
+    have hs' : s' = { s with paused := false } := by
+      simp only [step] at h; exact (Option.some.inj h).symm
+    subst hs'; exact h_inv
+
+/-- **The sliding window really is bounded, over any trace.** Along a run that does not
+reconfigure the limiter, the volume metered inside the window never exceeds the ceiling — at
+every intermediate state, not merely at the end, since the statement is closed under taking
+prefixes.
+
+This is the property `MinterV0` exists to provide, and until now the module proved only that one
+over-sized call is rejected. Note what it does **not** say: nothing here bounds the *total* ever
+minted, which grows with elapsed time by design — that is the separate cumulative statement, and
+`window_frees_in_one_step` shows the shape of its steps. -/
+theorem minted_le_cap_trace (s : State) (σ : List (Op × Address))
+    (h_inv : minted s ≤ s.rateLimitAmount)
+    (h_no_cfg : ∀ p ∈ σ, ∀ a per, p.1 ≠ Op.setRateLimit a per) :
+    minted (execTrace s σ) ≤ (execTrace s σ).rateLimitAmount := by
+  induction σ generalizing s with
+  | nil => exact h_inv
+  | cons p σ ih =>
+    obtain ⟨op, c⟩ := p
+    have h_tail : ∀ q ∈ σ, ∀ a per, q.1 ≠ Op.setRateLimit a per :=
+      fun q hq => h_no_cfg q (List.mem_cons_of_mem _ hq)
+    simp only [execTrace]
+    cases hstep : step s op c with
+    | none => exact ih s h_inv h_tail
+    | some s1 =>
+      exact ih s1 (minted_le_cap_step s op c s1 hstep h_inv
+        (h_no_cfg (op, c) List.mem_cons_self)) h_tail
 
 /-! ## Two ways the limit is weaker than it reads -/
 

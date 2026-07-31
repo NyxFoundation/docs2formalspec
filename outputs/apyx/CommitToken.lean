@@ -174,6 +174,27 @@ theorem now_moves_only_by_tick (s : State) (op : Op) (c : Address) (s' : State)
       | (cases Option.some.inj h; simp)
       | exact absurd h (by simp)
 
+
+/-- **A trace containing no `tick` cannot move the clock.** The trace-level form, and the one the
+cooldown results actually need: an attacker cannot wait out `unlockingDelay` by interleaving
+deposits, requests and pauses — elapsed time has to be bought with `tick`s. Revert-skip included,
+since a failed operation leaves the state alone. -/
+theorem trace_now_fixed_without_tick (s : State) (σ : List (Op × Address))
+    (h_no_tick : ∀ p ∈ σ, ∀ dt, p.1 ≠ Op.tick dt) :
+    (execTrace s σ).now = s.now := by
+  induction σ generalizing s with
+  | nil => rfl
+  | cons p σ ih =>
+    obtain ⟨op, c⟩ := p
+    have h_tail : ∀ q ∈ σ, ∀ dt, q.1 ≠ Op.tick dt :=
+      fun q hq => h_no_tick q (List.mem_cons_of_mem _ hq)
+    simp only [execTrace]
+    cases hstep : step s op c with
+    | none => exact ih s h_tail
+    | some s1 =>
+      rw [ih s1 h_tail]
+      exact now_moves_only_by_tick s op c s1 hstep (h_no_tick (op, c) List.mem_cons_self)
+
 /-- **The cycle closes**, at whatever cooldown the instance is configured with: request, let
     `unlockingDelay` elapse, claim — one trace. Stated for an arbitrary delay so that it covers
     every entry of `liveDeployments` rather than one of them. -/

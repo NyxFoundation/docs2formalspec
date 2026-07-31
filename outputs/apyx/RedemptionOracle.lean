@@ -70,6 +70,41 @@ def execTrace (s : State) : List (Op × Address) → State
                     | some s' => execTrace s' σ
                     | none    => execTrace s σ
 
+/-! ## The clock is a monopoly
+
+The pipeline has a clock because `pushRound` records a round at a time. Nothing here is a maturity
+claim, so this is a hygiene result rather than a load-bearing one — but stating it is what keeps
+the machine honest if a future round-staleness property is added, and it matches the discipline
+`Apyx.lean`, `CommitToken.lean` and `MinterRateLimit.lean` now carry.
+-/
+
+/-- **No operation but `tick` moves the clock.** -/
+theorem now_moves_only_by_tick (s : State) (op : Op) (c : Address) (s' : State)
+    (h : step s op c = some s') (h_not_tick : ∀ dt, op ≠ Op.tick dt) :
+    s'.now = s.now := by
+  cases op
+  case tick dt => exact absurd rfl (h_not_tick dt)
+  all_goals
+    simp only [step] at h
+    (repeat' split at h) <;> first | (cases Option.some.inj h; rfl) | exact absurd h (by simp)
+
+/-- And the trace form. -/
+theorem trace_now_fixed_without_tick (s : State) (σ : List (Op × Address))
+    (h_no_tick : ∀ p ∈ σ, ∀ dt, p.1 ≠ Op.tick dt) :
+    (execTrace s σ).now = s.now := by
+  induction σ generalizing s with
+  | nil => rfl
+  | cons p σ ih =>
+    obtain ⟨op, c⟩ := p
+    have h_tail : ∀ q ∈ σ, ∀ dt, q.1 ≠ Op.tick dt :=
+      fun q hq => h_no_tick q (List.mem_cons_of_mem _ hq)
+    simp only [execTrace]
+    cases hstep : step s op c with
+    | none => exact ih s h_tail
+    | some s1 =>
+      rw [ih s1 h_tail]
+      exact now_moves_only_by_tick s op c s1 hstep (h_no_tick (op, c) List.mem_cons_self)
+
 /-! ## The cap holds, and nothing in the pipeline can move it -/
 
 /-- The published price never exceeds the cap. True by the shape of `latestRoundData`, which is
