@@ -728,8 +728,9 @@ operations rather than debits of recorded holdings):
   `redemptionValue := totalCollateralValue * ray / totalSupply_apxUSD`, repricing
   all *future* redemptions (including RFQ redemptions executed against a user's
   outstanding request by a counterparty) — quantifying that channel is Tier 2's T6
-  `oracle_blast_radius`; the backstop simultaneously pays the entire USDC reserve
-  out to apxUSD holders pro-rata (credit-only; the model.md compensation leg);
+  `oracle_blast_radius`; the backstop simultaneously zeroes the reserve, crediting each holder
+  `⌊reserve · bal / supply⌋` (credit-only; the model.md compensation leg — and the credits sum to
+  at most the reserve, to zero when the supply is zero);
 * `setYieldRate`/`setVestPeriod` distort future yield accrual timing. -/
 
 /-- Exact effect of `addToWhitelist`. -/
@@ -806,9 +807,13 @@ theorem step_handleStressEvent_exact (s : State) (amount : Nat) (caller : Addres
 governance emergency flag already set in the pre-state (the backstop cannot raise
 the flag for itself — model.md guard "Governance emergency flag set"); it reprices
 every claim to track collateral (`redemptionValue := totalCollateralValue * ray /
-totalSupply_apxUSD`, the per-token `ray` fixed-point form), distributes the entire
-USDC reserve pro-rata to apxUSD holders, and zeroes the reserve and the recorded
-overcollateralization buffer. -/
+totalSupply_apxUSD`, the per-token `ray` fixed-point form), zeroes the reserve and the recorded
+overcollateralization buffer, and credits each holder `⌊reserve · bal / supply⌋`.
+
+Note "distributes the entire reserve" would overstate the statement in two ways. `Nat` division
+truncates, so the credits sum to **at most** the reserve, not exactly it. And when
+`totalSupply_apxUSD = 0` every credit is `0 / 0 = 0` while the reserve is still zeroed — the whole
+reserve is destroyed, crediting nobody. -/
 theorem step_catastrophicBackstop_exact (s : State) (caller : Address) (s' : State)
     (h : step s Op.catastrophicBackstop caller = some s') :
     caller = s.admin ∧ s.emergencyFlag = true ∧
@@ -1467,10 +1472,17 @@ private theorem fee_le_start (rt now : Nat) : flexibleUnlockFee rt now ≤ 350 :
     | omega
     | exact Nat.max_le.mpr ⟨Nat.sub_le _ _, by omega⟩
 
-/-- T4 companion — unlock positions cannot be seized. If address `u` holds a live
-unlock position `id` (recorded below the id counter, as every position created by
-`step` is) and **anyone other than `u`** — any compromised role, including the
-UnlockToken operator — executes any operation, then either
+/-- T4 companion — unlock positions cannot be seized.
+
+One hypothesis the earlier draft of this docstring did not mention: `h_wf`, that the acting
+caller's pending-request pointer references a position that caller owns. It is an invariant of
+reachable states and is **assumed here, not proved**; without it the caller's `requestUnlock`
+top-up branch could rewrite another user's recorded amount, so it is load-bearing rather than
+decorative.
+
+Under it: if address `u` holds a live unlock position `id` (recorded below the id counter, as
+every position created by `step` is) and **anyone other than `u`** — any compromised role,
+including the UnlockToken operator — executes any operation, then either
 
 * the position is completely untouched (same owner, same amount), or
 * the operation was the operator settling that very position **to its owner**:
@@ -2070,8 +2082,11 @@ bounding `redemptionValue`, and one of its two writers (`redemption_price_writer
 `catastrophicBackstop` sets it to the
 unbounded `totalCollateralValue * ray / totalSupply_apxUSD`
 (`redemption_price_admin_only`), there is no
-in-model invariant capping the payout — no upper bound is provable, because none
-exists. This is the honest T6 result: in the current clamp-free model the extractable
+*guard* in `redeemApxUSD` capping the payout. Read the scope narrowly: the statement quantifies
+over **arbitrary** states with no reachability hypothesis, and the witness is degenerate — it
+leaves `totalSupply_apxUSD` at `0` while every address holds 1 apxUSD, which the proof relies on
+and which no supply or solvency invariant would permit. So this shows the *operation* is
+unguarded; it does not show that no invariant of reachable states bounds the payout. This is the honest T6 result: in the current clamp-free model the extractable
 amount is limited only by the reserve, motivating a Tier-3 rate-limit / price clamp.
 
 (Not a claim that the model is *wrong*: it is a faithful mirror of a real design whose
@@ -2294,9 +2309,17 @@ clock of its own: it steps on plain base operations, and the allowance is *deriv
 in `Op`, with `execTrace` advancing it — so the wrapper is now an instance of E1 rather than a
 parallel mechanism beside it.
 
-Headline (`rate_limit_linear_bound`): over an arbitrary trace, cumulative reserve outflow is
-at most `cap * (elapsed / window + 1)` where `elapsed = base.now - t0` — one allowance for the
-window in progress plus one for each completed window. That is the memo's
+Headline (`rate_limit_linear_bound`): over an arbitrary trace, the reserve's **net decrease from
+start to end** is at most `cap * (elapsed / window + 1)`, where `elapsed = base.now - t0` — one
+allowance for the window in progress plus one for each completed window.
+
+Two things that phrasing has to get right and an earlier draft did not. It is a **net** bound, not
+a cumulative one: the conclusion is the truncated difference `rs.base.usdcReserve -
+(execTrace2 rs τ).base.usdcReserve`, so a trace that drains, refills via `depositUSDC`, and drains
+again satisfies it while the summed outflow exceeds it. The genuinely cumulative quantity is the
+meter `spent`, bounded internally by `rl_spent_le_allowance`. And `elapsed` is measured from when
+the limiter was **installed** (`t0`), not from the trace's own start, so it exceeds the trace's
+advance whenever `rs.base.now > rs.t0`; only the `_fresh` corollary makes the two coincide. That is the memo's
 `userLoss(t) ≤ cap × ⌈t/window⌉`. -/
 
 /-- Rate-limited wrapper state: the untouched base `State`, the clock reading at which the
@@ -2507,7 +2530,7 @@ the honest negative result — the base model's timelock is zero seconds, exactl
 Yearn's real-world finding about `ApxUSDRateOracle.setRate`); the wrapper in the
 second half then *adds* the mechanism and proves what it buys. -/
 
-/-- T8 Half 1, universal form: **privileged repricing is instantaneous in the base
+/-- T8 Half 1: **`catastrophicBackstop` repricing is instantaneous in the base
 model.** Whenever `catastrophicBackstop` (one of the two writers of the redemption price (`redemption_price_writers`; the other is `updateRedemptionValue`),
 `redemption_price_admin_only`) succeeds, the new price is already in force in the
 post-state of that same step, and the clock has not advanced by even one unit
@@ -3192,11 +3215,24 @@ paying the full `amount` in USDC. Instead the coalition acts first:
 2. the **counterparty**'s `executeRFQRedemption victim 100` settles the pending
    request at the crashed price: 100 apxUSD burn for `100 * 0 / ray = 0` USDC.
 
-Outcome (final conjuncts): the victim ends with 0 apxUSD and strictly less USDC
-than the counterfactual pays — concretely 50 against 100 — an attributable loss of
-half the principal. The redistribution is a conjunct too, not prose: a bystander
-the coalition never names starts with 0 USDC and ends holding exactly half the
-victim's principal, routed there by the backstop's own pro-rata leg.
+Outcome (final conjuncts): the victim ends with 0 apxUSD and 50 USDC where their own redemption
+would have paid 100.
+
+**What that 50 is, and what it is not.** The pool here is deliberately **under-reserved** — 200
+tokens of claim against 100 USDC, since `totalCollateralValue` is 0 — and the honest reading of
+the witness follows from that. The bystander's 50 is **their own pro-rata entitlement**
+(`100 × 100 / 200`), not a slice of the victim's principal; the backstop's leg pays each holder
+their share and nothing is transferred between them. Conversely the machine-checked
+counterfactual now records that the victim's own `redeemApxUSD` would have **emptied the reserve**
+(`s3.usdcReserve = 0`), leaving the bystander with nothing.
+
+So what the coalition destroys is the victim's **first-mover position on an under-reserved pool**,
+converting an executable 100-USDC claim into a 50-USDC pro-rata payout. That is a real loss to the
+victim — the counterfactual is proved, not asserted — but it is a loss of *queue position*, not of
+backing, and it is worth saying plainly rather than calling it "half the principal redistributed".
+An earlier draft of this docstring did call it that, which the funded witness does not support:
+on a **fully** reserved pool the same two steps leave the victim whole, because the pro-rata leg
+pays par.
 
 Model-boundary assumptions carried by both coalition theorems (review action 2):
 the *filing* of the victim's RFQ request is state (`rfqRequests`) and its
@@ -3216,7 +3252,7 @@ theorem admin_rfq_coalition_drains_funded :
       ray ≤ s.redemptionValue ∧
       s.rfqCounterparties.contains counterparty = true ∧
       (∃ s3 : State, step s (Op.redeemApxUSD amount) victim = some s3 ∧
-        s3.usdcBal victim = amount) ∧
+        s3.usdcBal victim = amount ∧ s3.usdcReserve = 0) ∧
       step s Op.catastrophicBackstop s.admin = some s1 ∧
       s1.redemptionValue = 0 ∧
       step s1 (Op.executeRFQRedemption victim amount) counterparty = some s2 ∧
@@ -3250,7 +3286,7 @@ theorem admin_rfq_coalition_drains_funded :
   have h2 := step_executeRFQRedemption_forward R 0 100 2 hgp hcp hwl hrq hbal hres
   obtain ⟨hapx, husdc⟩ := rfq_payout_formula R 0 100 2 _ h2
   refine ⟨coalWitnessFunded, R, _, 0, 2, 100, by decide, rfl, rfl, rfl, rfl, rfl,
-    Nat.le_refl _, by decide, ⟨_, rfl, rfl⟩, h1, rfl, h2, ?_, ?_, ⟨4, by decide, rfl, ?_⟩⟩
+    Nat.le_refl _, by decide, ⟨_, rfl, rfl, rfl⟩, h1, rfl, h2, ?_, ?_, ⟨4, by decide, rfl, ?_⟩⟩
   · rw [hapx, show R.apxUSDBal 0 = 100 from rfl]
   · rw [husdc, show R.redemptionValue = 0 from rfl, Nat.mul_zero, Nat.zero_div,
       show R.usdcBal 0 = 50 from rfl]
