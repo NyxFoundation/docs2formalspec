@@ -238,56 +238,17 @@ theorem vault_leak_linear (v a feePct n : Nat)
   rw [modelVaultAfterUnlocks_closed v a n hna, vaultAfterUnlocks_closed v a feePct n h_fund]
   omega
 
-/-! ### The guard the model lacks
+/-! ### The guard the model used to lack
 
 `_withdraw` reverts with `InvalidCaller()` unless `receiver == owner`, "to prevent third parties
-from minting the UnlockReceipt to themselves". The model's `Op.withdraw assets receiver` takes an
-arbitrary receiver and never compares it to the share owner, so it admits steps the chain refuses
-— the same "model more permissive than the chain" direction as the deny-list gaps of §9.3.
+from minting the UnlockReceipt to themselves". The model's `Op.withdraw assets receiver` took an
+arbitrary receiver and never compared it to the share owner, so it admitted steps the chain
+refuses — the same "model more permissive than the chain" direction as the deny-list gaps of §9.3,
+and found the same way.
+
+It is gated now, under the identification of the model's caller with the chain's owner. The two
+theorems below are what the old permissiveness result turned into.
 -/
-
-/-- **The model constrains the receiver only through the deny-list.** If a withdrawal succeeds for
-one receiver it succeeds, from the same state and the same caller, for **every non-denied**
-receiver: the deny-list is the sole guard on `Op.withdraw` that mentions the receiver at all, the
-rest (`globalPause`, the zero-share check, the share balance, the vault balance) speaking only of
-the caller and the amount.
-
-That is still weaker than the chain, but the gap is now exactly one comparison. The deployment
-checks `receiver` against **`owner`**: `_withdraw` reverts with `InvalidCaller()` unless
-`receiver == owner`, "to prevent third parties from minting the UnlockReceipt to themselves".
-ERC-4626 keeps caller and owner apart — a spender with allowance calls with `caller ≠ owner` —
-and the model has no `owner` parameter at all, so identifying its `caller` with the chain's
-`owner` is a modelling choice rather than a chain fact. Under that identification the model
-remains **more permissive than the chain** on this path, and it is why `holder_value_withdraw`
-carries a `receiver ≠ caller` branch.
-
-(The deny-list half of the gap **was** closed, in the same pass that gated `lockApxUSD`,
-`withdraw`, `redeem` and `executeRFQRedemption` through the `_update` hook; this theorem's
-`h_dl` hypothesis is what that fix left behind.)
-
-Stated as a general receiver-independence result rather than a single witness: it says the guard
-is absent from the model, not merely that one state slips through. -/
-theorem withdraw_receiver_unconstrained (s : State) (assets : Nat) (r1 r2 caller : Address)
-    (s1 : State) (h : step s (Op.withdraw assets r1) caller = some s1)
-    (h_dl : s.denylist r2 = false) :
-    ∃ s2, step s (Op.withdraw assets r2) caller = some s2 := by
-  simp only [step] at h ⊢
-  split at h
-  · exact absurd h (by simp)
-  · split at h
-    · exact absurd h (by simp)
-    · split at h
-      · exact absurd h (by simp)
-      · split at h
-        · exact absurd h (by simp)
-        · rename_i g1 g2 g3 g4
-          -- the first guard is the only one mentioning the receiver, so it has to be rebuilt
-          -- for `r2` from `h_dl`; the other three are receiver-free and transfer unchanged
-          have g1' : ¬(s.globalPause || s.denylist caller || s.denylist r2) = true := by
-            simp only [Bool.or_eq_true, not_or, h_dl] at g1 ⊢
-            simp_all
-          rw [if_neg g1', if_neg g2, if_neg g3, if_neg g4]
-          exact ⟨_, rfl⟩
 
 /-- A funded, non-degenerate vault: one holder owns the whole 100-share supply against 100
 assets, so the live rate is exactly `ray` and a 100-asset withdrawal costs exactly 100 shares. -/
@@ -298,15 +259,40 @@ def withdrawWitness : State :=
       apyUSDBal := fun a => if a = 1 then 100 else 0
       vaultApxUSDBal := 100 }
 
-/-- **`withdraw_receiver_unconstrained` is not vacuous.** Successful withdrawals exist, and the
-receiver really is free: the same caller, from the same state, succeeds while directing the
-receipt to two different third parties. (Read off the source, not proved here: on chain both of
-these revert with `InvalidCaller()`, under the caller-as-owner identification discussed above.) -/
-theorem withdraw_third_party_receipts_succeed :
-    (step withdrawWitness (Op.withdraw 100 2) 1).isSome = true ∧
-    (step withdrawWitness (Op.withdraw 100 7) 1).isSome = true ∧
-    computeExchangeRate (pullVestedYield withdrawWitness) = ray := by
-  refine ⟨by decide, by decide, by decide⟩
+/-- **The receipt lands on the share owner, and nowhere else.** Withdrawing to yourself succeeds;
+naming any other receiver reverts. This is `_withdraw`'s `if (receiver != owner) revert
+InvalidCaller()`, which exists "to prevent third parties from minting the UnlockReceipt to
+themselves".
+
+The direction of travel here is worth recording. This file used to carry the opposite theorem —
+`withdraw_receiver_unconstrained`, "if a withdrawal succeeds for one receiver it succeeds for
+every receiver" — as evidence that the model was **more permissive than the chain** on this path.
+It was, twice over: no deny-list check and no receiver-is-owner check. Both are gated now, so the
+old theorem is false and this is what replaces it.
+
+One modelling choice remains, and it is not a chain fact. ERC-4626 keeps caller and owner apart —
+a spender with allowance calls `withdraw(assets, receiver, owner)` with `caller ≠ owner`, and the
+receipt still lands on `owner`. This model has no `owner` parameter, so the caller plays that
+role. Under that identification the guard is faithful; the allowance path is simply not
+representable here. -/
+theorem withdraw_receipt_goes_to_the_owner :
+    (step withdrawWitness (Op.withdraw 100 1) 1).isSome = true ∧
+    step withdrawWitness (Op.withdraw 100 2) 1 = none ∧
+    step withdrawWitness (Op.withdraw 100 7) 1 = none ∧
+    computeExchangeRate (pullVestedYield withdrawWitness) = ray :=
+  ⟨by decide, by decide, by decide, by decide⟩
+
+/-- **The general form: the receiver is pinned to the caller.** Not a witness — every successful
+withdrawal in the model has the receipt landing on the caller, so no third party can be named. -/
+theorem withdraw_receiver_is_caller (s : State) (assets : Nat) (receiver caller : Address)
+    (s' : State) (h : step s (Op.withdraw assets receiver) caller = some s') :
+    receiver = caller := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i g
+    simp only [Bool.or_eq_true, not_or, bne_iff_ne, ne_eq, Decidable.not_not] at g
+    exact g.2
 
 /-! ## B. The variable-unlock fee curve
 

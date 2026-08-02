@@ -873,9 +873,11 @@ at — `computeExchangeRate (pullVestedYield s)`, the rate the share cost is cei
 Pricing at any other rate mixes denominators: a stale rate under-prices the burned shares
 and the step would (spuriously) read as a gain.
 
-Any `receiver`: if the position goes to someone else the caller pays (the bound is `≤`, and it is
-not strict at `assets = 0`); if to the caller, the ceil-rounded share cost covers the position
-credit (`withdrawShares_covers`), with the zero-share guard (`Regression.lean` §R4b) supplying the
+Stated for any `receiver`, though only one value is now reachable: `step`'s `receiver != caller`
+guard pins the receipt to the caller (`DeploymentFees.withdraw_receiver_is_caller`), so the
+"someone else" branch of the proof is dead weight kept for robustness against that guard changing.
+On the live branch the ceil-rounded share cost covers the position credit
+(`withdrawShares_covers`), with the zero-share guard (`Regression.lean` §R4b) supplying the
 nonzero cost. Assumes `h_unalloc_flex`, which `flex_unallocated_at_counter` discharges. -/
 theorem holder_value_withdraw (s : State) (assets : Nat) (receiver caller : Address)
     (s' : State) (h_step : step s (Op.withdraw assets receiver) caller = some s')

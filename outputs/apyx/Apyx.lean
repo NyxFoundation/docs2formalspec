@@ -789,8 +789,15 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
           some s3
   | Op.withdraw assets receiver =>
     -- burns the caller's apyUSD and names a receiver, so it passes `ApyUSD._update`; the
-    -- deployment additionally runs `checkNotDenied` on caller, receiver and owner in `_withdraw`
-    if s.globalPause || s.denylist caller || s.denylist receiver then none
+    -- deployment additionally runs `checkNotDenied` on caller, receiver and owner in `_withdraw`.
+    --
+    -- `receiver != caller` mirrors `_withdraw`'s `if (receiver != owner) revert InvalidCaller()`,
+    -- which exists "to prevent third parties from minting the UnlockReceipt to themselves".
+    -- ERC-4626 keeps caller and owner apart — a spender with allowance calls with
+    -- `caller != owner` — and this model has no `owner` parameter, so the caller plays that
+    -- role and the receipt must land on them. Folded into the pause test to keep the guard
+    -- count, and with it every inversion lemma's split chain, unchanged.
+    if s.globalPause || s.denylist caller || s.denylist receiver || receiver != caller then none
     else
       -- the deployment pulls vested yield BEFORE pricing ("so liquid assets match
       -- totalAssets()"), then prices off the live rate
@@ -814,8 +821,8 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
         let s6 := emitEvent s5 "Withdraw" [caller, receiver, caller, assets, shares]
         some s6
   | Op.redeem shares receiver =>
-    -- same hook as `withdraw`: the caller's apyUSD is burned and a receiver named
-    if s.globalPause || s.denylist caller || s.denylist receiver then none
+    -- same hook and same receiver-is-owner check as `withdraw`
+    if s.globalPause || s.denylist caller || s.denylist receiver || receiver != caller then none
     else
       let s1 := pullVestedYield s
       if s1.apyUSDBal caller < shares then none
@@ -3200,7 +3207,11 @@ theorem req_new_locked_receives_yield (s : State) (amount : Nat) (caller : Addre
 /-- REQ synchronous_withdraw_return_token: The apyUSD vault MUST execute withdrawals and redeems synchronously and MUST return apxUSD_unlock tokens immediately. -/
 theorem req_synchronous_withdraw_return_token (s : State) (assets : Nat) (receiver caller : Address)
     (h1 : s.globalPause = false)
-    (h_dl : s.denylist caller = false) (h_dlr : s.denylist receiver = false)
+    (h_dl : s.denylist caller = false)
+    -- the receipt lands on the share owner, mirroring `_withdraw`'s `receiver != owner` revert.
+    -- With this in hand a separate deny-list condition on the receiver would be redundant —
+    -- the receiver *is* the caller.
+    (h_own : receiver = caller)
     (h2 : (pullVestedYield s).apyUSDBal caller ≥ withdrawShares assets (computeExchangeRate (pullVestedYield s)))
     (h3 : (pullVestedYield s).vaultApxUSDBal ≥ assets)
     -- A positive withdrawal costs positive shares. On-chain this is automatic —
@@ -3216,7 +3227,7 @@ theorem req_synchronous_withdraw_return_token (s : State) (assets : Nat) (receiv
       rintro ⟨ha, hz⟩
       have := h4 ha
       omega
-    exact absurd ho (by simp [step, h1, h_dl, h_dlr, h2', h3', h4'])
+    exact absurd ho (by simp [step, h1, h_dl, h_own, h2', h3', h4'])
   · refine ⟨s', rfl, s.nextUnlockId, ?_⟩
     obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ ho
     subst hs'
