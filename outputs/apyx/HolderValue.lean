@@ -1015,4 +1015,96 @@ theorem caller_net_nonpositive_complete (s : State) (op : Op) (caller : Address)
   · exact ⟨computeExchangeRate (pullVestedYield s),
       holder_value_redeem s shares r caller s' h_step h_unalloc_flex⟩
 
+/-! ## A trace-level law, on the subfamily where the rate holds still
+
+Every result above is single-step, and the umbrella says why they do not chain: the vault
+operations are priced at `computeExchangeRate (pullVestedYield s)` while the others use
+`computeExchangeRate s`, so a trace mixing them compares values at shifting rates.
+
+There is a subfamily where that obstruction disappears. `depositUSDC` and `redeemApxUSD` move
+neither `totalAssets` nor `totalSupply_apyUSD`, so the live rate is *invariant* across them — the
+`_live` theorems above are exactly that observation — and their bounds telescope. The result is a
+genuine no-free-money law on the **complete** measure over arbitrary-length traces, which is what
+`caller_net_nonpositive_trace` provides for the incomplete one.
+
+Scope: the trace is restricted to steps the tracked holder signs. Steps signed by *others* also
+leave this holder's value alone (they touch neither the holder's columns nor the rate), but that
+needs a frame result per operation that this module does not carry, so it is not claimed here.
+-/
+
+/-- The two operations whose live rate is fixed, as a predicate on a trace entry. -/
+def RateFixedOp (op : Op) : Prop :=
+  (∃ amt, op = Op.depositUSDC amt) ∨ (∃ amt, op = Op.redeemApxUSD amt)
+
+/-- Neither writes the published price, so `PriceUnderPar` survives them. -/
+private theorem priceUnderPar_rateFixed (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s') (h : s.redemptionValue ≤ ray)
+    (h_op : RateFixedOp op) : s'.redemptionValue ≤ ray := by
+  have hframe : s'.redemptionValue = s.redemptionValue := by
+    refine redemptionValue_frame s op caller s' h_step ?_ ?_
+    · rcases h_op with ⟨amt, rfl⟩ | ⟨amt, rfl⟩ <;> intro v <;> simp
+    · rcases h_op with ⟨amt, rfl⟩ | ⟨amt, rfl⟩ <;> simp
+  omega
+
+/-- **No free money for a holder over a whole trace, on the complete measure.**
+
+Along any trace of the holder's own `depositUSDC` and `redeemApxUSD` steps — any length, any
+amounts, revert-skip included — the holder's complete holdings, priced at the live rate, never
+rise. The single standing side condition is the no-premium-redemption invariant
+`redemptionValue ≤ ray`, required only at the initial state: neither operation writes the price,
+so it propagates (`priceUnderPar_rateFixed`).
+
+This is the trace-level statement the module lacked. It is available for exactly these two
+operations because they are the ones that hold the live rate still; the vault legs move it, which
+is what stops the umbrella `caller_net_nonpositive_complete` from chaining. -/
+theorem holderValue_trace_nonincreasing (s : State) (σ : List (Op × Address)) (a : Address)
+    (h_price : s.redemptionValue ≤ ray)
+    (h_own : ∀ p ∈ σ, p.2 = a)
+    (h_ops : ∀ p ∈ σ, RateFixedOp p.1) :
+    holderValue (execTrace s σ) a ≤ holderValue s a := by
+  induction σ generalizing s with
+  | nil => exact Nat.le_refl _
+  | cons p σ ih =>
+    obtain ⟨op, c⟩ := p
+    have hhead_own : c = a := h_own (op, c) List.mem_cons_self
+    have hhead_op : RateFixedOp op := h_ops (op, c) List.mem_cons_self
+    have htail_own : ∀ q ∈ σ, q.2 = a := fun q hq => h_own q (List.mem_cons_of_mem _ hq)
+    have htail_op : ∀ q ∈ σ, RateFixedOp q.1 := fun q hq => h_ops q (List.mem_cons_of_mem _ hq)
+    simp only [execTrace]
+    cases hstep : step s op c with
+    | none => exact ih s h_price htail_own htail_op
+    | some s1 =>
+      have hstep1 : holderValue s1 a ≤ holderValue s a := by
+        rw [← hhead_own]
+        rcases hhead_op with ⟨amt, rfl⟩ | ⟨amt, rfl⟩
+        · exact Nat.le_of_eq (holder_value_depositUSDC_live s amt c s1 hstep)
+        · exact holder_value_redeemApxUSD_live s amt c s1 hstep h_price
+      have hprice1 : s1.redemptionValue ≤ ray :=
+        priceUnderPar_rateFixed s op c s1 hstep h_price hhead_op
+      exact Nat.le_trans (ih s1 hprice1 htail_own htail_op) hstep1
+
+/-- **And it is not vacuous.** A whitelisted holder with USDC deposits twice; both steps are
+`RateFixedOp`s signed by that holder, the price starts at par, and the theorem applies. The value
+is exactly preserved here — deposit swaps USDC for apxUSD at 1:1 — which is the equality case the
+`≤` allows. -/
+theorem holderValue_trace_witness :
+    ∃ (s : State) (σ : List (Op × Address)) (a : Address),
+      s.redemptionValue ≤ ray ∧
+      (∀ p ∈ σ, p.2 = a) ∧ (∀ p ∈ σ, RateFixedOp p.1) ∧
+      0 < σ.length ∧
+      holderValue (execTrace s σ) a = holderValue s a := by
+  refine ⟨{ (default : State) with
+              globalPause := false
+              whitelist := fun _ => true
+              usdcBal := fun x => if x = 1 then 100 else 0
+              redemptionValue := ray },
+          [(Op.depositUSDC 40, 1), (Op.depositUSDC 60, 1)], 1, Nat.le_refl _, ?_, ?_, by decide,
+          by decide⟩
+  · intro p hp
+    have : p = (Op.depositUSDC 40, 1) ∨ p = (Op.depositUSDC 60, 1) := by simpa using hp
+    rcases this with rfl | rfl <;> rfl
+  · intro p hp
+    have : p = (Op.depositUSDC 40, 1) ∨ p = (Op.depositUSDC 60, 1) := by simpa using hp
+    rcases this with rfl | rfl <;> exact Or.inl ⟨_, rfl⟩
+
 end Apyx
