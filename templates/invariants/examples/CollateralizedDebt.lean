@@ -355,7 +355,7 @@ theorem redeem_preserves_health (s : State) (p : Position) (amount : Nat)
   exact Nat.le_trans (Nat.sub_le_sub_left hba _) (Nat.sub_le_sub_right hp _)
 
 theorem mem_dropPos {q : Position} : ∀ (l : List Position) (i : Nat), q ∈ dropPos l i → q ∈ l
-  | [],      _, hm => by simpa [dropPos] using hm
+  | [],      _, hm => by simp [dropPos] at hm
   | p :: ps, i, hm => by
     simp only [dropPos] at hm
     split at hm
@@ -366,7 +366,7 @@ theorem mem_dropPos {q : Position} : ∀ (l : List Position) (i : Nat), q ∈ dr
 
 theorem mem_updatePos {q : Position} {f : Position → Position} :
     ∀ (l : List Position) (i : Nat), q ∈ updatePos f l i → q ∈ l ∨ ∃ r ∈ l, q = f r
-  | [],      _, hm => by simpa [updatePos] using hm
+  | [],      _, hm => by simp [updatePos] at hm
   | p :: ps, i, hm => by
     simp only [updatePos] at hm
     split at hm
