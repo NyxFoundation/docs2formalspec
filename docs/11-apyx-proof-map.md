@@ -109,6 +109,19 @@ precondition
 
 Success-only proofs can miss an implementation that accepts an invalid action, rejects a valid action, or changes state before reverting.
 
+The current boundary is implemented by `StepResult`, `stepResult`,
+`stepResult_total`, `stepResult_reverted_iff`,
+`stepResult_accepted_iff`, and `stepResult_state?` in
+`lean/D2fsSpecs/Transition.lean`. A
+revert is represented by absence of a successor because the underlying
+`Apyx.step` returns `Option State`; `RevertReason.modelUnknown` does not claim
+to identify the failed guard. Accepted events are the `eventDelta` bookkeeping
+projection of the cumulative log. `stepResult_reverted_no_state` records the
+strongest revert-state fact available in this model: no successor state exists
+to compare with the pre-state. Exact guard reasons, event fidelity, and
+partial-state-before-revert behavior therefore remain explicit model gaps,
+not silently proved properties.
+
 ## 5. Establish representation invariants before economic theorems
 
 Economic properties are only meaningful when the state representation is well formed. The initial invariant should cover at least the following.
@@ -124,6 +137,15 @@ Typical examples:
 - an outgoing transfer cannot exceed the available balance;
 - the reserve and liability ledgers use the same units and asset domains.
 
+The concrete ledger predicate is `ApxUSDLedgerConsistent` in
+`lean/D2fsSpecs/Ledger.lean`. Its finite holder-list representation makes the
+support and supply identity explicit. `apxUSDLedgerConsistent_default` proves
+initialization, `apxUSDLedgerConsistent_step` proves preservation for every
+current `Op`, and `LedgerCoveredOp`/`ledgerCoveredOp_all` make operation
+coverage reviewable. `ledgerGapWitness` and
+`wellFormed_solvent_not_imply_ledgerConsistent` intentionally record that the
+aggregate predicates alone do not imply this finite identity.
+
 ### 5.2 Registry consistency
 
 For pending requests, positions, or claims, specify:
@@ -136,6 +158,15 @@ For pending requests, positions, or claims, specify:
 - uniqueness and bounds.
 
 Every action that creates, consumes, or updates a registry entry must preserve these relationships.
+
+The concrete registry layer is `RegistryWellIndexed`, together with
+`RegistryBounded` and `OwnerPointerSound`, in
+`lean/D2fsSpecs/Registry.lean`. The initialization and step theorems are
+`registryWellIndexed_default`, `registryWellIndexed_step`, and
+`registryWellIndexed_reachable`; the constructor-specific lemmas cover fresh
+allocation, top-ups, claims, and vault exits. Registry reachability is kept
+separate from the stricter `ProtocolReach` relation used by the composite
+invariant.
 
 ### 5.3 Clock consistency
 
@@ -266,6 +297,18 @@ For Apyx, useful branches include:
 - manipulation resistance: an attacker must pay at least the specified cost to move a price or extract value.
 
 A proof about one routine should not be presented as a proof about the whole protocol. For example, if claimUnlock is not modeled, a theorem about the other routines should be labeled as routine-only or phase-restricted. If behavior changes after a shutdown or winding-down phase, the phase must be part of the state and the theorem must state its phase assumptions.
+
+The current economic ladder is distributed across the following source
+families: `solvency_step` and `protocolInv_stepResult_accepted` for conditional
+solvency/invariant preservation; `holder_value_*` and `netDelta` in
+`HolderValue.lean` for per-holder value; the rounding lemmas named in §5.4;
+`redemptionValue_frame`, `redemption_price_writers`, and
+`admin_alone_moves_redemption_price` for price writers; `reserve_outflow_only_via_redemption`
+and the buffer theorems for non-depletion boundaries; and
+`rate_limit_linear_bound` plus the attack witnesses in `BlastRadius.lean` for
+bounded extraction scenarios. The source statements, rather than theorem
+counts, determine whether each result is local, reachable, trace-scoped,
+conditional, or a witness.
 
 ## 8. Compose the protocol components explicitly
 
