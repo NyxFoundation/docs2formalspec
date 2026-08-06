@@ -796,6 +796,32 @@ theorem outstandingApxUSD_of_projections_eq {s t : State}
   rw [hsupply, standardUnlockTotal_of_projections_eq hnext hstandard,
     flexibleUnlockTotal_of_projections_eq hnext hflexible]
 
+/-- Pulling the live vest adds exactly the newly realized amount to custody;
+the circulating and pending obligation ledger is framed. -/
+theorem apxUSDFlow_pullVestedYield (s : State) :
+    apxUSDFlow (pullVestedYield s) =
+      apxUSDFlow s + vestedAmount s s.now := by
+  have hvault : (pullVestedYield s).vaultApxUSDBal =
+      s.vaultApxUSDBal + vestedAmount s s.now :=
+    pullVestedYield_moves_exactly_vested s
+  have hout : outstandingApxUSD (pullVestedYield s) = outstandingApxUSD s := by
+    apply outstandingApxUSD_of_projections_eq
+    · unfold pullVestedYield
+      dsimp only
+      split <;> rfl
+    · unfold pullVestedYield
+      dsimp only
+      split <;> rfl
+    · unfold pullVestedYield
+      dsimp only
+      split <;> rfl
+    · unfold pullVestedYield
+      dsimp only
+      split <;> rfl
+  unfold apxUSDFlow
+  rw [hvault, hout]
+  omega
+
 theorem standardUnlockTotal_createStandardUnlock (s : State) (owner : Address)
     (amount : Nat) :
     standardUnlockTotal (createStandardUnlock s owner amount) =

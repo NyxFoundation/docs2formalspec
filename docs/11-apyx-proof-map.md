@@ -230,7 +230,9 @@ boundary. The request and claim flow forms are
 `apxUSDFlow_flexibleClaimUnlock`. These exit theorems are stated against
 `apxUSDFlow (pullVestedYield s)`, not blindly against the pre-state: the live
 vest pull is an external custody inflow and remains a separate accounting
-boundary. `withdrawStep_effect` and `redeemStep_effect` in `Apyx.lean` are the
+boundary. `apxUSDFlow_pullVestedYield` states that this inflow is exactly
+`vestedAmount s s.now` while the circulating and pending ledgers are framed.
+`withdrawStep_effect` and `redeemStep_effect` in `Apyx.lean` are the
 public inversion interfaces used to make that distinction explicit.
 
 ### 5.2 Registry consistency
