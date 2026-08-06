@@ -192,7 +192,14 @@ settlement facts, not reachability or global solvency theorems. The flexible
 counterpart is fee-aware rather than neutral: `flexibleClaimStep_effect`,
 `flexibleClaimFee_le_amount`, `flexPositions_retireFlexibleUnlock`, and
 `flexibleClaim_holderValueAt_fee` show that the owner's value falls by exactly
-the published fee for an in-range successful flexible claim.
+the published fee for an in-range successful flexible claim. The standard
+request-to-claim trace is now composed as
+`standardUnlock_holderValueAt_trace_neutral` at a fixed rate: it includes
+requests, waits, and claims, and carries `RegistryWellIndexed` through the
+induction. The live-value variant
+`standardUnlock_holderValue_trace_neutral` is intentionally narrower and
+excludes waits, because vesting can change the live rate. Operator-mediated
+claims for another holder remain a separate frame obligation.
 
 ### 5.3 Clock consistency
 
@@ -347,7 +354,11 @@ slice in which only paid mint operations occur. It bounds a holder's final
 apxUSD balance by its initial balance plus attempted USDC input; unlock claims
 and their position ledger now have local request and claim boundary facts in
 `Apyx.lean` and `HolderValue.lean`, including the fee-bearing flexible claim.
-The inductive full-trace liability ledger remains open.
+The mixed-operation full-trace liability ledger remains open. The standard
+unlock request-to-claim sublanguage is closed at a fixed rate by
+`standardUnlock_holderValueAt_trace_neutral`; the remaining work is to compose
+that ledger with flexible claims, vault exits, and live-rate changes without
+silently treating price movement as transfer conservation.
 `redemptionValue_frame`, `redemption_price_writers`, and
 `admin_alone_moves_redemption_price` for price writers; `reserve_outflow_only_via_redemption`
 and the buffer theorems for non-depletion boundaries; and
@@ -610,9 +621,14 @@ boundary. The complete holder-facing request law is
 steps. The matching claim-side layer is now `claimUnlock_holderValueAt_neutral`:
 given an in-range position and a successful claim, it proves that the owner loses
 the position amount while receiving the same apxUSD amount. A complete
-request-to-claim trace still needs an inductive finite liability ledger and a
-reachability theorem connecting every live position to that ledger. Flexible
-claims use the corresponding fee law `flexibleClaim_holderValueAt_fee`; treating
+request-to-claim trace now has an inductive fixed-rate theorem,
+`standardUnlock_holderValueAt_trace_neutral`, over the standard request/claim
+language with explicit waits. It starts from `RegistryWellIndexed`, preserves
+that invariant over successful prefixes, and skips reverted calls with the
+model's `execTrace` semantics. It deliberately excludes operator-mediated
+claims for another holder. The mixed-operation trace still needs a ledger
+composition theorem and a live-rate treatment. Flexible claims use the
+corresponding fee law `flexibleClaim_holderValueAt_fee`; treating
 them as neutral would erase the protocol's explicit early-exit charge.
 
 The global layer is where the protocol-level claims belong:

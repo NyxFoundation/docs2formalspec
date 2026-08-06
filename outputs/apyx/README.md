@@ -237,10 +237,16 @@ request boundary is closed for the holder-facing measure as well:
 `requestUnlock_holderValueAt_neutral` covers both a fresh standard request and a top-up under
 `RegistryBounded`. Its lower-level companion, `requestUnlockStep_pending_conservation`, remains
 the intentionally weaker identity that also tolerates malformed pointer states.
+The standard request-to-claim trace is now composed at a fixed rate by
+`standardUnlock_holderValueAt_trace_neutral`: it includes waiting and a successful claim while
+carrying `RegistryWellIndexed` through successful prefixes. The live-value trace variant
+`standardUnlock_holderValue_trace_neutral` excludes waits because vesting can move the live rate.
+Operator-mediated claims for another holder remain outside this slice.
 standard claim boundary is now closed locally: `claimUnlock_holderValueAt_neutral` proves that
 a successful in-range claim removes the recorded amount from the complete standard-position
-sum and mints the same amount back to the owner at any fixed rate. A full trace theorem still
-needs an inductive finite liability ledger and reachability closure. The flexible claim boundary
+sum and mints the same amount back to the owner at any fixed rate. The mixed-operation trace still
+needs composition across the standard, flexible, and vault channels, plus a live-rate treatment.
+The flexible claim boundary
 is also explicit, but correctly charges the early-exit fee: `flexibleClaim_holderValueAt_fee`
 proves `holderValueAt post + fee = holderValueAt pre` at any fixed rate.
 
@@ -308,6 +314,7 @@ extract value using only legitimate operations.
 | Request-boundary liability conservation | When the request's balance guard holds (`amount ≤ caller's apxUSD balance`), the caller's burned balance plus its tracked standard-unlock amount is unchanged by `requestUnlockStep`. The definition returns zero for a missing or mismatched pointer, so the theorem does not assume a canonical registry. This is a request-boundary identity, not a complete request→claim trace or finite liability ledger | `requestUnlockStep_pending_conservation` |
 | Complete holder value at request | A successful standard request is neutral for the caller under `RegistryBounded`, on both the fresh-position and top-up branches. The finite ledger accounts for the newly created or updated standard position, while the balance, share, USDC, flexible-position, and rate terms are framed. `OwnerPointerSound` is not needed: the top-up branch checks the recorded owner before updating; `RegistryBounded` prevents an out-of-range record from being omitted by the finite sum | `requestUnlockStep_effect`, `stdPositions_updateStandardUnlock`, `requestUnlock_holderValueAt_neutral` |
 | Standard claim settles its liability | For a successful claim whose `id` lies below `nextUnlockId`, the recorded owner's complete position value is unchanged at every fixed rate: the claim removes the recorded amount from `stdPositions` and mints the same amount of apxUSD. The theorem is local and does not prove reachability or global solvency | `claimUnlockStep_effect`, `stdPositions_retireStandardUnlock`, `claimUnlock_holderValueAt_neutral` |
+| Standard request-to-claim trace | At a fixed rate, a trace of the holder's standard requests, waits, and standard claims preserves complete holder value. Reverted operations are skipped by `execTrace`; `RegistryWellIndexed` is preserved inductively. The live-rate version excludes waits because vesting can change the price, and operator-mediated claims for another holder are not included | `StandardUnlockTimedOp`, `standardUnlock_holderValueAt_trace_neutral`, `standardUnlock_holderValue_trace_neutral`, `standardUnlock_holderValueAt_trace_witness` |
 | Flexible claim accounts for its fee | For a successful claim whose `id` lies below `nextUnlockId`, the recorded owner's complete value decreases by exactly the fee charged by the flexible fee curve. The fee is bounded by the recorded position amount, so the Nat subtraction is exact | `flexibleClaimStep_effect`, `flexibleClaimFee_le_amount`, `flexPositions_retireFlexibleUnlock`, `flexibleClaim_holderValueAt_fee` |
 | No free extraction (trace) | Over arbitrary traces, no address's fixed-rate holdings can increase — but the trace must avoid **nine** operation families: `mintApxUSD`, `lockApxUSD`, `withdraw`, `redeem`, `claimUnlock`, `flexibleClaimUnlock`, `catastrophicBackstop`, `withdrawReserve`, `poolRedeem`. That excludes the settlement legs of the redemption channel, so it covers the request/RFQ/arbitrage-redeem operations only. The live-rate closure is also open (§6.2) | `caller_net_nonpositive_trace` |
 | Paid-mint trace bound | On traces containing only `depositUSDC` and `mintApxUSD`, a holder's final apxUSD balance is at most its initial balance plus the total attempted USDC input. Failed attempts count in the bound; unlock claims and other credit channels are excluded | `paid_mint_trace_balance_bound` |
