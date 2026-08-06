@@ -1318,6 +1318,75 @@ theorem flexibleClaim_holderValueAt_fee (s : State) (id : Nat)
   dsimp [fee] at hfee hflex' ⊢
   omega
 
+/-! ### Flexible unlock laws at the live rate
+
+The fixed-rate flexible lemmas above can be lifted to `holderValue` because a
+flexible request and claim do not change the exchange-rate inputs in this
+model. Keeping that lift explicit prevents a later trace proof from silently
+mixing a pre-state rate with a post-state live rate. -/
+
+theorem flexibleRequestUnlock_holderValue_live (s : State) (amount : Nat)
+    (caller : Address) (s' : State)
+    (h_step : step s (Op.flexibleRequestUnlock amount) caller = some s')
+    (h_registry : RegistryWellIndexed s) :
+    holderValue s' caller = holderValue s caller := by
+  obtain ⟨-, -, hpost⟩ := flexibleRequestUnlockStep_effect s amount caller s' h_step
+  subst s'
+  have hfixed := flexibleRequestUnlock_holderValueAt_fixedRate
+    (computeExchangeRate s) s amount caller
+    (createFlexibleUnlock (burnApxUSD s caller amount) caller amount) h_step h_registry
+  have hrate : computeExchangeRate
+      (createFlexibleUnlock (burnApxUSD s caller amount) caller amount) =
+      computeExchangeRate s := by
+    simp [computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount,
+      createFlexibleUnlock, burnApxUSD]
+  calc
+    holderValue (createFlexibleUnlock (burnApxUSD s caller amount) caller amount) caller =
+        holderValueAt (computeExchangeRate
+          (createFlexibleUnlock (burnApxUSD s caller amount) caller amount))
+          (createFlexibleUnlock (burnApxUSD s caller amount) caller amount) caller :=
+      (holderValueAt_live _ _).symm
+    _ = holderValueAt (computeExchangeRate s)
+        (createFlexibleUnlock (burnApxUSD s caller amount) caller amount) caller := by
+      rw [hrate]
+    _ = holderValueAt (computeExchangeRate s) s caller := hfixed
+    _ = holderValue s caller := holderValueAt_live s caller
+
+theorem flexibleClaim_holderValue_live_nonincreasing (s : State) (id : Nat)
+    (caller : Address) (s' : State) (a : Address)
+    (h_step : step s (Op.flexibleClaimUnlock id) caller = some s')
+    (h_registry : RegistryWellIndexed s)
+    (h_not_operator : a ≠ s.unlockTokenOperator)
+    (h_caller : caller = a) :
+    holderValue s' a ≤ holderValue s a := by
+  obtain ⟨owner, amount, requestTime, cooldownEnd, hreq, _, hcaller, _, hpost⟩ :=
+    flexibleClaimStep_effect s id caller s' h_step
+  have howner_eq : owner = a := by
+    rcases hcaller with h | h
+    · exact h_caller ▸ h.symm
+    · exact False.elim (h_not_operator (h_caller ▸ h))
+  subst owner
+  have hid : id < s.nextUnlockId := by
+    by_cases hlt : id < s.nextUnlockId
+    · exact hlt
+    · have hnone := h_registry.1.2 id (by omega)
+      rw [hreq] at hnone
+      simp at hnone
+  have hfixed := flexibleClaim_holderValueAt_fee s id a amount requestTime cooldownEnd caller s'
+    hid hreq h_step (computeExchangeRate s)
+  have hrate : computeExchangeRate s' = computeExchangeRate s := by
+    rw [hpost]
+    simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT, computeExchangeRate,
+      totalAssets, vestedAmount, newlyVestedAmount]
+  let fee := amount * flexibleUnlockFee requestTime s.now / 10000
+  have h_eq : holderValue s' a + fee = holderValue s a := by
+    calc
+      holderValue s' a + fee = holderValueAt (computeExchangeRate s) s' a + fee := by
+        rw [← holderValueAt_live s' a, hrate]
+      _ = holderValueAt (computeExchangeRate s) s a := hfixed
+      _ = holderValue s a := holderValueAt_live s a
+  omega
+
 @[simp] private theorem pv_apxUSDBal' (s : State) :
     (pullVestedYield s).apxUSDBal = s.apxUSDBal := by
   unfold pullVestedYield; dsimp only; split <;> rfl
@@ -1759,9 +1828,9 @@ name each one and carry the exact (in)equality.
 
 **Three things this does not say.** The rate is existentially quantified here, so the statement on
 its own is weaker than the per-op theorems it packages. Because the rate *differs by family*, these
-these bounds do **not** chain along an arbitrary mixed trace. A restricted standard-unlock trace is
- handled below, where every operation uses the same live rate and the registry invariant is
- preserved inductively.
+ these bounds do **not** chain along an arbitrary mixed trace. A stable live-rate sublanguage is
+ handled below: it combines deposit/redeemApxUSD with both unlock channels, while vault exits and
+ clock steps remain outside because they change the pricing context.
 And it inherits two hypotheses: `redemptionValue ≤ ray`, and a registry whose fresh id carries no
 flexible entry (`flex_unallocated_at_counter` discharges the second).
 
@@ -1886,8 +1955,8 @@ The previous local laws now compose on a deliberately narrow language. The trace
 contains only requests and standard claims, is signed by the tracked holder, and
 uses `RegistryWellIndexed` as the inductive finite-ledger invariant. The timed
 fixed-rate variant below adds `tick`, so a claim can actually pass its cooldown.
-Claims by the configured operator on behalf of another holder are a separate
-frame problem and are not silently included here. -/
+The fixed-rate arbitrary-caller theorem covers operator-mediated claims; this
+live-rate theorem remains restricted to the tracked holder's own calls. -/
 
 /-- The standard unlock sublanguage used by the request-to-claim trace theorem. -/
 def StandardUnlockOp (op : Op) : Prop :=
@@ -1899,6 +1968,19 @@ value theorem is stated at a fixed rate so vesting caused by `tick` is not
 mistaken for value created or destroyed by the unlock mechanism. -/
 def StandardUnlockTimedOp (op : Op) : Prop :=
   StandardUnlockOp op ∨ (∃ dt, op = Op.tick dt)
+
+/-! ## A live-rate mixed ledger without vault exits
+
+`withdraw` and `redeem` change the share supply and therefore require an
+execution-rate relation rather than the live-rate telescope below. The
+following sublanguage combines the operations whose live rate is stable with
+both unlock channels. -/
+
+def StableHolderValueOp (op : Op) : Prop :=
+  RateFixedOp op ∨
+  StandardUnlockOp op ∨
+  (∃ amount, op = Op.flexibleRequestUnlock amount) ∨
+  (∃ requestId, op = Op.flexibleClaimUnlock requestId)
 
 private theorem tick_holderValueAt_frame (R : Nat) (s : State) (dt : Nat)
     (caller : Address) (s' : State)
@@ -1962,6 +2044,138 @@ private theorem standardUnlock_claim_neutral_live
     _ = holderValueAt (computeExchangeRate s) s' a := by rw [hrate]
     _ = holderValueAt (computeExchangeRate s) s a := hneutral
     _ = holderValue s a := holderValueAt_live s a
+
+private theorem stableHolderValue_operator_frame (s : State) (op : Op) (caller : Address)
+    (s' : State) (h_op : StableHolderValueOp op)
+    (h_step : step s op caller = some s') :
+    s'.unlockTokenOperator = s.unlockTokenOperator := by
+  rcases h_op with h_rate | h_standard | ⟨amount, rfl⟩ | ⟨requestId, rfl⟩
+  · rcases h_rate with ⟨amount, rfl⟩ | ⟨amount, rfl⟩
+    · have hpost := post_depositUSDC s amount caller s' h_step
+      rw [hpost]
+      simp [emitEvent, mintApxUSD]
+    · have hpost := post_redeemApxUSD s amount caller s' h_step
+      rw [hpost]
+      simp [emitEvent, burnApxUSD]
+  · exact standardUnlock_operator_frame s op caller s' h_standard h_step
+  · obtain ⟨-, -, hpost⟩ := flexibleRequestUnlockStep_effect s amount caller s' h_step
+    rw [hpost]
+    simp [createFlexibleUnlock, burnApxUSD]
+  · obtain ⟨owner, amount, requestTime, cooldownEnd, hreq, howner, hcaller, htime, hpost⟩ :=
+      flexibleClaimStep_effect s requestId caller s' h_step
+    rw [hpost]
+    simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT]
+
+private theorem stableHolderValue_price_frame (s : State) (op : Op) (caller : Address)
+    (s' : State) (h_op : StableHolderValueOp op)
+    (h_step : step s op caller = some s') (h_price : s.redemptionValue ≤ ray) :
+    s'.redemptionValue ≤ ray := by
+  have hframe : s'.redemptionValue = s.redemptionValue := by
+    refine redemptionValue_frame s op caller s' h_step ?_ ?_
+    · intro v hv
+      rcases h_op with h_rate | h_standard | ⟨amount, rfl⟩ | ⟨requestId, rfl⟩
+      · rcases h_rate with ⟨amount, rfl⟩ | ⟨amount, rfl⟩ <;> simp at hv
+      · rcases h_standard with ⟨amount, rfl⟩ | ⟨requestId, rfl⟩ <;> simp at hv
+      · simp at hv
+      · simp at hv
+    · intro hv
+      rcases h_op with h_rate | h_standard | ⟨amount, rfl⟩ | ⟨requestId, rfl⟩
+      · rcases h_rate with ⟨amount, rfl⟩ | ⟨amount, rfl⟩ <;> simp at hv
+      · rcases h_standard with ⟨amount, rfl⟩ | ⟨requestId, rfl⟩ <;> simp at hv
+      · simp at hv
+      · simp at hv
+  omega
+
+/-! The operations below are closed under the live rate: deposit/redeemApxUSD
+have their existing live theorems, standard unlock has its live request/claim
+theorems, and the two flexible lifts were proved above. -/
+
+theorem holderValue_stable_trace_nonincreasing (s : State) (σ : List (Op × Address))
+    (a : Address) (h_registry : RegistryWellIndexed s)
+    (h_price : s.redemptionValue ≤ ray)
+    (h_own : ∀ p ∈ σ, p.2 = a)
+    (h_ops : ∀ p ∈ σ, StableHolderValueOp p.1)
+    (h_not_operator : a ≠ s.unlockTokenOperator) :
+    holderValue (execTrace s σ) a ≤ holderValue s a := by
+  induction σ generalizing s with
+  | nil => exact Nat.le_refl _
+  | cons p σ ih =>
+    obtain ⟨op, caller⟩ := p
+    have hcaller : caller = a := h_own (op, caller) List.mem_cons_self
+    have hop : StableHolderValueOp op := h_ops (op, caller) List.mem_cons_self
+    have htail_own : ∀ q ∈ σ, q.2 = a :=
+      fun q hq => h_own q (List.mem_cons_of_mem _ hq)
+    have htail_ops : ∀ q ∈ σ, StableHolderValueOp q.1 :=
+      fun q hq => h_ops q (List.mem_cons_of_mem _ hq)
+    simp only [execTrace]
+    cases hstep : step s op caller with
+    | none =>
+        exact ih s h_registry h_price htail_own htail_ops h_not_operator
+    | some s1 =>
+        have h_step_bound : holderValue s1 a ≤ holderValue s a := by
+          rcases hop with h_rate | h_standard | ⟨amount, rfl⟩ | ⟨requestId, rfl⟩
+          · subst caller
+            rcases h_rate with ⟨amount, rfl⟩ | ⟨amount, rfl⟩
+            · exact Nat.le_of_eq
+                (holder_value_depositUSDC_live s amount a s1 hstep)
+            · exact holder_value_redeemApxUSD_live s amount a s1 hstep h_price
+          · subst caller
+            rcases h_standard with ⟨amount, rfl⟩ | ⟨requestId, rfl⟩
+            · exact Nat.le_of_eq
+                (requestUnlock_holderValueAt_neutral s amount a s1 hstep h_registry.1)
+            · exact Nat.le_of_eq
+                (standardUnlock_claim_neutral_live s requestId a s1 a hstep h_registry
+                  h_not_operator rfl)
+          · subst caller
+            exact Nat.le_of_eq
+              (flexibleRequestUnlock_holderValue_live s amount a s1 hstep h_registry)
+          · subst caller
+            exact flexibleClaim_holderValue_live_nonincreasing s requestId a s1 a hstep
+              h_registry h_not_operator rfl
+        have h_registry1 : RegistryWellIndexed s1 :=
+          registryWellIndexed_step s op caller s1 h_registry hstep
+        have h_price1 : s1.redemptionValue ≤ ray :=
+          stableHolderValue_price_frame s op caller s1 hop hstep h_price
+        have h_operator1 : a ≠ s1.unlockTokenOperator := by
+          have hframe := stableHolderValue_operator_frame s op caller s1 hop hstep
+          intro hbad
+          exact h_not_operator (hbad.trans hframe)
+        exact Nat.le_trans
+          (ih s1 h_registry1 h_price1 htail_own htail_ops h_operator1) h_step_bound
+
+/-- A nonempty live-rate mixed-ledger trace. The request is a standard unlock
+operation, so this witness also checks that the new stable sublanguage is not
+defined only by the empty trace. -/
+theorem holderValue_stable_trace_witness :
+    let s : State :=
+      { (default : State) with
+          globalPause := false
+          apxUSDBal := fun a => if a = 1 then 100 else 0
+          totalSupply_apxUSD := 100 }
+    let σ : List (Op × Address) := [(Op.requestUnlock 100, 1)]
+    holderValue (execTrace s σ) 1 = holderValue s 1 := by
+  dsimp only
+  let s : State :=
+    { (default : State) with
+        globalPause := false
+        apxUSDBal := fun a => if a = 1 then 100 else 0
+        totalSupply_apxUSD := 100 }
+  let σ : List (Op × Address) := [(Op.requestUnlock 100, 1)]
+  have hsreg : RegistryWellIndexed s := by
+    exact registryWellIndexed_of_frame (default : State) s
+      ⟨rfl, rfl, rfl, rfl, rfl⟩ registryWellIndexed_default
+  have hbound : holderValue (execTrace s σ) 1 ≤ holderValue s 1 := by
+    apply holderValue_stable_trace_nonincreasing s σ 1 hsreg
+      (by decide) (by
+        intro p hp
+        have : p = (Op.requestUnlock 100, 1) := by simpa [σ] using hp
+        simp [this])
+    · intro p hp
+      have : p = (Op.requestUnlock 100, 1) := by simpa [σ] using hp
+      subst p
+      exact Or.inr (Or.inl (Or.inl ⟨100, rfl⟩))
+    · decide
+  exact Nat.le_antisymm hbound (by decide)
 
 /-- A standard request/claim trace without waits preserves the tracked ordinary holder's
 complete value. Failed operations are skipped by `execTrace` and therefore do

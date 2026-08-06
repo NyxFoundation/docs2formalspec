@@ -210,6 +210,10 @@ claims are non-increasing by the explicit fee. Its arbitrary-caller form is
 `unlockLedger_holderValueAt_trace_nonincreasing_any_callers`. Its witness
 `unlockLedger_holderValueAt_trace_witness` exercises a nonzero post-cooldown
 fee rather than merely a zero-amount or reverted claim.
+There is also a live-rate mixed sublanguage, `StableHolderValueOp`, whose
+trace theorem `holderValue_stable_trace_nonincreasing` composes
+`depositUSDC`, `redeemApxUSD`, and both unlock channels. It deliberately
+excludes vault exits and clock steps because those change the pricing context.
 
 ### 5.3 Clock consistency
 
@@ -371,6 +375,10 @@ form is `unlockLedger_holderValueAt_trace_nonincreasing_any_callers`. The
 remaining work is to compose that ledger with vault exits and live-rate changes
 without silently treating price movement as transfer conservation; the
 flexible channel is now included in both fixed-rate forms.
+The live-rate stable sublanguage is separately closed by
+`holderValue_stable_trace_nonincreasing`, with
+`holderValue_stable_trace_witness` as a nonempty witness. This is a model
+boundary, not a claim that vault exits are harmless at the live rate.
 `redemptionValue_frame`, `redemption_price_writers`, and
 `admin_alone_moves_redemption_price` for price writers; `reserve_outflow_only_via_redemption`
 and the buffer theorems for non-depletion boundaries; and
@@ -641,7 +649,8 @@ model's `execTrace` semantics. The fixed-rate frame lemmas and
 `unlockLedger_holderValueAt_trace_nonincreasing_any_callers` also cover
 operator-mediated claims for another holder. The standard-plus-flexible
 fixed-rate trace is now covered by `unlockLedger_holderValueAt_trace_nonincreasing`.
-The mixed trace
+The live-rate stable sublanguage is covered by
+`holderValue_stable_trace_nonincreasing`, while the mixed trace
 that also includes vault exits still needs a ledger composition theorem and a
 live-rate treatment. Flexible claims use the corresponding fee law
 `flexibleClaim_holderValueAt_fee`; treating
