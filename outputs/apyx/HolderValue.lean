@@ -2370,6 +2370,19 @@ theorem rateAware_schedule_not_automatic :
     ¬ List.Pairwise (fun r₁ r₂ => r₂ ≤ r₁) (liveRateSequence s σ) := by
   decide
 
+/-- The schedule can also rise without a zero-share deposit. A one-asset
+withdrawal from a two-share pool burns the ceil-rounded cost of two shares in
+this concrete state, leaving a one-ray pool rate. -/
+theorem rateAware_schedule_not_automatic_without_dust :
+    let s : State :=
+      { (default : State) with
+          apyUSDBal := fun a => if a = 1 then 2 else 0
+          vaultApxUSDBal := 1
+          totalSupply_apyUSD := 2 }
+    let σ : List (Op × Address) := [(Op.withdraw 1 1, 1)]
+    ¬ List.Pairwise (fun r₁ r₂ => r₂ ≤ r₁) (liveRateSequence s σ) := by
+  decide
+
 /-! The rate-aware composition needs the no-premium redemption bound at every
 prefix state. It does not need a separate operator exclusion: this trace is
 holder-signed, and the fixed-rate claim frames already cover the successful

@@ -230,10 +230,12 @@ period premise is a model condition rather than a proof artifact. The side
 condition only carries the no-premium redemption bound through the trace;
 operator exclusion is not needed because the trace is holder-signed and the
 claim frames used by this theorem are already generic. This is a conditional
-vault-trace theorem, not a blanket closure of the live-rate gap. The witness
-`rateAware_schedule_not_automatic` records a valid dust-sized `lockApxUSD`
-trace whose terminal live rate rises, so the pairwise schedule cannot currently
-be derived from the model.
+vault-trace theorem, not a blanket closure of the live-rate gap. The witnesses
+`rateAware_schedule_not_automatic` and
+`rateAware_schedule_not_automatic_without_dust` record both a dust-sized
+`lockApxUSD` trace and a nonzero `withdraw` trace whose terminal live rate
+rises, so the pairwise schedule cannot currently be derived from the model by
+merely banning zero-share deposits.
 
 ### 5.3 Clock consistency
 
