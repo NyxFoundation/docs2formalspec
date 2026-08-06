@@ -15,13 +15,16 @@
 
 Apyx's public protocol documentation was formalized into (a) a normative RFC 2119 specification
 ([`SPEC.md`](SPEC.md)) and (b) an executable Lean 4 model of the protocol's state machine
-([`Apyx.lean`](Apyx.lean)). Against that model we proved **170 theorems**, each re-checked from
-source by the Lean kernel, in four groups:
+([`Apyx.lean`](Apyx.lean)). Against that model we proved the theorem families
+listed below, each re-checked from source by the Lean kernel. The independently
+recorded requirement count is 82 in [`leancheck.json`](leancheck.json); the
+companion modules are reported by their own source-level counts rather than
+combined into an unstable headline total:
 
 | Group | Question answered | Count | File |
 |---|---|---|---|
 | **Requirement conformance** | Does the design behave as the documentation specifies? | 82 | [`Apyx.lean`](Apyx.lean) |
-| **Key-compromise blast radius** | If a privileged operator key is stolen, how much can be lost? | 61 | [`BlastRadius.lean`](BlastRadius.lean) |
+| **Key-compromise blast radius** | If a privileged operator key is stolen, how much can be lost? | 66 | [`BlastRadius.lean`](BlastRadius.lean) |
 | **Design safety** | Can an ordinary user drain the protocol using only legitimate calls? | 31 | [`Safety.lean`](Safety.lean) |
 | **Spec-defect / gap search** | Is the requirement set consistent, and are the economic parameters bounded? | 2 | [`SpecDefects.lean`](SpecDefects.lean) — §9 |
 
@@ -595,22 +598,18 @@ cd lean
 lake build D2fsSpecs
 ```
 
-`D2fsSpecs` is the library of analyzed systems; naming it explicitly compiles the twelve Apyx
-modules below, plus the regression tests in
-[`review_witnesses/Regression.lean`](review_witnesses/Regression.lean), and nothing else. (A bare `lake build` additionally compiles
+`D2fsSpecs` is the library of analyzed systems; naming it explicitly compiles the
+Lean modules imported by `lean/D2fsSpecs.lean`. The regression witnesses in
+[`review_witnesses/Regression.lean`](review_witnesses/Regression.lean) are compiled separately with
+`lake env lean`; they are not silently counted as part of the library target. (A bare `lake build` additionally compiles
 `TemplateExamples`, a fictional model that regression-tests the reusable proof templates in
 `templates/`; it is unrelated to Apyx.)
 
 `lake build` exiting `0` with **zero warnings** and no `sorry` is the proof-checking event: the
-Lean kernel re-verifies every theorem from source. A `#print axioms` sweep over all 306 public
-theorems in the tree finds only Lean's three standard axioms and no `sorryAx`: 55 depend on
-`propext` alone, 30 on nothing at all, 213 on `propext` and `Quot.sound`, and six additionally on
-`Classical.choice` — `req_flexible_redemption_multiple_requests` and
-`req_configurable_vesting_period` in [`Apyx.lean`](Apyx.lean), and
-`admin_alone_moves_redemption_price`, `admin_alone_drains_reserve`,
-`rfq_payout_is_set_by_execution_timing` and `pool_redeem_floor_is_the_redeemers` in
-[`BlastRadius.lean`](BlastRadius.lean). All three are standard, trusted axioms of Lean's logic;
-none is an unproved assumption about Apyx. Compile status for the requirement theorems is recorded
+Lean kernel re-verifies every theorem from source. An axiom report must be regenerated from the
+current source whenever public declarations change; it should confirm that no theorem depends on
+`sorryAx`, while standard logical axioms such as `propext`, `Quot.sound`, or `Classical.choice`
+are not protocol assumptions. Compile status for the requirement theorems is recorded
 in [`leancheck.json`](leancheck.json), whose counts cover §3 only, not the adversarial and
 deployment-gap modules.
 
