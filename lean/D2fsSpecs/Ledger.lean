@@ -41,8 +41,8 @@ balance-writing operation (`mintApxUSD`, `burnApxUSD`, `transferApxUSD`,
 `requestUnlockStep`, the claim re-mints, `executeRFQRedemption`,
 `poolRedeem`, …), a support/update lemma of the shape "the post-state's support
 is contained in the pre-state's support plus the touched addresses, and the sum
-over any covering holder set changes by exactly the supply delta". Nothing of
-that shape exists in the development today, and it cannot be conjured from the
+over any covering holder set changes by exactly the supply delta". Such lemmas
+exist for only a subset of writers so far, and they cannot be conjured from the
 aggregate facts (`WellFormed`/`Solvent`) — the witness below is precisely the
 counterexample. The two honest ways to obtain preservation are:
 
@@ -58,24 +58,28 @@ Either is a substantial, separately-scoped change to protocol-semantics files
 this module must not touch. The **first slice of option 2 now exists** (see
 "First balance-writer slice" below): `apxUSDLedgerConsistent_mint` and
 `apxUSDLedgerConsistent_burn` prove exactly the support-inclusion / sum-delta
-facts for the two *primitive* single-address writers, applied in isolation.
-The **second slice** composes those primitives with the public transition
+facts for the two *primitive* single-address writers, applied in isolation;
+`apxUSDLedgerConsistent_transfer` covers the distinct-address primitive
+two-address writer and records the self-transfer model defect. The **second
+slice** composes those primitives with the public transition
 function for the five simplest `step` branches:
 `apxUSDLedgerConsistent_basic_step` (see "Scoped public-step slice" below)
 covers `depositUSDC`, `mintApxUSD`, `lockApxUSD`, `requestUnlock` and
 `flexibleRequestUnlock`, including the plumbing that discharges each burning
-branch's underflow guard into the burn-side bound. Everything else —
-the claim re-mints, `redeemApxUSD`, `executeRFQRedemption`, `poolRedeem`, and
+branch's underflow guard into the burn-side bound. A separate scoped theorem
+also covers `claimUnlock`. Everything else — `flexibleClaimUnlock`,
+`redeemApxUSD`, `executeRFQRedemption`, `poolRedeem`, and
 the frame proofs for the non-writing branches — remains open, so
 `ApxUSDLedgerConsistent` is still an *initialization-plus-fragment*
 invariant with a named gap, matching how `Invariant.lean` keeps
 `WellFormed s'` an explicit hypothesis instead of pretending to derive it.
 
 Status (proof-map §11): `apxUSDLedgerConsistent_default` is model-local;
-`apxUSDLedgerConsistent_mint` / `apxUSDLedgerConsistent_burn` are model-local
-per-operation lemmas (not trace facts); `apxUSDLedgerConsistent_basic_step` is
-a model-local *scoped* step fact (five branches, explicit disjunction — not a
-trace invariant and not full `Op` coverage); `ledgerGapWitness_*` and
+`apxUSDLedgerConsistent_mint` / `apxUSDLedgerConsistent_burn` /
+`apxUSDLedgerConsistent_transfer` are model-local per-operation lemmas (not
+trace facts); `apxUSDLedgerConsistent_basic_step` and
+`apxUSDLedgerConsistent_claimUnlock_step` are model-local *scoped* step facts
+(not a trace invariant and not full `Op` coverage); `ledgerGapWitness_*` and
 `wellFormed_solvent_not_imply_ledgerConsistent` are witness/regression facts,
 not universal theorems.
 -/
@@ -191,7 +195,7 @@ the two primitive writers, applied in isolation:
   hypothesis must be discharged by the caller.
 
 Still uncovered, which is why no *universal* `step`-preservation theorem is
-stated: the claim re-mints, `redeemApxUSD`, `executeRFQRedemption`, and
+stated: `flexibleClaimUnlock`, `redeemApxUSD`, `executeRFQRedemption`, and
 `poolRedeem`. The primitive `transferApxUSD` is now covered by
 `apxUSDLedgerConsistent_transfer`, with an explicit distinct-address
 hypothesis because the current writer mishandles self-transfer. The five
@@ -522,8 +526,9 @@ nothing is assumed beyond `ApxUSDLedgerConsistent s` and `step … = some s'`.
 
 **Scoped, not universal — read this before citing the theorem.** The theorem
 takes an explicit disjunction naming its five operations rather than claiming
-all of `Op`. Remaining branches, deliberately out of scope: `claimUnlock` /
-`flexibleClaimUnlock` (re-mints whose amounts come out of the registries),
+all of `Op`. `claimUnlock` has a separate theorem below; the remaining
+registry remint branch, `flexibleClaimUnlock`, is deliberately out of scope
+(its amount comes out of the registry),
 `redeemApxUSD`, `executeRFQRedemption`, `poolRedeem` (burns whose guards sit
 behind price/reserve arithmetic), and the non-writing branches (`withdraw`,
 `redeem`, `tick`, pause/list/admin ops), which need per-branch frame lemmas
@@ -685,6 +690,52 @@ theorem apxUSDLedgerConsistent_basic_step (s s' : State) (op : Op) (caller : Add
   · obtain ⟨hle, hbal, hsup⟩ := step_flexibleRequestUnlock_ledgerProj s amount caller s' hstep
     exact apxUSDLedgerConsistent_of_projections_eq hbal hsup
       (apxUSDLedgerConsistent_burn s caller amount hle h)
+
+/-! ## Scoped claim-remint slice
+
+`claimUnlock` retires the receipt and registry entry, then mints the released
+amount back to the recorded owner. The registry retirement is a frame for the
+two ledger projections, so this branch composes directly with the primitive
+mint theorem. The inversion lemma is repeated locally because the corresponding
+helper in `Registry.lean` is private. -/
+
+private theorem step_claimUnlock_ledgerProj (s : State) (id : Nat) (caller : Address)
+    (s' : State) (h : step s (Op.claimUnlock id) caller = some s') :
+    ∃ owner amount cooldownEnd,
+      s.unlockRequests id = some (owner, amount, cooldownEnd) ∧
+      s.unlockTokenOwner id = some owner ∧
+      (caller = owner ∨ caller = s.unlockTokenOperator) ∧
+      cooldownEnd ≤ s.now ∧
+      s' = mintApxUSD (retireStandardUnlock s id owner) owner amount := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i owner amount cooldownEnd heq
+    split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · split at h
+          · exact absurd h (by simp)
+          · exact ⟨owner, amount, cooldownEnd, heq, by simp_all, by assumption,
+              by omega, (Option.some.inj h).symm⟩
+        · exact absurd h (by simp)
+
+/-- A successful standard unlock claim preserves the finite ledger identity:
+retiring the registry is a ledger frame, and the released amount is minted
+through the already-proved primitive mint writer. This is a branch theorem, not
+yet a universal `step` theorem. -/
+theorem apxUSDLedgerConsistent_claimUnlock_step (s : State) (id : Nat) (caller : Address)
+    (s' : State) (h : ApxUSDLedgerConsistent s)
+    (hstep : step s (Op.claimUnlock id) caller = some s') :
+    ApxUSDLedgerConsistent s' := by
+  obtain ⟨owner, amount, cooldownEnd, -, -, -, -, hpost⟩ :=
+    step_claimUnlock_ledgerProj s id caller s' hstep
+  rw [hpost]
+  have hret : ApxUSDLedgerConsistent (retireStandardUnlock s id owner) :=
+    apxUSDLedgerConsistent_of_projections_eq (by rfl) (by rfl) h
+  exact apxUSDLedgerConsistent_mint _ owner amount hret
 
 /-! ## Model-gap / regression witness
 
