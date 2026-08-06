@@ -596,4 +596,53 @@ theorem registryWellIndexed_step (s : State) (op : Op) (caller : Address) (s' : 
     exact registryWellIndexed_static_step s _ caller s' h
       (by simp [RegistryStaticOp]) hstep
 
+/-! ## Registry-scoped reachability
+
+A preservation theorem is only as strong as the states it is applied to.  The
+inductive predicate below closes that loop for *this module's* invariants: it
+names the states obtainable from the model's empty `default` state by finitely
+many successful `step` transitions, and `registryWellIndexed_reachable` shows
+`RegistryWellIndexed` holds on all of them.
+
+**Scope caveats, stated once and meant literally.**
+
+* This is *registry-scoped* reachability.  The conclusion is
+  `RegistryWellIndexed` — boundedness, pointer soundness, and cross-registry
+  disjointness — and nothing more.  It is **not** a full protocol `Inv` in the
+  sense of `docs/11-apyx-proof-map.md` §6: no ledger, solvency, clock, or
+  holder-value claim is established here, and none should be read into it.
+* The base state is the model's `default` — the empty state with every
+  registry field constantly `none` (`registryInvariants_default`,
+  `registryDisjoint_default`).  Using it as the base is a modeling choice,
+  **not** a claim that any deployed contract's genesis or post-migration state
+  matches it.  Connecting `default` to a deployed genesis is an
+  implementation-assurance obligation outside this Lean development.
+* `RegistryReach` advances only on *successful* transitions
+  (`step … = some s'`).  Rejected calls return `none` and, in this model,
+  leave no intermediate state to track; a partial-state-then-revert behavior
+  of an implementation is out of scope here. -/
+
+/-- States reachable from the empty `default` state by successful public
+transitions.  Registry-scoped: see the section comment for what this does and
+does not claim. -/
+inductive RegistryReach : State → Prop
+  | initial : RegistryReach (default : State)
+  | next {s s' : State} {op : Op} {caller : Address} :
+      RegistryReach s → step s op caller = some s' → RegistryReach s'
+
+/-- The empty state satisfies all three registry invariants: every registry
+field is constantly `none`. -/
+theorem registryWellIndexed_default : RegistryWellIndexed (default : State) :=
+  ⟨registryInvariants_default.1, registryInvariants_default.2, registryDisjoint_default⟩
+
+/-- **Every registry-reachable state is well indexed.**  Induction on the
+trace: `default` satisfies the invariants, and `registryWellIndexed_step`
+carries them across each successful transition.  Registry-scoped — this is not
+a full protocol invariant, and `default` is not a deployed-genesis claim. -/
+theorem registryWellIndexed_reachable (s : State) (h : RegistryReach s) :
+    RegistryWellIndexed s := by
+  induction h with
+  | initial => exact registryWellIndexed_default
+  | next _ hstep ih => exact registryWellIndexed_step _ _ _ _ ih hstep
+
 end Apyx
