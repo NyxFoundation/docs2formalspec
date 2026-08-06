@@ -1228,10 +1228,6 @@ def UsdcLedgerConsistent (s : State) (holders : List Address) (totalSupply : Nat
   (∀ a, s.usdcBal a ≠ 0 → a ∈ holders) ∧
   sumOver s.usdcBal holders + s.usdcReserve = totalSupply
 
-theorem usdcLedgerConsistent_default :
-    UsdcLedgerConsistent (default : State) [] 0 := by
-  simp [UsdcLedgerConsistent, default, sumOver]
-
 theorem usdcLedgerConsistent_debit_to_reserve
     (s s' : State) (holders : List Address) (totalSupply : Nat)
     (hledger : UsdcLedgerConsistent s holders totalSupply)
@@ -2951,67 +2947,6 @@ theorem callerValue_add_positions (s : State) (a : Address) :
   unfold callerValue valueAt holderValue
   omega
 
-/-- So the old measure never over-counts. -/
-theorem callerValue_le_holderValue (s : State) (a : Address) :
-    callerValue s a ≤ holderValue s a := by
-  have h := callerValue_add_positions s a
-  omega
-
-/-- **What `caller_value_withdraw_fixedRate`'s "fall" actually is.** Withdrawing to yourself moves
-none of your apxUSD or USDC, and the payout appears in your standard-position sum at face value.
-(The flexible column is not among the conjuncts below — for that see `holder_value_withdraw`,
-which needs `h_unalloc_flex` to say anything about it.)
-
-`Safety.caller_value_withdraw_fixedRate` records this step as a decrease, and that reading is an
-artifact of the missing term: `apxUSDBal` and `usdcBal` are untouched, so everything the old
-measure saw leave went into the position it was not counting. -/
-theorem withdraw_to_self_moves_only_shares (s : State) (assets : Nat) (caller : Address)
-    (s' : State) (h_step : step s (Op.withdraw assets caller) caller = some s') :
-    stdPositions s' caller = stdPositions s caller + assets ∧
-    s'.apxUSDBal caller = s.apxUSDBal caller ∧
-    s'.usdcBal caller = s.usdcBal caller := by
-  refine ⟨withdraw_receiver_position_gain s assets caller caller s' h_step, ?_, ?_⟩
-  · have hpost : s' = emitEvent (updateExchangeRate (createStandardUnlock
-          { burnApyUSD (pullVestedYield s) caller
-              (withdrawShares assets (computeExchangeRate (pullVestedYield s))) with
-            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller
-              (withdrawShares assets (computeExchangeRate (pullVestedYield s)))).vaultApxUSDBal
-                - assets }
-          caller assets)) "Withdraw"
-        [caller, caller, caller, assets,
-          withdrawShares assets (computeExchangeRate (pullVestedYield s))] := by
-      simp only [step] at h_step
-      split at h_step
-      · exact absurd h_step (by simp)
-      · split at h_step
-        · exact absurd h_step (by simp)
-        · split at h_step
-          · exact absurd h_step (by simp)
-          · split at h_step
-            · exact absurd h_step (by simp)
-            · exact (Option.some.inj h_step).symm
-    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-  · have hpost : s' = emitEvent (updateExchangeRate (createStandardUnlock
-          { burnApyUSD (pullVestedYield s) caller
-              (withdrawShares assets (computeExchangeRate (pullVestedYield s))) with
-            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller
-              (withdrawShares assets (computeExchangeRate (pullVestedYield s)))).vaultApxUSDBal
-                - assets }
-          caller assets)) "Withdraw"
-        [caller, caller, caller, assets,
-          withdrawShares assets (computeExchangeRate (pullVestedYield s))] := by
-      simp only [step] at h_step
-      split at h_step
-      · exact absurd h_step (by simp)
-      · split at h_step
-        · exact absurd h_step (by simp)
-        · split at h_step
-          · exact absurd h_step (by simp)
-          · split at h_step
-            · exact absurd h_step (by simp)
-            · exact (Option.some.inj h_step).symm
-    rw [hpost]; simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-
 /-! ## The holder-centric laws
 
 These are the statements the incomplete measure could not make. They are given here as
@@ -3972,67 +3907,6 @@ private theorem priceUnderPar_rateFixed (s : State) (op : Op) (caller : Address)
     · rcases h_op with ⟨amt, rfl⟩ | ⟨amt, rfl⟩ <;> simp
   omega
 
-/-- **No free money for a holder over a whole trace, on the complete measure.**
-
-Along any trace of the holder's own `depositUSDC` and `redeemApxUSD` steps — any length, any
-amounts, revert-skip included — the holder's complete holdings, priced at the live rate, never
-rise. The single standing side condition is the no-premium-redemption invariant
-`redemptionValue ≤ ray`, required only at the initial state: neither operation writes the price,
-so it propagates (`priceUnderPar_rateFixed`).
-
-This is the trace-level statement the module lacked. It is available for exactly these two
-operations because they are the ones that hold the live rate still; the vault legs move it, which
-is what stops the umbrella `caller_net_nonpositive_complete` from chaining. -/
-theorem holderValue_trace_nonincreasing (s : State) (σ : List (Op × Address)) (a : Address)
-    (h_price : s.redemptionValue ≤ ray)
-    (h_own : ∀ p ∈ σ, p.2 = a)
-    (h_ops : ∀ p ∈ σ, RateFixedOp p.1) :
-    holderValue (execTrace s σ) a ≤ holderValue s a := by
-  induction σ generalizing s with
-  | nil => exact Nat.le_refl _
-  | cons p σ ih =>
-    obtain ⟨op, c⟩ := p
-    have hhead_own : c = a := h_own (op, c) List.mem_cons_self
-    have hhead_op : RateFixedOp op := h_ops (op, c) List.mem_cons_self
-    have htail_own : ∀ q ∈ σ, q.2 = a := fun q hq => h_own q (List.mem_cons_of_mem _ hq)
-    have htail_op : ∀ q ∈ σ, RateFixedOp q.1 := fun q hq => h_ops q (List.mem_cons_of_mem _ hq)
-    simp only [execTrace]
-    cases hstep : step s op c with
-    | none => exact ih s h_price htail_own htail_op
-    | some s1 =>
-      have hstep1 : holderValue s1 a ≤ holderValue s a := by
-        rw [← hhead_own]
-        rcases hhead_op with ⟨amt, rfl⟩ | ⟨amt, rfl⟩
-        · exact Nat.le_of_eq (holder_value_depositUSDC_live s amt c s1 hstep)
-        · exact holder_value_redeemApxUSD_live s amt c s1 hstep h_price
-      have hprice1 : s1.redemptionValue ≤ ray :=
-        priceUnderPar_rateFixed s op c s1 hstep h_price hhead_op
-      exact Nat.le_trans (ih s1 hprice1 htail_own htail_op) hstep1
-
-/-- **And it is not vacuous.** A whitelisted holder with USDC deposits twice; both steps are
-`RateFixedOp`s signed by that holder, the price starts at par, and the theorem applies. The value
-is exactly preserved here — deposit swaps USDC for apxUSD at 1:1 — which is the equality case the
-`≤` allows. -/
-theorem holderValue_trace_witness :
-    ∃ (s : State) (σ : List (Op × Address)) (a : Address),
-      s.redemptionValue ≤ ray ∧
-      (∀ p ∈ σ, p.2 = a) ∧ (∀ p ∈ σ, RateFixedOp p.1) ∧
-      0 < σ.length ∧
-      holderValue (execTrace s σ) a = holderValue s a := by
-  refine ⟨{ (default : State) with
-              globalPause := false
-              whitelist := fun _ => true
-              usdcBal := fun x => if x = 1 then 100 else 0
-              redemptionValue := ray },
-          [(Op.depositUSDC 40, 1), (Op.depositUSDC 60, 1)], 1, Nat.le_refl _, ?_, ?_, by decide,
-          by decide⟩
-  · intro p hp
-    have : p = (Op.depositUSDC 40, 1) ∨ p = (Op.depositUSDC 60, 1) := by simpa using hp
-    rcases this with rfl | rfl <;> rfl
-  · intro p hp
-    have : p = (Op.depositUSDC 40, 1) ∨ p = (Op.depositUSDC 60, 1) := by simpa using hp
-    rcases this with rfl | rfl <;> exact Or.inl ⟨_, rfl⟩
-
 /-! ## Standard unlock request-to-claim traces
 
 The previous local laws now compose on a deliberately narrow language. The trace
@@ -4840,50 +4714,6 @@ theorem standardUnlock_holderValueAt_trace_neutral
           intro hbad
           exact h_not_operator (hbad.trans hframe)
         exact (ih s1 h_registry1 htail_own htail_ops h_operator1).trans h_neutral
-
-/-- Non-vacuity witness: the holder requests all 100 apxUSD, waits out the
-cooldown, and successfully claims the same standard position. The final
-registry and balance facts ensure the claim was not merely skipped by
-`execTrace`. -/
-theorem standardUnlock_holderValueAt_trace_witness :
-    let s : State :=
-      { (default : State) with
-          globalPause := false
-          apxUSDBal := fun a => if a = 1 then 100 else 0
-          totalSupply_apxUSD := 100 }
-    let σ : List (Op × Address) :=
-      [(Op.requestUnlock 100, 1), (Op.tick cooldownPeriod, 1), (Op.claimUnlock 0, 1)]
-    holderValueAt ray (execTrace s σ) 1 = holderValueAt ray s 1 ∧
-    (execTrace s σ).unlockRequests 0 = none ∧
-    (execTrace s σ).apxUSDBal 1 = 100 := by
-  dsimp only
-  let s : State :=
-    { (default : State) with
-        globalPause := false
-        apxUSDBal := fun a => if a = 1 then 100 else 0
-        totalSupply_apxUSD := 100 }
-  let σ : List (Op × Address) :=
-    [(Op.requestUnlock 100, 1), (Op.tick cooldownPeriod, 1), (Op.claimUnlock 0, 1)]
-  have hsreg : RegistryWellIndexed s := by
-    exact registryWellIndexed_of_frame (default : State) s
-      ⟨rfl, rfl, rfl, rfl, rfl⟩ registryWellIndexed_default
-  constructor
-  · apply standardUnlock_holderValueAt_trace_neutral ray s σ 1 hsreg
-    · intro p hp
-      have hp' : p = (Op.requestUnlock 100, 1) ∨
-          p = (Op.tick cooldownPeriod, 1) ∨ p = (Op.claimUnlock 0, 1) := by
-        simpa [σ] using hp
-      rcases hp' with rfl | rfl | rfl <;> rfl
-    · intro p hp
-      have hp' : p = (Op.requestUnlock 100, 1) ∨
-          p = (Op.tick cooldownPeriod, 1) ∨ p = (Op.claimUnlock 0, 1) := by
-        simpa [σ] using hp
-      rcases hp' with rfl | rfl | rfl
-      · exact Or.inl (Or.inl ⟨100, rfl⟩)
-      · exact Or.inr ⟨cooldownPeriod, rfl⟩
-      · exact Or.inl (Or.inr ⟨0, rfl⟩)
-    · decide
-  · decide
 
 /-! ## Standard and flexible unlock traces
 

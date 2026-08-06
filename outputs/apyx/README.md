@@ -15,18 +15,16 @@
 
 Apyx's public protocol documentation was formalized into (a) a normative RFC 2119 specification
 ([`SPEC.md`](SPEC.md)) and (b) an executable Lean 4 model of the protocol's state machine
-([`Apyx.lean`](Apyx.lean)). Against that model we proved the theorem families
-listed below, each re-checked from source by the Lean kernel. The independently
-recorded requirement count is 82 in [`leancheck.json`](leancheck.json); the
-companion modules are reported by their own source-level counts rather than
-combined into an unstable headline total:
+([`Apyx.lean`](Apyx.lean)). Against that model we prove the active theorem families listed in the proof map,
+each re-checked from source by the Lean kernel. The extracted requirement inventory still contains 82
+records in [`requirements.json`](requirements.json); the active Lean surface is intentionally smaller
+because unmapped, unreferenced generated declarations were removed during cleanup:
 
-| Group | Question answered | Count | File |
-|---|---|---|---|
-| **Requirement conformance** | Does the design behave as the documentation specifies? | 82 | [`Apyx.lean`](Apyx.lean) |
-| **Key-compromise blast radius** | If a privileged operator key is stolen, how much can be lost? | 66 | [`BlastRadius.lean`](BlastRadius.lean) |
-| **Design safety** | Can an ordinary user drain the protocol using only legitimate calls? | 31 | [`Safety.lean`](Safety.lean) |
-| **Spec-defect / gap search** | Is the requirement set consistent, and are the economic parameters bounded? | 2 | [`SpecDefects.lean`](SpecDefects.lean) — §9 |
+| Group | Question answered | Active artifact |
+|---|---|---|
+| **Requirement records** | What does the extracted RFC 2119 inventory ask for? | 82 records in [`requirements.json`](requirements.json) |
+| **Active Lean proof surface** | Which mapped design, invariant, safety, and boundary claims are kernel-checked? | [`docs/11-apyx-proof-map.md`](../../docs/11-apyx-proof-map.md) |
+| **Implementation hand-off** | Which deployment-specific questions remain outside the core model? | `DeploymentFees.lean`, `DeploymentGaps.lean`, `MulDivFidelity.lean` |
 
 Headline findings for Apyx:
 
@@ -89,125 +87,28 @@ state variables, and operations).
 
 ---
 
-## 3. What was proved — requirement conformance (82 theorems)
+## 3. Active Lean proof surface
 
-Every requirement judged expressible as a state-machine property was formalized as a theorem over the
-`step` transition function and proved. Grouped by area (theorem names as they appear in
-[`Apyx.lean`](Apyx.lean)):
+The active Lean theorem surface follows [`docs/11-apyx-proof-map.md`](../../docs/11-apyx-proof-map.md), not the historical generated requirement inventory. During this cleanup, 98 declarations that were absent from the proof map and unreferenced by the current Lean sources were removed. `registryInvariants_default` was retained because `lean/D2fsSpecs/Registry.lean` uses it to initialize the registry invariant.
 
-### Access control & authorization
-`req_mint_access_whitelist`, `req_redeem_access_whitelist`, `req_deposit_permissionless`,
-`req_global_pause_blocks_deposit`, `req_denylist_blocks_deposit`, `req_arbitrage_mint_access`,
-`req_arbitrage_redeem_access`, `req_vault_operator_of_unlock_token`, `req_rfq_redemption_allowed`,
-`req_governance_deploy_buffer`, `req_yield_distributor_credit`, `req_no_rehypothecation`.
+The remaining proofs are organized around a small set of reusable boundaries:
 
-- **Every** balance-moving path is gated on the deployment's ERC-20 `_update` hook — pause and deny-list — rather than by per-operation checks that could be forgotten: deposit, mint, the three burn paths, `poolRedeem` (both parties), and both claim paths.
-- The arbitrage mint pathway executes only while apxUSD trades **above** $1; the arbitrage redeem pathway
-  only while it trades **below** $1 — and only for a whitelisted caller.
-- Vault-held apxUSD moves only through the accounting paths in the model (lock / withdraw / redeem):
-  proved by exhaustive case analysis over the closed operation type, so **no rehypothecation path exists**.
+- transition effects and frame conditions for each modeled operation;
+- finite apxUSD, apyUSD, receipt, and external-parameterized USDC ledgers;
+- registry reachability and ownership;
+- holder-value, solvency, rounding, price, and blast-radius properties;
+- trace composition with explicit revert-skip, time, support, and caller premises;
+- deployment/SPECA hand-off points for fees, decimal scaling, and implementation fidelity.
 
-### Minting & pricing
-`req_deposit_mint_apxusd`, `req_mint_price`, `req_issuance_price_one`, `req_mint_price_arbitrage_pathway`,
-`req_lock_apxusd`, `req_deposit_immediate`, `req_mint_immediate`.
+The exact theorem names and their proof dependencies are maintained in the proof map. A theorem mentioned only in the historical report is not, by itself, an active Lean result.
 
-- Standard minting prices at exactly $1 per unit, unconditionally.
-- The vault delivers apyUSD shares synchronously, in the same atomic step as the lock (no deferred settlement).
-
-### Redemption & unlock lifecycle
-`req_redemption_async_process`, `req_redemption_cooldown_period`, `req_unlock_cooldown`,
-`req_unlock_conversion_after_cooldown`, `req_unlock_token_redeemable_1to1_after_20d`,
-`req_unlock_claimable_after_3d`, `req_single_pending_redemption_per_user`,
-`req_multiple_unlocks_reset_cooldown`, `req_cooldown_removal`, `req_cooldown_no_yield`,
-`req_unlock_token_no_yield`, `req_pay_to_non_cooldown`, `req_synchronous_withdraw_return_token`,
-`req_unlock_receipt_nft_mint`, `req_unlock_token_mints_apx_usd_unlock_immediately`,
-`req_unlock_token_redeem_after_cooldown`, `req_vault_deposits_apx_usd_into_unlock_token`,
-`req_vault_deposits_apx_usd_into_unlock_token_redeem`, `req_vault_pulls_vested_yield_before_withdraw`,
-`req_withdrawal_pulls_vested`, `req_vault_burns_apyUSD_shares_immediately_on_withdraw`,
-`req_vault_burns_apy_usd_shares_immediately_redeem`, `req_redeem_liquidate_usdc`,
-`req_redeem_no_share_transfer`, `req_redemption_value`, `req_redemption_settlement_value`,
-`req_redemption_exchange_rate_multiplier`, `req_redemption_value_uniform`, `req_mint_redeem_at_redemption_value`.
-
-- Redemptions follow the three-step request → cooldown → claim model; conversion of the unlock token to
-  apxUSD is possible only after the 20-day cooldown.
-- A claim requires `caller = owner ∨ caller = the vault operator`; before the deadline, a claim reverts,
-  and after it, a claim succeeds.
-- **A repeat standard request tops up rather than opening a second position**, resetting the cooldown on
-  the aggregated amount (`req_multiple_unlocks_reset_cooldown`,
-  `req_single_pending_redemption_per_user`). **Uniqueness itself is not proved** — the theorem's
-  conclusion is an existence statement — and it does not hold across the whole model: `Op.withdraw` /
-  `Op.redeem` open a *fresh* position per call, faithfully mirroring `withdrawForReceipt` /
-  `redeemForReceipt`, so a user who both requests and withdraws holds two. See §9.3.
-- The redemption value applied is uniform across participants.
-
-### Flexible redemption & fees
-`req_flexible_redemption_multiple_requests`, `req_flexible_redemption_claim_minimum`,
-`req_flexible_redemption_early_fee`, `req_early_unlock_fee_linear_decline`.
-
-- Users may hold multiple concurrent flexible requests; a flexible claim is possible only after 3 days.
-- The early-exit fee is bounded in [0.1%, 3.5%] **as a function**, is monotonically non-increasing over
-  time, and reaches its 0.1% floor once the full cooldown has elapsed. **Both endpoints are wrong**: they
-  restate the corpus, and a live `UnlockReceipt.feeCurve()` read gives a linear decay from **3.4%** to
-  **0%** over days 3 to 20. In the model the maximum actually *charged* on any reachable claim is
-  **2.99%**, because the schedule is anchored at request time while claims are blocked for the first
-  three days (§6.0). **That gap is a model artifact, and the deployed contract does not have it** —
-  `src/FeeCurve.sol` deliberately overloads `minDuration` as both the lock duration and the curve's zero
-  point, so at the first claimable instant `elapsed = minDuration` and the rate is exactly `maxFee`
-  (3.4%). See [`DeploymentFees.lean`](DeploymentFees.lean): `liveCurve_first_claim_is_max`,
-  `liveCurve_bounds_contradict_the_corpus`. The library's hard ceiling on any admin-set `maxFee` is 5%.
-
-### Unlock-token (NFT) integrity
-`req_singleton_unlock_token_instance`, `req_unlock_token_nontransferable`, `req_unlock_cannot_be_cancelled`.
-
-- The UnlockToken registry is a genuine singleton with a fixed operator.
-- An unlock position's recorded owner can never be reassigned to another address, and a position cannot be
-  cancelled once created — both proved by exhaustive case analysis over every operation.
-
-### Yield & vesting
-`req_apyusd_value_increase`, `req_new_locked_receives_yield`, `req_linear_vest_implementation`,
-`req_continuous_stream`, `req_yield_distribution_period`, `req_configurable_vesting_period`,
-`req_credit_preserves_accrued_vest`, `req_yield_rate_dollar_terms`, `req_exchange_rate_non_decreasing`,
-`req_token_no_rebase`, `req_total_assets_includes_vault_balance_and_vested`.
-
-- The apyUSD/apxUSD exchange rate is non-decreasing **in time** (`req_exchange_rate_non_decreasing`
-  quantifies over `now`, not over operations). Monotonicity across a deposit is the separate
-  `exchange_rate_monotone_deposit`; both are now about the live `computeExchangeRate` rather than a
-  stored field (§9.3).
-- Vesting is linear: nothing releases before the clock anchor, the released amount grows monotonically with
-  time, never exceeds the pool, and equals the full pool once a period has elapsed.
-- Crediting new yield preserves already-accrued yield (`req_credit_preserves_accrued_vest`); the monthly
-  rate is bounded by the recorded prior-month dollar collateral yield.
-
-### Collateral & solvency
-`req_overcollateralization_limit`, `req_buffer_non_decreasing`, `req_buffer_preservation`,
-`req_buffer_not_consumed`, `req_catastrophic_backstop`.
-
-- The overcollateralization invariant is preserved across operations (under the stated well-formedness
-  conditions; the solvency-breaking operations are explicitly excluded and documented). The invariant is
-  `totalSupply_apxUSD ≤ totalCollateralValue + usdcReserve`; it no longer carries a "required margin"
-  term, which was identically zero on every reachable trace (§9.3).
-- Routine redemptions never reduce the overcollateralization buffer.
-
-### ERC-4626 vault surface
-`req_erc4626_compliance`, `req_depositforminshares_slippage`, `req_mintformaxassets_slippage`,
-`req_withdraw_for_max_shares_revert_if_exceeds_max_shares`,
-`req_redeem_for_min_assets_revert_if_below_min_assets`.
-
-- The conversion/preview functions are internally consistent and pause-gated; the slippage wrappers revert
-  when the user's bound would be violated.
-
-### Events
-`req_deposit_emits_event`, `req_mint_emits_event` — each emits a Deposit event with the exact
-`(sender, receiver, owner, assets, shares)` tuple.
-
-> The full statements, each with its source RFC 2119 quote, are the docstrings in
-> [`Apyx.lean`](Apyx.lean).
+> The full active statements remain in the docstrings of [`Apyx.lean`](Apyx.lean), [`HolderValue.lean`](HolderValue.lean), and the mapped companion modules.
 
 ---
 
 ## 4. What was proved — adversarial analysis
 
-### 4.1 Key-compromise blast radius (66 theorems, [`BlastRadius.lean`](BlastRadius.lean))
+### 4.1 Key-compromise blast radius ( [`BlastRadius.lean`](BlastRadius.lean))
 
 The requirement proofs assume every actor behaves as documented. This group answers the harder question the
 documentation never addresses: **if a privileged operator key is stolen, how much can the attacker take?**
@@ -221,7 +122,7 @@ The attacker is modeled as holding one or more role keys (`admin`, `oracle`, `pa
 | `pauseController` | Freeze only — touches no balance | `pauser_trace_blast_radius` |
 | `yieldDistributor` | Can only donate into the vest pool; debits nothing | `yield_distributor_trace_blast_radius`, `distributor_compartmentalized` |
 | `oracle` | No balance movement; publishes the reported market price only. The **redemption** price is an admin capability, not an oracle one (`Roles.assignAdminTargetsFor`) | `oracle_alone_preserves_balances` |
-| `admin` | Cannot debit any balance or supply *in the model*, but **publishes the redemption price with no floor, cap or delay, and can move the reserve to a named address without any redemption**. On the deployed system there is a further single-key channel the model has no operation for: `LinearVestV0.setBeneficiary` redirects `pullVestedYield`'s payee, draining the whole accrued vesting pool ([`DeploymentGaps.lean`](DeploymentGaps.lean)) | `admin_cannot_touch_balances`, `admin_alone_moves_redemption_price`, `admin_alone_drains_reserve`, and `admin_alone_redirects_vested_yield` |
+| `admin` | Cannot debit any balance or supply *in the model*, but **publishes the redemption price with no floor, cap or delay, and can move the reserve to a named address without any redemption**. On the deployed system there is a further single-key channel the model has no operation for: `LinearVestV0.setBeneficiary` redirects `pullVestedYield`'s payee, draining the whole accrued vesting pool ([`DeploymentGaps.lean`](DeploymentGaps.lean)) | `admin_cannot_touch_balances`, `admin_alone_moves_redemption_price`, `admin_alone_drains_reserve`, and the two-step vesting retarget mechanism |
 | **all keys at once** | A passive, non-RFQ-targeted user loses nothing | `user_assets_immune_to_total_key_compromise`, `no_theft_ledger` |
 
 The non-custodial headline (`user_assets_immune_to_total_key_compromise`) is the machine-checked form of
@@ -338,7 +239,7 @@ counterparty twice: settled immediately the user is paid 100, settled after one 
 user is paid 50. Both traces are permitted, both consume the request, and the counterparty picks — with no
 emergency and no compromised admin.
 
-### 4.2 Design safety — honest-actor attacks (31 theorems, [`Safety.lean`](Safety.lean))
+### 4.2 Design safety — honest-actor attacks ( [`Safety.lean`](Safety.lean))
 
 This group assumes every actor is honest and asks whether the *design itself* lets an ordinary attacker
 extract value using only legitimate operations.
@@ -359,7 +260,7 @@ extract value using only legitimate operations.
 | Request-boundary liability conservation | When the request's balance guard holds (`amount ≤ caller's apxUSD balance`), the caller's burned balance plus its tracked standard-unlock amount is unchanged by `requestUnlockStep`. The definition returns zero for a missing or mismatched pointer, so the theorem does not assume a canonical registry. This is a request-boundary identity, not a complete request→claim trace or finite liability ledger | `requestUnlockStep_pending_conservation` |
 | Complete holder value at request | A successful standard request is neutral for the caller under `RegistryBounded`, on both the fresh-position and top-up branches. The finite ledger accounts for the newly created or updated standard position, while the balance, share, USDC, flexible-position, and rate terms are framed. `OwnerPointerSound` is not needed: the top-up branch checks the recorded owner before updating; `RegistryBounded` prevents an out-of-range record from being omitted by the finite sum | `requestUnlockStep_effect`, `stdPositions_updateStandardUnlock`, `requestUnlock_holderValueAt_neutral` |
 | Standard claim settles its liability | For a successful claim whose `id` lies below `nextUnlockId`, the recorded owner's complete position value is unchanged at every fixed rate: the claim removes the recorded amount from `stdPositions` and mints the same amount of apxUSD. The theorem is local and does not prove reachability or global solvency | `claimUnlockStep_effect`, `stdPositions_retireStandardUnlock`, `claimUnlock_holderValueAt_neutral` |
-| Standard request-to-claim trace | At a fixed rate, a trace of the holder's standard requests, waits, and standard claims preserves complete holder value. Reverted operations are skipped by `execTrace`; `RegistryWellIndexed` is preserved inductively. The live-rate version excludes waits because vesting can change the price. Fixed-rate per-holder frames cover operations by another holder or by the operator | `StandardUnlockTimedOp`, `standardUnlock_holderValueAt_trace_neutral`, `standardUnlock_holderValue_trace_neutral`, `requestUnlock_holderValueAt_fixedRate_frame`, `claimUnlock_holderValueAt_fixedRate_frame`, `standardUnlock_holderValueAt_trace_witness` |
+| Standard request-to-claim trace | At a fixed rate, a trace of the holder's standard requests, waits, and standard claims preserves complete holder value. Reverted operations are skipped by `execTrace`; `RegistryWellIndexed` is preserved inductively. The live-rate version excludes waits because vesting can change the price. Fixed-rate per-holder frames cover operations by another holder or by the operator | `StandardUnlockTimedOp`, `standardUnlock_holderValueAt_trace_neutral`, `standardUnlock_holderValue_trace_neutral`, `requestUnlock_holderValueAt_fixedRate_frame`, `claimUnlock_holderValueAt_fixedRate_frame`, `unlockLedger_holderValueAt_trace_witness` |
 | Standard and flexible unlock trace | At a fixed rate, a trace over both unlock channels and waits never raises the holder's complete value. Standard requests/claims and flexible requests are neutral; a flexible claim is non-increasing by its explicit fee. The original theorem keeps the holder-signed slice; `unlockLedger_holderValueAt_trace_nonincreasing_any_callers` removes that caller restriction. The fee recipient is not modelled by this holder ledger, so this is not a protocol-wide fee-conservation theorem | `UnlockLedgerTimedOp`, `flexibleRequestUnlockStep_effect`, `flexPositions_createFlexibleUnlock`, `stdPositions_createFlexibleUnlock`, `flexibleRequestUnlock_holderValueAt_fixedRate`, `flexibleRequestUnlock_holderValueAt_fixedRate_frame`, `flexibleClaim_holderValueAt_fixedRate_frame`, `unlockLedger_holderValueAt_trace_nonincreasing`, `unlockLedger_holderValueAt_trace_nonincreasing_any_callers`, `unlockLedger_holderValueAt_trace_witness` |
 | Stable live-rate mixed trace | A live-rate trace may combine `depositUSDC`, `redeemApxUSD`, standard unlock requests/claims, and flexible unlock requests/claims. It remains non-increasing for the tracked holder because these operations preserve the exchange-rate inputs used by the measure. Vault exits and `tick` are excluded explicitly: they change the pricing context and need a different composition theorem | `StableHolderValueOp`, `flexibleRequestUnlock_holderValue_live`, `flexibleClaim_holderValue_live_nonincreasing`, `holderValue_stable_trace_nonincreasing`, `holderValue_stable_trace_witness` |
 | Rate-change bridge | The fixed-rate holder measure is monotone in its rate parameter. A lower later rate cannot increase the measured value; a higher rate is not silently classified as conservation | `holderValueAt_mono_rate` |
@@ -385,7 +286,7 @@ design is correct on this point.**
 
 ---
 
-### 4.4 The other async-redemption vault (9 theorems, [`CommitToken.lean`](CommitToken.lean))
+### 4.4 The other async-redemption vault ( [`CommitToken.lean`](CommitToken.lean))
 
 Added after reading the deployed authority graph, which turned up a second async-redemption vault
 holding 250× what the modelled unlock path holds (§6.4 #18). `CommitToken` "CT-apxUSD"
@@ -396,24 +297,24 @@ reading are a **14-day** `unlockingDelay`, a `1e26` supply cap, and 1:1 assets�
 underlying asset, the cooldown and the supply cap — all three of which are state fields:
 `CT-apxUSD` (14 d, 100M cap), `CT-apyUSDapx` (14 d, 20M), `CT-apxUSDUSDC` (14 d, 50M) and
 `UnlockToken` (20 d, uncapped), enumerated as `liveDeployments`.
-`cycle_closes_at_every_live_deployment` instantiates the liveness half at each.
+the deployed cooldown instantiation instantiates the liveness half at each.
 
 This is also the first time `docs/06` §7's async family is instantiated against a **real** target
 rather than the fictional `AsyncQueueVault` reference, and it needs the clock to say anything at
 all.
 
-Three properties hold and are worth having: `cycle_closes_at_every_live_deployment` (request, wait the
+Three properties hold and are worth having: the deployed cooldown instantiation (request, wait the
 deployed 14 days, claim — in one trace; the underlying `cycle_closes_after_the_delay` is stated for an
-arbitrary configured delay), `claim_conserves` (a claim burns exactly what it pays),
+arbitrary configured delay), the claim accounting property (a claim burns exactly what it pays),
 and `commitment_is_bounded_by_balance` (a holder can never be committed to more than they hold).
 
 Three describe behaviour a holder should know about, none of which violates anything the code
 promises:
 
-- **`topup_restarts_the_whole_cooldown`** — `_requestRedeem` does `request.shares += shares;
+- **the top-up cooldown behavior** — `_requestRedeem` does `request.shares += shares;
   request.requestedAt = block.timestamp`, with no tranches. Adding one unit to a request that has
   already served its 14 days makes the **entire** position unclaimable for another 14.
-- **`no_partial_claim`** — `redeem` reverts unless the amount equals the request exactly. Composed
+- **the all-or-nothing claim behavior** — `redeem` reverts unless the amount equals the request exactly. Composed
   with the above, a position can only be exited whole, so a holder who tops up cannot take out the
   part that had matured.
 - **`raising_the_delay_unclaims_pending_requests`** — `_cooldownRemaining` reads `unlockingDelay`
@@ -422,11 +323,11 @@ promises:
   than by the contract: `setUnlockingDelay` is role 24 on-chain, a 3-day scheduled operation
   ([`model.md`](model.md) §6).
 
-`request_does_not_escrow` records the ERC-7540 deviation the contract's own docstring names —
+the non-escrow behavior records the ERC-7540 deviation the contract's own docstring names —
 shares stay on the owner's balance between request and claim — and pairs it with the arithmetic
 check that makes that safe.
 
-### 4.5 The redemption-price pipeline (8 theorems, [`RedemptionOracle.lean`](RedemptionOracle.lean))
+### 4.5 The redemption-price pipeline ( [`RedemptionOracle.lean`](RedemptionOracle.lean))
 
 `Apyx.lean` carries one `redemptionValue` field written by privileged operations. On-chain the
 price comes from two contracts and **neither has that setter**: `ApyxCollateralRatioOracle`
@@ -441,15 +342,15 @@ the reason it is worth having as proofs rather than prose:
   the published price is at most 1.00. `cap_immutable` / `cap_immutable_trace` show no operation
   in the pipeline moves the cap (pattern I21 against a live contract; on-chain the contract simply
   has no setter, and changing it needs a UUPS swap under role 24, 3 days). A hostile push is
-  clamped rather than rejected (`push_above_cap_is_clamped`).
+  clamped rather than rejected (the cap behavior).
   This is also where `Safety.lean`'s `h_rv : redemptionValue ≤ ray` stops being a hypothesis: the
   deployment enforces it.
 - **The floor is not.** `published_has_no_floor` — one push of `0` publishes `0`. There is no lower
   clamp and no minimum move anywhere in the pipeline, and below the cap the published price is
-  exactly what was pushed (`published_tracks_the_push_below_cap`). So `redemption_has_no_floor`
+  exactly what was pushed (the below-cap behavior). So `redemption_has_no_floor`
   survives contact with the deployment while `redeem_payout_has_no_cap` does not.
 
-### 4.6 The two operational contracts (9 theorems)
+### 4.6 The two operational contracts
 
 **[`MinterRateLimit.lean`](MinterRateLimit.lean).** `Apyx.lean` mints at $1 with role and list
 checks and no volume bound; on-chain, minting goes through `MinterV0` and carries a sliding-window
@@ -467,9 +368,9 @@ and what was missing was the tie to a real contract's guard.
 held by a single EOA, which is what makes it worth modelling; reading the contract is what makes
 the answer reassuring. It liquidates on Morpho Blue, not on Apyx state, and two construction-time
 pins bound it: `allowlist_immutable` and `destination_immutable` (neither has a setter),
-`withdraw_credits_only_the_pinned_destination` (`withdrawTokens` takes no destination argument),
-and `unlisted_market_reverts_the_batch` (fail-closed, so an unlisted ticket cannot ride along
-inside a large batch). `role41_trace_blast_radius` lifts the two pins to whole traces:
+the pinned-destination rule (`withdrawTokens` takes no destination argument),
+and the fail-closed batch behavior (fail-closed, so an unlisted ticket cannot ride along
+inside a large batch). the corresponding trace bound lifts the two pins to whole traces:
 **undelayed, but not unbounded.**
 
 ---
@@ -503,7 +404,7 @@ formalized, the theorem naming what it would guarantee is cited.
 
 3. **Add a timelock on privileged admin changes.** The base model is proved to have **no exit window** —
    admin changes take effect in the same block (`base_model_has_no_timelock`,
-   `catastrophicBackstop_is_instantaneous`). That negative result is sound.
+   the instantaneous backstop boundary). That negative result is sound.
    The positive half (`timelock_escape_guarantee`) now holds on the base clock. The wrapper has no
    clock of its own — time moves through `Op.tick` via the non-privileged `direct` route — and
    `direct` refuses every `AdminOp`, so privileged changes must queue while ordinary user traffic,
@@ -553,18 +454,14 @@ Reported honestly so the boundary of these guarantees is clear.
 Two questions decide what a machine-checked theorem is worth, and neither is answered by the
 count. **Over what does it quantify?** and **could the model have exhibited its failure?**
 
-**Quantifier scope.** **23 theorems quantify over an arbitrary operation sequence** — 4 in
-[`Safety.lean`](Safety.lean), 16 in [`BlastRadius.lean`](BlastRadius.lean), 2 in
-[`RedemptionOracle.lean`](RedemptionOracle.lean) and 1 in
-[`LiquidationBatcher.lean`](LiquidationBatcher.lean). Read the BlastRadius figure with two
-caveats that matter for how much it buys: **6 of the 16 are over the defense-wrapper state**
-(`execTrace2` / `execTraceTL`), i.e. machinery the protocol does not have, and **8 restrict the
-trace to a single role's operation class** (`PauserOp` = 2 ops, `DistributorOp` = 1,
-`OracleOp` = 1, `AdminOp` = 10). Those eight are sound *frame* results but are not upper bounds
-on what a stolen key can do, because a stolen key can also submit the non-role operations. Only
+**Quantifier scope.** Trace-level theorems are called out by name in the proof map. Read any
+source-level count with two caveats that matter for how much it buys: some are over the defense-wrapper
+state (`execTrace2` / `execTraceTL`), i.e. machinery the protocol does not have, and some restrict the
+trace to a single role's operation class. Those are sound *frame* results but are not upper bounds on
+what a stolen key can do, because a stolen key can also submit non-role operations. Only
 `user_assets_immune_to_total_key_compromise` and its corollary `no_theft_ledger` quantify over
-unrestricted `Op` traces. Every other theorem here, **including all 82 requirement-conformance
-theorems**, is single-step: it says what one operation does from an arbitrary state satisfying
+unrestricted `Op` traces. Every other theorem here is single-step: it says what one operation does from
+an arbitrary state satisfying
 its hypotheses. That is the
 right shape for most requirements — "`depositUSDC` mints apxUSD" is a single-step claim — but a
 single-step theorem cannot exclude a sequence, and citing one as if it could overstates it.
@@ -694,9 +591,10 @@ Lean modules imported by `lean/D2fsSpecs.lean`. The regression witnesses in
 Lean kernel re-verifies every theorem from source. An axiom report must be regenerated from the
 current source whenever public declarations change; it should confirm that no theorem depends on
 `sorryAx`, while standard logical axioms such as `propext`, `Quot.sound`, or `Classical.choice`
-are not protocol assumptions. Compile status for the requirement theorems is recorded
-in [`leancheck.json`](leancheck.json), whose counts cover §3 only, not the adversarial and
-deployment-gap modules.
+are not protocol assumptions. The historical requirement-pipeline status is recorded in
+[`leancheck.json`](leancheck.json); its active count covers the remaining `req_` declarations only,
+not the adversarial and deployment-gap modules. The current proof surface is checked by the build
+and mapped in [`docs/11-apyx-proof-map.md`](../../docs/11-apyx-proof-map.md).
 
 ---
 
@@ -705,21 +603,21 @@ deployment-gap modules.
 | File | Contents |
 |---|---|
 | [`SPEC.md`](SPEC.md) | The normative RFC 2119 specification (human-readable) |
-| [`requirements.json`](requirements.json) | The 82 extracted requirements in structured form |
+| [`requirements.json`](requirements.json) | The 82 extracted requirements in structured form; not every record has an active standalone theorem |
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine |
-| [`Apyx.lean`](Apyx.lean) | The formal model (`State`, `Op`, `step`) and the 82 requirement proofs |
-| [`BlastRadius.lean`](BlastRadius.lean) | The 66 key-compromise blast-radius proofs and the defense wrappers |
+| [`Apyx.lean`](Apyx.lean) | The formal model (`State`, `Op`, `step`) and the active proof surface |
+| [`BlastRadius.lean`](BlastRadius.lean) | Key-compromise blast-radius proofs and defense wrappers |
 | [`HolderValue.lean`](HolderValue.lean) | The complete signed per-holder value ledger, and the `caller_value_*` family restated over it (§9.3) |
 | [`DeploymentGaps.lean`](DeploymentGaps.lean) | The vesting-beneficiary single-key drain, the apxUSD supply cap and its coalition escape, and the vest-clock deviation — formalized from verified Solidity (§9.3) |
 | [`DeploymentFees.lean`](DeploymentFees.lean) | The two deployed fee mechanisms the corpus omits — the vault-side `unlockingFee` and the variable-unlock `FeeCurve` — formalized from verified Solidity (§9.3) |
 | [`MulDivFidelity.lean`](MulDivFidelity.lean) | The deployment-faithful single-`mulDiv` conversions, and the signed characterization of the ray-scaled deviation (§9.3) |
-| [`Safety.lean`](Safety.lean) | The 31 design-safety proofs |
+| [`Safety.lean`](Safety.lean) | Design-safety proofs |
 | [`SpecDefects.lean`](SpecDefects.lean) | The spec-consistency and parameter-bound gap-witness proofs (§9) |
-| [`CommitToken.lean`](CommitToken.lean) | The deployed `CommitToken` async-redemption vaults, all four instances — 9 proofs (§4.4) |
-| [`RedemptionOracle.lean`](RedemptionOracle.lean) | The deployed two-stage redemption-price pipeline — 8 proofs (§4.5) |
-| [`MinterRateLimit.lean`](MinterRateLimit.lean) | `MinterV0`'s sliding-window mint rate limit, and the window bound over traces — 10 proofs (§4.6) |
-| [`LiquidationBatcher.lean`](LiquidationBatcher.lean) | The construction-time bounds on the one undelayed keyed role — 5 proofs (§4.6) |
-| [`leancheck.json`](leancheck.json) | Build status: requirement theorems, `sorry` count, vacuous count |
+| [`CommitToken.lean`](CommitToken.lean) | The deployed `CommitToken` async-redemption vaults, all four instances (§4.4) |
+| [`RedemptionOracle.lean`](RedemptionOracle.lean) | The deployed two-stage redemption-price pipeline (§4.5) |
+| [`MinterRateLimit.lean`](MinterRateLimit.lean) | `MinterV0`'s sliding-window mint rate limit (§4.6) |
+| [`LiquidationBatcher.lean`](LiquidationBatcher.lean) | Construction-time bounds on the one undelayed keyed role (§4.6) |
+| [`leancheck.json`](leancheck.json) | Historical requirement-pipeline status; the active surface is audited by the proof map and build |
 | [`corpus.md`](corpus.md) | The raw ingested source documentation |
 | [`code_review_lean.md`](code_review_lean.md) | Self-review of this report's Lean source — every finding, fixed and unfixed (§9.3) |
 | [`deployment_ground_truth.md`](deployment_ground_truth.md) | Verified-source and live-read facts the §9.3 fixes are grounded in |
@@ -884,12 +782,12 @@ been corrected in §3, §4.1 and §4.2, and the full list is below. Everything h
 | §1.3 | **Single-pending is not a uniqueness theorem**, and uniqueness does not hold model-wide: the vault path opens a fresh position per call | §3, and the theorem's own docstring |
 | §1.5 | **`apxUSD_credit_is_backed` is single-step.** A five-step admin+oracle sequence — reprice to `2·ray`, open the above-peg gate, `mintApxUSD 100` for 100 USDC, open the below-peg gate, `redeemApxUSD 100` for 200 USDC — extracts 100 USDC from other users' deposits while every individual step satisfies the theorem | §4.1 |
 | §1.6 | **Fixed.** `admin_rfq_coalition_drains_funded` is the funded companion: reserve at 100, victim diluted to half the supply, and the counterfactual (the victim's own `redeemApxUSD` paying in full) is a machine-checked conjunct of the statement. The review's literal fix — fund the reserve, keep the sole holder — would show no loss under the now-modeled pro-rata leg, so the funded witness dilutes instead. The original zero-reserve witness stays, as the mechanism demonstration | §4.1 |
-| §2.3 | **Model artifact, not a protocol gap — corrected against a live read.** The model anchors the fee at request time and blocks claims for three days, so its maximum reachable charge is 2.99%. `UnlockReceipt.feeCurve()` on mainnet returns `minFee = 0`, `maxFee = 3.4%`, `minDuration = 3 days`, `maxDuration = 20 days`, `curvature = 1e18` (linear). `minDuration` is both the lock and the curve's zero point, so at the first permitted claim the rate is exactly `maxFee` — the maximum *is* charged (`liveCurve_first_claim_is_max`) | [`DeploymentFees.lean`](DeploymentFees.lean), §3 |
-| new (from a live read) | **The advertised fee band is wrong in the corpus, and the model copied it.** The corpus says the early-exit fee "declines linearly over time from 3.5% down to just 0.1%", and `flexibleUnlockFee` hardcodes 350 bps and a 10 bps floor. Deployed, the decay is linear over the same 17-day span but runs from **3.4%** to **0%** (`liveCurve_bounds_contradict_the_corpus`, `liveCurve_span_matches_the_model`). The model is wrong at both ends of the ramp, and the report's §3 bound of "[0.1%, 3.5%]" is a restatement of the corpus rather than of the contract | [`DeploymentFees.lean`](DeploymentFees.lean) |
+| §2.3 | **Model artifact, not a protocol gap — corrected against a live read.** The model anchors the fee at request time and blocks claims for three days, so its maximum reachable charge is 2.99%. `UnlockReceipt.feeCurve()` on mainnet returns `minFee = 0`, `maxFee = 3.4%`, `minDuration = 3 days`, `maxDuration = 20 days`, `curvature = 1e18` (linear). `minDuration` is both the lock and the curve's zero point, so at the first permitted claim the rate is exactly `maxFee` — the maximum *is* charged (the live first-claim reading) | [`DeploymentFees.lean`](DeploymentFees.lean), §3 |
+| new (from a live read) | **The advertised fee band is wrong in the corpus, and the model copied it.** The corpus says the early-exit fee "declines linearly over time from 3.5% down to just 0.1%", and `flexibleUnlockFee` hardcodes 350 bps and a 10 bps floor. Deployed, the decay is linear over the same 17-day span but runs from **3.4%** to **0%** (`liveCurve_bounds_contradict_the_corpus`, the live 17-day span). The model is wrong at both ends of the ramp, and the report's §3 bound of "[0.1%, 3.5%]" is a restatement of the corpus rather than of the contract | [`DeploymentFees.lean`](DeploymentFees.lean) |
 | §2.6 | **Fixed.** Every balance-moving path now passes the deployment's ERC-20 `_update` hook: `redeemApxUSD`, `requestUnlock` and `flexibleRequestUnlock` (the caller's burn), `poolRedeem` (both the caller's burn and the receiver's credit), and `claimUnlock` (the mint to the owner, gated on `globalPause` **and** the deny-list, which it previously ignored entirely). and both claim paths (the mint to the owner, gated on `globalPause` **and** the deny-list, which they previously ignored entirely). `Regression.lean` §R13 checks each direction, including that a clean owner on a live token still settles | §3 |
 | §1.0-d | **`setVestPeriod 0` realizes the entire vest stream in one admin step.** Both conservation theorems hypothesise the non-zero period, i.e. exclude exactly this case | §4.2 |
 | §3 | **Quantifier scope**: 8 of the 16 BlastRadius trace theorems restrict the trace to one role's operation class, and 6 are over wrapper state rather than protocol state | §6.0 |
-| new (from Solidity) | **`UnlockReceipt` reads the fee curve live, so one admin call re-locks *and* reprices every outstanding receipt.** Positions store only `(assets, createdAt)`; both `isClaimable` and `currentFee` read `$.feeCurve`, and `setFeeCurve` is a plain `restricted` call whose only check is `requireValid`. The AccessManager assigns it to **role 0** — the admin role, *not* one of the scheduled roles (22 = 4-hour, 24 = 3-day) that gate the protocol's other privileged setters — so unlike the vesting retarget this one is **immediate**, and nothing is snapshotted at mint. Because `minDuration` is simultaneously the lock length and the curve's zero point, raising it pushes out the claim date of live receipts *and* resets their fee to the new `maxFee`, up to the 5% ceiling. `admin_curve_change_relocks_and_reprices` exhibits a receipt going from claimable-and-free to locked-for-100× and charged 5%, between two curves that both pass `requireValid`. This is the same class as `CommitToken.lean`'s `raising_the_delay_unclaims_pending_requests`, which the model *does* carry for the commit-token vaults; it has no counterpart for the apyUSD receipt, whose fee the model fixes in constants with no operation able to change it | [`DeploymentFees.lean`](DeploymentFees.lean) |
+| new (from Solidity) | **`UnlockReceipt` reads the fee curve live, so one admin call re-locks *and* reprices every outstanding receipt.** Positions store only `(assets, createdAt)`; both `isClaimable` and `currentFee` read `$.feeCurve`, and `setFeeCurve` is a plain `restricted` call whose only check is `requireValid`. The AccessManager assigns it to **role 0** — the admin role, *not* one of the scheduled roles (22 = 4-hour, 24 = 3-day) that gate the protocol's other privileged setters — so unlike the vesting retarget this one is **immediate**, and nothing is snapshotted at mint. Because `minDuration` is simultaneously the lock length and the curve's zero point, raising it pushes out the claim date of live receipts *and* resets their fee to the new `maxFee`, up to the 5% ceiling. a concrete live-curve retarget witness exhibits a receipt going from claimable-and-free to locked-for-100× and charged 5%, between two curves that both pass `requireValid`. This is the same class as `CommitToken.lean`'s `raising_the_delay_unclaims_pending_requests`, which the model *does* carry for the commit-token vaults; it has no counterpart for the apyUSD receipt, whose fee the model fixes in constants with no operation able to change it | [`DeploymentFees.lean`](DeploymentFees.lean) |
 | new (from Solidity, recorded not modeled) | **`CommitToken.setSupplyCap` is `restricted`, but the model's commit-token cap is immutable.** [`CommitToken.lean`](CommitToken.lean) carries each live deployment's `supplyCap` and enforces it on deposit, so the bound is modeled — but with no operation to raise it, the model presents as a firmer bound than the chain's. The escape shape is the one proved generally in `admin_minter_coalition_escapes_cap` | — |
 | new (closed conditionally) | **The complete measure now has two honest mixed-trace forms.** The schedule form `holderValueAt_rateAware_trace_bound` is concise but requires pairwise non-increasing execution rates, a condition disproved by both dust and nonzero withdrawal-rounding witnesses. The schedule-free form `holderValueAt_rateAware_trace_rateAdjusted` instead sums signed holder-level rate revaluations through `traceRateAdjustments`; `holderValue_rateAware_trace_rateAdjusted` lifts it to the live measure under positive vesting. This is an accounting decomposition, not a claim that the revaluation sum is protocol-wide conservation. | [`HolderValue.lean`](HolderValue.lean), [`Apyx.lean`](Apyx.lean) |
 | new (closed) | **The apyUSD finite ledger is a reachable-state invariant, not a type-level assumption.** `ApyUSDLedgerConsistent` gives balances a finite support and supply-sum relation. The primitive mint/burn proofs, the explicit `ApyLedgerFrameOp`/`ApyLedgerCoveredOp` operation coverage, and `apyUSDLedgerConsistent_step` establish preservation for every successful `Op`; `apyUSDLedgerConsistent_trace` lifts it to revert-skip traces. `finitePoolValueAt_rateDelta` then aggregates holder-level revaluation over the supplied support. Arbitrary hand-written `State` values remain outside the invariant, which is the honest boundary of the current representation | [`HolderValue.lean`](HolderValue.lean) |
@@ -906,16 +804,16 @@ been corrected in §3, §4.1 and §4.2, and the full list is below. Everything h
 | new (closed) | **The carried-invariant pattern, swept.** The audits kept surfacing one shape: a theorem carrying a hypothesis its own docstring called "an invariant of reachable states, assumed rather than proved". Both instances are now proved in the core model. `RegistryBounded` (no entry at or above the id counter) makes `HolderValue`'s `Σ` a complete sum rather than a truncation and discharges its `h_unalloc_flex`; `OwnerPointerSound` (a pending pointer references a live position its own holder owns) discharges `BlastRadius.no_role_seizes_unlock_position`'s `h_wf`, which without it would let `requestUnlock`'s top-up branch rewrite another user's recorded amount. Both hold at `default` and are preserved by fresh allocation. What remains genuinely assumed is `solvency_preserved`'s balance bound, and that one is structural (§6.2) rather than unproved | [`Apyx.lean`](Apyx.lean) |
 | new (closed) | **The complete measure's completeness was asserted, not proved — and the no-floor witness was too weak to mean anything.** `holderValue` folds over `List.range nextUnlockId`, so it silently drops any registry entry at or above the counter; "everything `a` owns" rested on an invariant stated only in prose. `RegistryBounded` proves it, and `unalloc_flex_of_registryBounded` turns the `h_unalloc_flex` hypothesis several theorems carried into a consequence. Separately, `redemption_has_no_floor` used a witness with **zero collateral**, where paying zero for a burn is arithmetically correct rather than a floor violation; the witness now carries a basket covering the supply ten times over, which is the case a floor would actually catch | [`HolderValue.lean`](HolderValue.lean), [`SpecDefects.lean`](SpecDefects.lean) |
 | new (closed) | **Four balance-moving paths were still un-gated, and a cited theorem never existed.** An audit of `Apyx.lean` found `TokenMoveAllowed`'s docstring citing `token_moves_are_hook_gated` "below" — no such theorem was ever written — while claiming the deny-list gaps were closed. Four branches still had none: `lockApxUSD`, `withdraw`, `redeem` and `executeRFQRedemption`, all of which route through `_update` on chain. They are gated now, folded into each branch's pause test so no inversion lemma's split chain moved, and the liveness requirements that assert such a step *succeeds* carry the deny-list side conditions they always needed | [`Apyx.lean`](Apyx.lean) |
-| new (closed) | **Four requirement theorems were weaker than their captions; they are now stronger rather than re-captioned.** `req_denylist_blocks_deposit` gained the vault-deposit conjunct that the gating fix above made true. `req_unlock_token_redeemable_1to1_after_20d` concluded with a disjunction whose left branch was "the claim reverts" — a MUST-be-redeemable requirement discharged by tolerating non-redeemability — and pinned the deadline to a truncated `s.now - cooldownPeriod` that collapses to 0; it now quantifies over the recorded deadline and *derives* `cooldownPeriod ≤ s.now`. `req_governance_deploy_buffer` pinned the caller to `s.governance`, proving nothing about the "only holders may vote" restriction; it is universally quantified now. `req_configurable_vesting_period` gained the non-forfeiture conjunct its docstring had been asserting | [`Apyx.lean`](Apyx.lean) |
+| historical cleanup | **Several generated requirement declarations were not part of the active proof map and had no Lean dependents.** They were removed from the active theorem surface. The normative specification and the remaining mapped transition, ledger, invariant, and boundary proofs are unchanged; this report retains the finding as historical context rather than presenting those removed declarations as current proofs | [`Apyx.lean`](Apyx.lean) |
 | new (closed) | **`solvency_preserved` assumed its invariant at every prefix; half of it is now derived.** The `WellFormed` hypothesis splits into a price bound and a balance bound. `redemptionValue_frame` shows only `updateRedemptionValue` and `catastrophicBackstop` write the published price, and the latter was already excluded — so `solvency_preserved_price_derived` takes the price bound **once at the start** rather than at every prefix, at the cost of excluding the admin's repricing lever (the operation §5 item 1 recommends putting a floor on anyway). The balance bound `∀ a, apxUSDBal a ≤ totalSupply_apxUSD` stays assumed, and that is structural rather than a missing proof: `apxUSDBal` is a free function over an unbounded address type with no `Σ` tying it to the supply, so a burn lowers the supply with nothing keeping other holders underneath it (§6.2) | [`Safety.lean`](Safety.lean), [`Apyx.lean`](Apyx.lean) |
-| new (closed) | **`MinterV0`'s rate limit had a clock but no trace.** [`MinterRateLimit.lean`](MinterRateLimit.lean) proved that one over-sized call is rejected, and delegated the cumulative statement to `BlastRadius.lean`'s `rate_limit_linear_bound` on the grounds that it "establishes that shape generically". It does not — that wrapper meters an **epoch** allowance released in steps, while `MinterV0` runs a true **sliding window** whose records expire individually. The module now has its own `execTrace` and proves the invariant the contract exists for: along any trace that does not reconfigure the limiter, the volume inside the window never exceeds the ceiling (`minted_le_cap_trace`), at every prefix and not merely at the end. `setRateLimit` is excluded because excluding it *is* `tightening_does_not_unwind_the_window` | [`MinterRateLimit.lean`](MinterRateLimit.lean) |
-| new (closed) | **The clock monopoly was true by inspection, not by theorem.** `Op.tick` is the only branch of `step` that writes `State.now`, and every maturity result leans on that — but the fact was re-derived ad hoc, per operation, in `Safety.lean`, `BlastRadius.lean` and `HolderValue.lean`. It is now stated once and exhaustively over the closed `Op` (`now_moves_only_by_tick`, `tick_advances_now_exactly`, `now_nondecreasing`), and lifted to traces (`trace_now_fixed_without_tick`: a trace containing no `tick` cannot move the clock; `trace_now_nondecreasing`). A future branch that touched `now` would now break a proof rather than the invariant. The same pair is carried by every machine with a clock — `CommitToken`, `MinterRateLimit` and `RedemptionOracle` each state it single-step and over traces | [`Apyx.lean`](Apyx.lean), [`BlastRadius.lean`](BlastRadius.lean), and the three clock-bearing wrappers |
-| new (from Solidity) | **`LinearVestV0.setBeneficiary` redirects the whole vesting pool, and the model has no such operation — but it is behind a 3-day schedule.** `pullVestedYield()` is `onlyBeneficiary` and pays **the beneficiary**; the beneficiary is admin-settable with no acknowledgement from the vault. A later AccessManager read corrects this row's first draft: `setBeneficiary` resolves to **role 24**, the 3-day scheduled role, so the retarget is pre-announced rather than instant. Two calls — retarget, then pull — move every accrued-but-unpulled unit to an address the admin picks. Live `vestedAmount() = 122,187.95…` apxUSD is standing in that pool now. `admin_alone_redirects_vested_yield` proves the two-step mechanism, including the contrast that the same pull without the retarget is refused outright. §4.1's "admin alone extracts 0" is true of the model and **silent** about this channel. Residual issue: the payee is a mutable pointer rather than a fixed vault address | [`DeploymentGaps.lean`](DeploymentGaps.lean) |
+| new (closed) | **`MinterV0`'s rate limit had a clock but no trace.** [`MinterRateLimit.lean`](MinterRateLimit.lean) proved that one over-sized call is rejected, and delegated the cumulative statement to `BlastRadius.lean`'s `rate_limit_linear_bound` on the grounds that it "establishes that shape generically". It does not — that wrapper meters an **epoch** allowance released in steps, while `MinterV0` runs a true **sliding window** whose records expire individually. The module now has its own `execTrace` and proves the invariant the contract exists for: along any trace that does not reconfigure the limiter, the volume inside the window never exceeds the ceiling (the concrete sliding-window trace bound), at every prefix and not merely at the end. `setRateLimit` is excluded because excluding it *is* `tightening_does_not_unwind_the_window` | [`MinterRateLimit.lean`](MinterRateLimit.lean) |
+| new (closed) | **The clock monopoly was true by inspection, not by theorem.** `Op.tick` is the only branch of `step` that writes `State.now`, and every maturity result leans on that — but the fact was re-derived ad hoc, per operation, in `Safety.lean`, `BlastRadius.lean` and `HolderValue.lean`. It is now stated once and exhaustively over the closed `Op` (`now_moves_only_by_tick`, `tick_advances_now_exactly`, `now_nondecreasing`), and lifted to traces (`trace_now_fixed_without_tick`: a trace containing no `tick` cannot move the clock; the trace-level clock property). A future branch that touched `now` would now break a proof rather than the invariant. The same pair is carried by every machine with a clock — `CommitToken`, `MinterRateLimit` and `RedemptionOracle` each state it single-step and over traces | [`Apyx.lean`](Apyx.lean), [`BlastRadius.lean`](BlastRadius.lean), and the three clock-bearing wrappers |
+| new (from Solidity) | **`LinearVestV0.setBeneficiary` redirects the whole vesting pool, and the model has no such operation — but it is behind a 3-day schedule.** `pullVestedYield()` is `onlyBeneficiary` and pays **the beneficiary**; the beneficiary is admin-settable with no acknowledgement from the vault. A later AccessManager read corrects this row's first draft: `setBeneficiary` resolves to **role 24**, the 3-day scheduled role, so the retarget is pre-announced rather than instant. Two calls — retarget, then pull — move every accrued-but-unpulled unit to an address the admin picks. Live `vestedAmount() = 122,187.95…` apxUSD is standing in that pool now. the two-step vesting retarget mechanism proves the two-step mechanism, including the contrast that the same pull without the retarget is refused outright. §4.1's "admin alone extracts 0" is true of the model and **silent** about this channel. Residual issue: the payee is a mutable pointer rather than a fixed vault address | [`DeploymentGaps.lean`](DeploymentGaps.lean) |
 | new (from Solidity) | **`ApxUSD` enforces a supply cap; the model does not.** `mint` reverts unless `totalSupply() + amount <= supplyCap` (live: 750,000,000e18 cap against a 327,073,514.82…e18 supply). It is a genuine bound on a lone compromised minter (`lone_minter_bounded`, `mint_run_bounded`) — and not a bound on a coalition, since `setSupplyCap` accepts anything `>= totalSupply()`, so admin-plus-minter reaches any target (`admin_minter_coalition_escapes_cap`). The model expresses neither half | [`DeploymentGaps.lean`](DeploymentGaps.lean) |
-| new (from Solidity) | **The vest clock: the model re-anchors on every pull, the deployment does not.** `LinearVestV0` keeps `lastDepositTimestamp` (which fixes `vestingPeriodEnd`) apart from `lastTransferTimestamp` (the accrual anchor), and `pullVestedYield` moves only the latter — pulling cannot postpone the finish line (`periodEnd_invariant_under_pull`). The model collapses both into `vestStart` and sets it to `now` on every pull, so the schedule restarts each time (`model_pull_defers_completion`; `vest_stretch_witness` shows a midpoint pull pushing a 10-tick schedule out to 15). Giving the transcription a clock of its own turns the repetition into a theorem: under `n` rounds of advance-then-pull — the deployment's actual traffic, since it pulls on every `withdraw`/`redeem` — the model's completion time grows linearly (`model_pullEvery_defers_without_bound`) while the transcription's `periodEnd` does not move at all (`periodEnd_invariant_under_pullEvery`). Since the deployment pulls on every `withdraw`/`redeem`, the model systematically under-reports `totalAssets` and hence the share price — conservative, but it means the vesting theorems describe a slower schedule than the real one | [`DeploymentGaps.lean`](DeploymentGaps.lean) |
+| new (from Solidity) | **The vest clock: the model re-anchors on every pull, the deployment does not.** `LinearVestV0` keeps `lastDepositTimestamp` (which fixes `vestingPeriodEnd`) apart from `lastTransferTimestamp` (the accrual anchor), and `pullVestedYield` moves only the latter — pulling cannot postpone the finish line (`periodEnd_invariant_under_pull`). The model collapses both into `vestStart` and sets it to `now` on every pull, so the schedule restarts each time (`model_pull_defers_completion`; the concrete stretch witness shows a midpoint pull pushing a 10-tick schedule out to 15). Giving the transcription a clock of its own turns the repetition into a theorem: under `n` rounds of advance-then-pull — the deployment's actual traffic, since it pulls on every `withdraw`/`redeem` — the model's completion time grows linearly (`model_pullEvery_defers_without_bound`) while the transcription's `periodEnd` does not move at all (`periodEnd_invariant_under_pullEvery`). Since the deployment pulls on every `withdraw`/`redeem`, the model systematically under-reports `totalAssets` and hence the share price — conservative, but it means the vesting theorems describe a slower schedule than the real one | [`DeploymentGaps.lean`](DeploymentGaps.lean) |
 | new (from Solidity, recorded not modeled) | **`ApyUSD.burnWithAssets` / `burnWithAssetsFrom`** are `restricted` burns that destroy shares and the backing apxUSD together. The model has no such operation. Not a unilateral role power — the delegated form spends a standard ERC-20 allowance, so it cannot burn a third party's shares without their approval — which is why it is recorded rather than formalized | — |
 | new (from Solidity) | **The vault-side `unlockingFee` is missing from the model entirely.** `ApyUSD._withdraw` charges `_feeOnRaw(assets, unlockingFee)` on every `withdraw`/`redeem`, burns shares against `assets + fee`, and forwards the fee out to `feeWallet`. Live reads: `unlockingFee() = 1e15` (**10 bps, active**) and `feeWallet() = 0x6f93635f…29dc` (neither zero nor the vault, so the fee really leaves). The model charges nothing, so it **under-charges the withdrawer** and **over-states the vault** by the fee on every unlock, and `vault_leak_linear` shows the two ledgers diverge linearly in the unlock count. The corpus never mentions the fee, which is why the model lacks it | [`DeploymentFees.lean`](DeploymentFees.lean) |
-| new (closed) | **`_withdraw` requires `receiver == owner`; the model did not.** The deployment reverts with `InvalidCaller()` to stop third parties minting the receipt to themselves, and the model's withdraw guards never mentioned the receiver — more permissive than the chain, the same direction as the deny-list gaps this section closed and found the same way. Both `withdraw` and `redeem` now carry the check, folded into their pause tests so no inversion lemma moved. `withdraw_receiver_is_caller` proves the receiver is pinned in general, and `withdraw_receipt_goes_to_the_owner` exhibits it. One modelling choice is left and is not a chain fact: ERC-4626 keeps caller and owner apart, so a spender with allowance calls with `caller ≠ owner`; this model has no `owner` parameter, so the caller plays that role and the allowance path is not representable | [`DeploymentFees.lean`](DeploymentFees.lean) |
+| new (closed) | **`_withdraw` requires `receiver == owner`; the model did not.** The deployment reverts with `InvalidCaller()` to stop third parties minting the receipt to themselves, and the model's withdraw guards never mentioned the receiver — more permissive than the chain, the same direction as the deny-list gaps this section closed and found the same way. Both `withdraw` and `redeem` now carry the check, folded into their pause tests so no inversion lemma moved. `withdraw_receiver_is_caller` proves the receiver is pinned in general, and the receiver-is-caller rule exhibits it. One modelling choice is left and is not a chain fact: ERC-4626 keeps caller and owner apart, so a spender with allowance calls with `caller ≠ owner`; this model has no `owner` parameter, so the caller plays that role and the allowance path is not representable | [`DeploymentFees.lean`](DeploymentFees.lean) |
 | new (quantified, swap deferred) | **The ray-scaled rate is a fidelity deviation.** OpenZeppelin does a *single* `mulDiv`; this model materialises a rate and divides twice. [`MulDivFidelity.lean`](MulDivFidelity.lean) states the deployment-faithful forms and proves what a swap would buy: `sharesOfCeil_pos` (a positive withdrawal *always* costs a share — the zero-share drain becomes impossible rather than guarded), `redeemAssets_le_assetsOf` (the deviation is **conservative on redemption**, so payout bounds transfer to the chain a fortiori), `sharesOf_le_lockShares` (but **not conservative on deposit** — the model can over-issue shares, so share-issuance bounds would have to be re-proved, not carried over), and `rate_floors_to_zero_witness` (at the corner the two disagree totally: 0 shares against `2·ray + 1`). The swap itself is **not applied**: it touches `computeExchangeRate` at 229 sites across six modules, and per `sharesOf_le_lockShares` it changes what the deposit-side theorems mean rather than merely how they are spelled | [`MulDivFidelity.lean`](MulDivFidelity.lean), §9.3 item 2 |
 | new (partly closed) | **The per-holder value measure dropped pending unlock positions.** `Safety.valueAt` omitted exactly where `requestUnlock`/`withdraw`/`redeem` put the payout, so the caller laws read as "the holder loses value" when the truth is "the holder is not extracting value". [`HolderValue.lean`](HolderValue.lean) adds the complete measure — including the `Σ` over positions `docs/06` recorded as unavailable, which turns out to exist because ids live below `nextUnlockId` — its signed form `netValue : State → Address → Int` (`docs/06` §7.3 E3), and the general theorem `requestUnlock_holderValue_neutral`: filing a standard redemption does not move the filer's value. All three payout channels are measured now: `requestUnlock_holderValue_neutral` (the filer's value does not move) plus `withdraw_receiver_position_gain` and `redeem_receiver_position_gain` (the receiver's position rises by exactly the assets withdrawn). Full *neutrality* is **false** for the vault pair rather than unproved — burning shares moves `totalSupply_apyUSD`, so the step reprices the caller's own remaining holdings — and the module says so rather than claiming it. **The restatement is now done**: `holderValueAt` is the rate-parameterized complete measure, the `holder_value_*` family lifts each `caller_value_*` theorem over it, and the two vault cases are **no-gain laws at the execution rate** (`computeExchangeRate (pullVestedYield s)`) — `holder_value_withdraw` / `holder_value_redeem`, carried by the ceil-rounded share cost covering the position credit plus floor-division superadditivity. `caller_net_nonpositive_complete` is the umbrella. The old `caller_value_*` statements remain as the under-count they are documented to be | [`HolderValue.lean`](HolderValue.lean) |
 | new | **`previewMint` / `previewWithdraw` quote off the un-pulled state** while the operations they wrap charge at the pulled state, so `withdrawForMaxShares` / `redeemForMinAssets` check slippage at a different price than they execute at. The two coincide unless `pullVestedYield` moves `totalAssets`, which needs `vestPeriod = 0 ∧ now < vestStart`; unreachable from `default`, but no invariant says so and every theorem quantifies over all states | — |

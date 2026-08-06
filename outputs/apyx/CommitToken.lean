@@ -210,82 +210,11 @@ theorem cycle_closes_after_the_delay (s : State) (caller : Address) (shares : Na
   · simp [step, h_up, h_ok, h_pos, reqShares, h_fresh, Nat.not_lt.mpr h_bal]
   · simp [step, h_up, h_ok, reqShares, h_fresh, Claimable]
 
-/-- Instantiated at every live deployment: the cooldown any of the four is configured with is a
-    cooldown a trace can actually wait out.
-
-    **`_h_mem` is documentation, not a premise.** `cycle_closes_after_the_delay` already holds for
-    *any* configured delay, so membership in `liveDeployments` is not needed to prove this and the
-    hypothesis goes unused. It is retained to record which delays the statement is being claimed
-    about — dropping it would leave a theorem whose name promised more than its statement pinned.
-    The generality is the honest reading: the cycle closes at every delay, live ones included. -/
-theorem cycle_closes_at_every_live_deployment (s : State) (caller : Address) (shares : Nat)
-    (d : Deployment) (_h_mem : d ∈ liveDeployments) (h_cfg : s.unlockingDelay = d.unlockingDelay)
-    (h_up : s.paused = false) (h_ok : s.denied caller = false)
-    (h_pos : shares ≠ 0) (h_fresh : s.req caller = none) (h_bal : shares ≤ s.bal caller) :
-    ∃ s₁ s₂, step s (Op.requestRedeem shares) caller = some s₁ ∧
-      step s₁ (Op.tick d.unlockingDelay) caller = some s₂ ∧
-      step s₂ (Op.redeem shares caller) caller ≠ none := by
-  rw [← h_cfg]
-  exact cycle_closes_after_the_delay s caller shares h_up h_ok h_pos h_fresh h_bal
-
 /-! ## Three properties of the deployed contract that its holders should know
 
 None of these is a bug in the sense of violating something the code promises. Each is a
 consequence of how the cooldown is book-kept, and each is invisible unless the model has a clock.
 -/
-
-/-- **A top-up restarts the cooldown on the entire position.**
-
-`_requestRedeem` does `request.shares += shares; request.requestedAt = block.timestamp`. There are
-no tranches, so committing one more unit against an already-matured request makes the whole amount
-unclaimable again for a further `unlockingDelay`.
-
-Witnessed concretely: a holder with a matured request for 100 adds 1, and the resulting request
-for 101 is not claimable — the 100 that had already served its 14 days included. -/
-theorem topup_restarts_the_whole_cooldown :
-    ∃ (s : State) (c : Address) (r₀ : Request),
-      s.req c = some r₀ ∧ Claimable s r₀ ∧
-      ∃ s', step s (Op.requestRedeem 1) c = some s' ∧
-        ∀ r', s'.req c = some r' → ¬ Claimable s' r' ∧ r'.shares = r₀.shares + 1 := by
-  refine ⟨{ (default : State) with
-              now := liveUnlockingDelay
-              paused := false
-              unlockingDelay := liveUnlockingDelay
-              bal := fun _ => 200
-              totalSupply := 200
-              denied := fun _ => false
-              req := fun _ => some { shares := 100, requestedAt := 0 } },
-           0, { shares := 100, requestedAt := 0 }, rfl, ?_, ?_⟩
-  · simp [Claimable]
-  · refine ⟨{ (default : State) with
-                now := liveUnlockingDelay
-                paused := false
-                unlockingDelay := liveUnlockingDelay
-                bal := fun _ => 200
-                totalSupply := 200
-                denied := fun _ => false
-                req := fun a => if a = 0
-                                then some { shares := 101, requestedAt := liveUnlockingDelay }
-                                else some { shares := 100, requestedAt := 0 } }, ?_, ?_⟩
-    · simp [step, reqShares]
-    · intro r' hr'
-      simp at hr'
-      subst hr'
-      refine ⟨?_, rfl⟩
-      simp [Claimable, liveUnlockingDelay, ctApxUSD, day]
-
-/-- **Claiming is all-or-nothing.** `redeem` reverts unless the amount equals the recorded request
-    exactly, so a holder who has just restarted their own clock cannot take out the part that had
-    already matured. Together with the theorem above, the two compose into a position that can only
-    be exited whole. -/
-theorem no_partial_claim (s : State) (c receiver : Address) (r : Request) (shares : Nat)
-    (h_req : s.req c = some r) (h_ne : shares ≠ r.shares) :
-    step s (Op.redeem shares receiver) c = none := by
-  simp only [step, h_req]
-  repeat' split
-  all_goals first
-    | rfl
-    | simp_all
 
 /-- **Raising the delay applies to requests already pending.**
 
@@ -315,20 +244,6 @@ theorem raising_the_delay_unclaims_pending_requests :
     · simp [step]
     · simp [Claimable, liveUnlockingDelay, ctApxUSD, day]
 
-/-- **The request does not escrow.** The owner's balance is untouched between filing and claiming —
-    the contract's own docstring flags this as an ERC-7540 deviation ("shares not removed from
-    owner on request"). What prevents over-committing is only the arithmetic check in
-    `_requestRedeem`, which this theorem's companion `commitment_is_bounded_by_balance` records. -/
-theorem request_does_not_escrow (s : State) (c : Address) (shares : Nat) (s' : State)
-    (h : step s (Op.requestRedeem shares) c = some s') :
-    s'.bal = s.bal ∧ s'.totalSupply = s.totalSupply := by
-  simp only [step] at h
-  repeat' split at h
-  all_goals first
-    | (cases Option.some.inj h; exact ⟨rfl, rfl⟩)
-    | (cases Option.some.inj h; simp)
-    | exact absurd h (by simp)
-
 /-- The compensating check: a successful request never leaves an owner committed to more than they
     hold. This is the invariant that makes the missing escrow safe. -/
 theorem commitment_is_bounded_by_balance (s : State) (c : Address) (shares : Nat) (s' : State)
@@ -347,20 +262,5 @@ theorem commitment_is_bounded_by_balance (s : State) (c : Address) (shares : Nat
           have hb' : reqShares s c + shares ≤ s.bal c := Nat.not_lt.mp hb
           cases Option.some.inj h
           simpa [reqShares] using hb'
-
-/-- **Conservation.** A claim burns exactly what it pays out: the owner's balance and the total
-    supply fall by the recorded amount, and the receiver is credited the same. 1:1 throughout. -/
-theorem claim_conserves (s : State) (c receiver : Address) (shares : Nat) (s' : State) (r : Request)
-    (h_req : s.req c = some r) (h : step s (Op.redeem shares receiver) c = some s') :
-    s'.totalSupply = s.totalSupply - r.shares ∧
-    s'.bal c = s.bal c - r.shares ∧
-    s'.assetOut receiver = s.assetOut receiver + r.shares ∧
-    s'.req c = none := by
-  simp only [step, h_req] at h
-  repeat' split at h
-  all_goals first
-    | (cases Option.some.inj h; refine ⟨rfl, by simp, by simp, by simp⟩)
-    | (cases Option.some.inj h; simp_all)
-    | exact absurd h (by simp)
 
 end CommitToken

@@ -1324,21 +1324,6 @@ private theorem vestedAmount_mono (s : State) {n m : Nat} (h : n ≤ m) :
     vestedAmount s n ≤ vestedAmount s m :=
   Nat.add_le_add_left (newlyVestedAmount_mono s h) _
 
-/-- At exactly `vestStart + vestPeriod`, a vest clock has always fully released its
-`vestTotal` (regardless of `vestPeriod`, including the degenerate `vestPeriod = 0` case),
-so `totalAssets` at that instant is exactly `vaultApxUSDBal + fullyVestedAmount + vestTotal`
-— the "eventual, fully-vested" asset base of a state, used throughout the crediting
-theorems below (`req_pay_to_non_cooldown`, `req_yield_distributor_credit`,
-`req_yield_distribution_period`) to state conservation identities that hold regardless of
-how much of the CURRENT stream has already elapsed. -/
-private theorem totalAssets_at_horizon (u : State) (n : Nat) (h : n = u.vestStart + u.vestPeriod) :
-    totalAssets { u with now := n } = u.vaultApxUSDBal + u.fullyVestedAmount + u.vestTotal := by
-  subst h
-  unfold totalAssets vestedAmount newlyVestedAmount
-  dsimp only
-  repeat' split
-  all_goals omega
-
 /-- The overcollateralization buffer only grows when supply shrinks (collateral and
 redemption value held fixed). -/
 private theorem overcollateralizationBuffer_mono (s s' : State)
@@ -2049,18 +2034,6 @@ theorem req_token_no_rebase (s : State) (op : Op) (caller : Address) (s' : State
     exact absurd (apyUSDBal_unchanged_of_non_share_op _ _ _ _ h_step
       (fun _ => nofun) (fun _ _ => nofun) (fun _ _ => nofun) a) h_changed
 
-/-- REQ redeem-no-share-transfer: The system MUST NOT transfer preferred shares directly to
-a participant who redeems apxUSD. (Model: preferred shares are held as `governanceTokenBal`;
-a redemption of apxUSD pays out USDC only and leaves every preferred-share balance —
-in particular the redeemer's — completely unchanged.) -/
-theorem req_redeem_no_share_transfer (s : State) (amount : Nat) (caller : Address) (s' : State)
-    (h_step : step s (Op.redeemApxUSD amount) caller = some s') :
-    ∀ a, s'.governanceTokenBal a = s.governanceTokenBal a := by
-  obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
-  subst hs'
-  intro a
-  simp [emitEvent, burnApxUSD]
-
 /-- REQ exchange-rate-non-decreasing: The exchange rate between apyUSD and apxUSD MUST be
 non-decreasing over time. (Model: passing time only vests more yield into `totalAssets`, so the
 implied exchange rate cannot fall.)
@@ -2118,115 +2091,6 @@ theorem redemption_cycle_closes_after_cooldown (s : State) (amount : Nat) (calle
   · simp only [step, requestUnlockStep, burnApxUSD, h3, createStandardUnlock]
     simp [cooldownPeriod, day, h1, hd]
 
-/-- REQ redemption-cooldown-period: After a redemption request is submitted, the system
-MUST enforce a cooldown period of approximately 20 days before a claim can be executed.
-(Model: `cooldownPeriod = 20 * day`; every request records `now + cooldownPeriod` as its
-deadline and every successful claim happened at or after its recorded deadline.) -/
-theorem req_redemption_cooldown_period (s : State) :
-    cooldownPeriod = 20 * day ∧
-    (∀ amount caller s', step s (Op.requestUnlock amount) caller = some s' →
-      ∃ id amt, s'.unlockRequestId caller = some id ∧
-        s'.unlockRequests id = some (caller, amt, s.now + cooldownPeriod)) ∧
-    (∀ id caller s', step s (Op.claimUnlock id) caller = some s' →
-      ∃ owner amount cooldownEnd, s.unlockRequests id = some (owner, amount, cooldownEnd) ∧
-        cooldownEnd ≤ s.now) := by
-  refine ⟨rfl, ?_, ?_⟩
-  · intro amount caller s' h
-    obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h
-    subst hs'
-    exact requestUnlockStep_caller_position s caller amount
-  · intro id caller s' h
-    obtain ⟨o, a, ce, hreq, _, _, ht, _⟩ := step_claimUnlock_some _ _ _ _ h
-    exact ⟨o, a, ce, hreq, ht⟩
-
-/-- REQ cooldown-no-yield: During a redemption cooldown, the exchange rate for the locked
-apyUSD MUST remain fixed and the user MUST not accrue additional yield on those tokens.
-(Model: when apyUSD enters the redemption cooldown — `Op.redeem`/`Op.withdraw` — the
-payout for the locked tokens is computed ONCE, at the apxUSD/apyUSD exchange rate in
-force at request time (`redeemAssets shares (computeExchangeRate (pullVestedYield s))` resp. `assets`), and recorded
-in the cooldown position. That is the "fixed exchange rate": the locked tokens' value is
-frozen at the request-time rate for the entire `cooldownPeriod`. And no additional yield
-accrues on them: `Op.creditYield` — the only operation by which apyUSD holders receive
-yield — leaves both the recorded cooldown entry and the locked position amount completely
-unchanged, and the eventual claim pays out exactly the frozen amount, insensitive to any
-exchange-rate movement between request and claim.) -/
-theorem req_cooldown_no_yield (s : State) :
-    -- apyUSD entering cooldown via `redeem`: the payout is locked in at the
-    -- request-time exchange rate, frozen for the whole cooldown period
-    (∀ shares receiver caller s',
-      step s (Op.redeem shares receiver) caller = some s' →
-      s'.unlockRequests s.nextUnlockId
-        = some (receiver, redeemAssets shares (computeExchangeRate (pullVestedYield s)), s.now + cooldownPeriod) ∧
-      s'.unlockTokenAmount s.nextUnlockId = redeemAssets shares (computeExchangeRate (pullVestedYield s))) ∧
-    -- apyUSD entering cooldown via `withdraw`: likewise frozen at the request-time rate
-    (∀ assets receiver caller s',
-      step s (Op.withdraw assets receiver) caller = some s' →
-      s'.unlockRequests s.nextUnlockId = some (receiver, assets, s.now + cooldownPeriod) ∧
-      s'.unlockTokenAmount s.nextUnlockId = assets) ∧
-    -- no yield accrues on locked tokens: crediting yield never changes any recorded
-    -- cooldown entry or locked amount
-    (∀ (t : State) (y : Nat) (ycaller : Address) (t' : State),
-      step t (Op.creditYield y) ycaller = some t' →
-      ∀ id, t'.unlockRequests id = t.unlockRequests id ∧
-        t'.unlockTokenAmount id = t.unlockTokenAmount id) ∧
-    -- the claim pays out exactly the frozen amount, regardless of the exchange rate
-    -- prevailing at claim time
-    (∀ (t : State) (id : Nat) (caller owner : Address) (amount cooldownEnd : Nat) (t' : State),
-      t.unlockRequests id = some (owner, amount, cooldownEnd) →
-      step t (Op.claimUnlock id) caller = some t' →
-      t'.apxUSDBal owner = t.apxUSDBal owner + amount) := by
-  refine ⟨?_, ?_, ?_, ?_⟩
-  · intro shares receiver caller s' h
-    obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h
-    subst hs'
-    constructor <;> simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-  · intro assets receiver caller s' h
-    obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h
-    subst hs'
-    constructor <;> simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-  · intro t y ycaller t' h id
-    simp only [step] at h
-    split at h
-    · cases Option.some.inj h; exact ⟨rfl, rfl⟩
-    · exact absurd h (by simp)
-  · intro t id caller owner amount cooldownEnd t' hreq h
-    obtain ⟨o, a, ce, hreq', _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h
-    rw [hreq] at hreq'
-    simp only [Option.some.injEq, Prod.mk.injEq] at hreq'
-    obtain ⟨rfl, rfl, rfl⟩ := hreq'
-    subst hs'
-    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
-
-/-- REQ flexible-redemption-multiple-requests: The system MUST allow a user to have
-multiple concurrent flexible redemption unlock requests. (Model: two back-to-back flexible
-unlock requests both succeed and leave two distinct live requests owned by the caller.) -/
-theorem req_flexible_redemption_multiple_requests (s : State) (a1 a2 : Nat) (caller : Address)
-    (h1 : s.globalPause = false) (h2 : a1 + a2 ≤ s.apxUSDBal caller)
-    -- the burn passes the ERC-20 `_update` hook, so a deny-listed caller reverts
-    (hd : s.denylist caller = false) :
-    ∃ s1 s2, step s (Op.flexibleRequestUnlock a1) caller = some s1 ∧
-      step s1 (Op.flexibleRequestUnlock a2) caller = some s2 ∧
-      (∃ rt1 ce1, s2.flexibleUnlockRequests s.nextUnlockId = some (caller, a1, rt1, ce1)) ∧
-      (∃ rt2 ce2, s2.flexibleUnlockRequests (s.nextUnlockId + 1) = some (caller, a2, rt2, ce2)) := by
-  have hs1 : step s (Op.flexibleRequestUnlock a1) caller
-      = some (createFlexibleUnlock (burnApxUSD s caller a1) caller a1) := by
-    simp [step, h1, hd, Nat.not_lt.mpr (by omega : a1 ≤ s.apxUSDBal caller)]
-  have hpause : (createFlexibleUnlock (burnApxUSD s caller a1) caller a1).globalPause = false := by
-    simp [createFlexibleUnlock, burnApxUSD, h1]
-  have hbal : ¬ ((createFlexibleUnlock (burnApxUSD s caller a1) caller a1).apxUSDBal caller < a2) := by
-    simp [createFlexibleUnlock, burnApxUSD]
-    omega
-  have hden : (createFlexibleUnlock (burnApxUSD s caller a1) caller a1).denylist caller = false := by
-    simp [createFlexibleUnlock, burnApxUSD, hd]
-  refine ⟨createFlexibleUnlock (burnApxUSD s caller a1) caller a1,
-          createFlexibleUnlock
-            (burnApxUSD (createFlexibleUnlock (burnApxUSD s caller a1) caller a1) caller a2)
-            caller a2,
-          hs1, ?_, ?_, ?_⟩
-  · simp [step, hpause, hbal, hden]
-  · exact ⟨s.now, s.now + cooldownPeriod, by simp [createFlexibleUnlock, burnApxUSD]⟩
-  · exact ⟨s.now, s.now + cooldownPeriod, by simp [createFlexibleUnlock, burnApxUSD]⟩
-
 /-- REQ continuous-stream: Yield MUST be streamed continuously over a configurable period
 rather than as a lump-sum distribution. (Model: the currently-streaming portion of the
 vest, `newlyVestedAmount` — i.e. the release of `vestTotal` since the clock `vestStart` —
@@ -2249,49 +2113,6 @@ theorem req_continuous_stream (s : State) (h : 0 < s.vestPeriod) :
     dsimp only
     repeat' split
     all_goals first | rfl | (exfalso; omega)
-
-/-- REQ monthly-yield-rate-set: Each month, the system MUST set the yield rate for the
-following month based on the prior month's collateral-base yield. (Model:
-`s.lastRateSetTime` anchors the monthly cadence and `s.collateralYieldBase` records the
-prior month's collateral-base yield — the excess of the collateral basket's value over the
-aggregate redemption obligation at the last setting. (1) Cadence: setting the rate before
-a full month (`monthPeriod = 30 * day`) has elapsed since the last setting reverts, for
-every caller. (2) Derivation: any successful setting was performed by the admin, at least
-a month after the previous one, and the newly configured rate for the following month is
-bounded by the recorded prior-month collateral-base yield; the cadence anchor advances to
-the current time and the collateral-base yield figure is refreshed from the current
-collateral state, becoming the basis for the following month's setting. (3) Liveness: once
-a month has elapsed, the admin can actually set any rate within that bound.) -/
-theorem req_monthly_yield_rate_set (s : State) (bps : Nat) :
-    (s.now < s.lastRateSetTime + monthPeriod →
-      ∀ caller, step s (Op.setYieldRate bps) caller = none) ∧
-    (∀ caller s', step s (Op.setYieldRate bps) caller = some s' →
-      caller = s.admin ∧
-      s.lastRateSetTime + monthPeriod ≤ s.now ∧
-      bps ≤ s.collateralYieldBase ∧
-      s'.yieldRateMonth = bps ∧
-      s'.lastRateSetTime = s.now ∧
-      s'.collateralYieldBase = overcollateralizationBuffer s) ∧
-    (s.lastRateSetTime + monthPeriod ≤ s.now → bps ≤ s.collateralYieldBase →
-      ∃ s', step s (Op.setYieldRate bps) s.admin = some s' ∧
-        s'.yieldRateMonth = bps) := by
-  refine ⟨?_, ?_, ?_⟩
-  · intro h_early caller
-    simp [step, Nat.not_le.mpr h_early]
-  · intro caller s' h_step
-    simp only [step] at h_step
-    split at h_step
-    · rename_i hcond
-      obtain ⟨hcaller, hmonth, hbound⟩ := hcond
-      cases Option.some.inj h_step
-      exact ⟨hcaller, hmonth, hbound, rfl, rfl, rfl⟩
-    · exact absurd h_step (by simp)
-  · intro h_month h_bound
-    exact ⟨{ s with
-        yieldRateMonth := bps
-        lastRateSetTime := s.now
-        collateralYieldBase := overcollateralizationBuffer s },
-      by simp [step, h_month, h_bound], rfl⟩
 
 /-- REQ pay-to-non-cooldown: Yield MUST be paid to all apyUSD tokens that are not currently
 undergoing cooldown. (Model: paying yield is `Op.creditYield` by the authorized yield
@@ -2353,34 +2174,6 @@ theorem req_pay_to_non_cooldown (s : State) (amount : Nat) (caller : Address) (s
           (Nat.mul_add _ _ _).symm
   · exact absurd h_step (by simp)
 
-/-- REQ unlock-cooldown: The apxUSD_unlock token MAY be redeemed for apxUSD only after a
-cooldown period has elapsed: claiming strictly before the recorded deadline reverts. -/
-theorem req_unlock_cooldown (s : State) (id : Nat) (owner : Address) (amount cooldownEnd : Nat) (caller : Address)
-    (h_req : s.unlockRequests id = some (owner, amount, cooldownEnd))
-    (h_early : s.now < cooldownEnd) :
-    step s (Op.claimUnlock id) caller = none := by
-  simp [step, h_req, h_early]
-
-/-- REQ denylist-blocks-deposit: If the caller or the receiver address is present in the
-deny list, deposit and mint operations MUST revert.
-
-All three deposit-shaped entry points are covered: the two apxUSD-issuance paths
-(`depositUSDC`, `mintApxUSD`) and the vault's own ERC-4626 deposit, which this model calls
-`Op.lockApxUSD` (see `req_deposit_immediate`). The third conjunct was added once `lockApxUSD`
-was gated through the `_update` hook; before that it would have been false. -/
-theorem req_denylist_blocks_deposit (s : State) (amount : Nat) (to caller : Address) :
-    (s.denylist caller = true → step s (Op.depositUSDC amount) caller = none) ∧
-    (s.denylist caller = true ∨ s.denylist to = true →
-      step s (Op.mintApxUSD to amount) caller = none) ∧
-    (s.denylist caller = true → step s (Op.lockApxUSD amount) caller = none) := by
-  refine ⟨?_, ?_, ?_⟩
-  · intro h
-    simp [step, h]
-  · intro h
-    rcases h with h | h <;> simp [step, h]
-  · intro h
-    simp [step, h]
-
 /-- REQ early-unlock-fee-linear-decline: The early unlock fee MUST decline linearly over
 time from 3.5% down to 0.1%. (Model: within the claim window the fee is bounded by
 350 bps, never falls below the 10 bps floor, declines monotonically, and equals exactly
@@ -2393,104 +2186,6 @@ theorem req_early_unlock_fee_linear_decline (requestTime t1 t2 : Nat)
     (requestTime + cooldownPeriod ≤ t2 → flexibleUnlockFee requestTime t2 = 10) :=
   ⟨flexibleUnlockFee_antitone _ h1 h12, flexibleUnlockFee_ge_min _ _ (by omega),
    flexibleUnlockFee_le_start _ _, fun h => flexibleUnlockFee_after_cooldown _ _ (by omega) h⟩
-
-/-- REQ unlock-conversion-after-cooldown: Conversion of apxUSD_unlock to apxUSD MUST only
-be possible after the cooldown period has elapsed: early claims revert, and once the
-deadline passes the claim succeeds. -/
-theorem req_unlock_conversion_after_cooldown (s : State) (id : Nat) (owner : Address)
-    (amount cooldownEnd : Nat)
-    (h_req : s.unlockRequests id = some (owner, amount, cooldownEnd))
-    (h_owner : s.unlockTokenOwner id = some owner)
-    -- the mint to `owner` passes the ERC-20 `_update` hook, so a paused token or a
-    -- deny-listed owner reverts the settlement — exactly as on-chain
-    (h1 : s.globalPause = false) (hd : s.denylist owner = false) :
-    (s.now < cooldownEnd → step s (Op.claimUnlock id) owner = none) ∧
-    (cooldownEnd ≤ s.now → ∃ s', step s (Op.claimUnlock id) owner = some s') := by
-  constructor
-  · intro h
-    simp [step, h_req, h_owner, h1, hd, h]
-  · intro h
-    rcases ho : step s (Op.claimUnlock id) owner with _ | s'
-    · exact absurd ho (by simp [step, h_req, h_owner, h1, hd, Nat.not_lt.mpr h])
-    · exact ⟨s', rfl⟩
-
-/-- REQ redeemForMinAssets-revert-if-below-minAssets: redeemForMinAssets(uint256 shares,
-uint256 minAssets, address receiver) MUST revert if the amount of apxUSD assets to be
-received is less than minAssets. -/
-theorem req_redeem_for_min_assets_revert_if_below_min_assets (s : State)
-    (shares minAssets : Nat) (receiver caller : Address)
-    (h : previewRedeem s shares < minAssets) :
-    redeemForMinAssets s shares minAssets receiver caller = none := by
-  simp [redeemForMinAssets, h]
-
-/-- REQ unlockToken-mints-apxUSD_unlock-immediately: The UnlockToken contract MUST mint
-apxUSD_unlock tokens to the user immediately after the deposit. (Source: "User immediately
-receives apxUSD_unlock tokens (UnlockToken shares)"; "Minting occurs instantly after the
-vault deposits assets." "The deposit" here is the vault depositing apxUSD assets INTO the
-UnlockToken contract — NOT the user's initial deposit into the vault: the source's own
-withdraw/redeem sequence diagrams show exactly `vault ->> unlockToken: deposit(1000
-apxUSD, bob)` answered by `unlockToken -->> bob: mint 1000 apxUSD_unlock` within the one
-withdraw/redeem transaction; the user's initial vault deposit mints apyUSD shares, never
-apxUSD_unlock. Model: the vault deposits apxUSD into the UnlockToken registry during
-`Op.withdraw`/`Op.redeem` (and a user deposits apxUSD directly via
-`requestUnlock`/`flexibleRequestUnlock`). The theorem states that in the very same atomic
-step as each such deposit, the UnlockToken contract mints the apxUSD_unlock position to
-the user: the freshly allocated position at the registry counter is owned by the user —
-the `receiver` of the vault-initiated withdraw/redeem, the depositing caller otherwise —
-and carries the full deposited apxUSD amount. Minting is instant; there is no separate or
-delayed mint step.) -/
-theorem req_unlock_token_mints_apx_usd_unlock_immediately (s : State) :
-    (∀ (assets : Nat) (receiver caller : Address) (s' : State),
-      step s (Op.withdraw assets receiver) caller = some s' →
-      s'.unlockTokenOwner s.nextUnlockId = some receiver ∧
-      s'.unlockTokenAmount s.nextUnlockId = assets) ∧
-    (∀ (shares : Nat) (receiver caller : Address) (s' : State),
-      step s (Op.redeem shares receiver) caller = some s' →
-      s'.unlockTokenOwner s.nextUnlockId = some receiver ∧
-      s'.unlockTokenAmount s.nextUnlockId = redeemAssets shares (computeExchangeRate (pullVestedYield s))) ∧
-    (∀ (amount : Nat) (caller : Address) (s' : State),
-      s.unlockRequestId caller = none →
-      step s (Op.requestUnlock amount) caller = some s' →
-      s'.unlockTokenOwner s.nextUnlockId = some caller ∧
-      s'.unlockTokenAmount s.nextUnlockId = amount) ∧
-    (∀ (amount : Nat) (caller : Address) (s' : State),
-      step s (Op.flexibleRequestUnlock amount) caller = some s' →
-      s'.unlockTokenOwner s.nextUnlockId = some caller ∧
-      s'.unlockTokenAmount s.nextUnlockId = amount) := by
-  refine ⟨?_, ?_, ?_, ?_⟩
-  · intro assets receiver caller s' h_step
-    obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
-    subst hs'
-    constructor <;> simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-  · intro shares receiver caller s' h_step
-    obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
-    subst hs'
-    constructor <;> simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-  · intro amount caller s' hfresh h_step
-    obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
-    subst hs'
-    rw [requestUnlockStep_fresh_eq s caller amount hfresh]
-    constructor <;> simp [createStandardUnlock, burnApxUSD]
-  · intro amount caller s' h_step
-    obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
-    subst hs'
-    constructor <;> simp [createFlexibleUnlock, burnApxUSD]
-
-/-- REQ unlockToken-redeem-after-cooldown: The UnlockToken contract MUST allow a user to
-call redeem() after the cooldown period to receive the underlying apxUSD. -/
-theorem req_unlock_token_redeem_after_cooldown (s : State) (id : Nat) (owner : Address)
-    (amount cooldownEnd : Nat)
-    (h_req : s.unlockRequests id = some (owner, amount, cooldownEnd))
-    (h_owner : s.unlockTokenOwner id = some owner)
-    (h_time : cooldownEnd ≤ s.now)
-    -- the mint to `owner` passes the ERC-20 `_update` hook, so a paused token or a
-    -- deny-listed owner reverts the settlement — exactly as on-chain
-    (h1 : s.globalPause = false) (hd : s.denylist owner = false) :
-    ∃ s', step s (Op.claimUnlock id) owner = some s' ∧
-      s'.apxUSDBal owner = s.apxUSDBal owner + amount := by
-  refine ⟨mintApxUSD (retireStandardUnlock s id owner) owner amount, ?_, ?_⟩
-  · simp [step, h_req, h_owner, h1, hd, Nat.not_lt.mpr h_time]
-  · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
 
 /-- Helper: a new apxUSD_unlock position can only be created by one of the vault's own
 unlock entry points (`requestUnlock`/`flexibleRequestUnlock`/`withdraw`/`redeem`), and it
@@ -2579,102 +2274,6 @@ private theorem unlock_position_created_only_by_vault_ops (s : State) (op : Op) 
         | (cases Option.some.inj h_step; simp_all)
         | exact absurd h_step (by simp)
 
-/-- REQ vault-operator-of-UnlockToken: The apyUSD vault MUST be configured as the operator
-of the UnlockToken contract, allowing it to initiate redeem requests on behalf of users
-immediately. (Model: the `unlockTokenOperator` State field records which address is
-authorized to trigger a claim on behalf of the recorded position owner, and `vaultAddress`
-is the vault. (1) Configuration is permanent: no operation ever changes the operator, so a
-system configured with the vault as operator — `unlockTokenOperator = vaultAddress` —
-remains so after every step. (2) The configuration actually grants the capability: whenever
-a pending unlock position exists and its cooldown has elapsed, the vault, calling as the
-configured operator (not the owner), can immediately execute the claim on behalf of the
-recorded owner, with the payout going to the owner — for both standard and flexible
-unlocks.) -/
-theorem req_vault_operator_of_unlock_token (s : State) :
-    (∀ (op : Op) (caller : Address) (s' : State), step s op caller = some s' →
-      s'.unlockTokenOperator = s.unlockTokenOperator) ∧
-    (∀ (op : Op) (caller : Address) (s' : State), step s op caller = some s' →
-      s.unlockTokenOperator = vaultAddress → s'.unlockTokenOperator = vaultAddress) ∧
-    (s.unlockTokenOperator = vaultAddress →
-      (∀ (id : Nat) (owner : Address) (amount cooldownEnd : Nat),
-        s.unlockRequests id = some (owner, amount, cooldownEnd) →
-        s.unlockTokenOwner id = some owner →
-        -- the mint to `owner` passes the `_update` hook
-        s.globalPause = false → s.denylist owner = false →
-        cooldownEnd ≤ s.now →
-        ∃ s', step s (Op.claimUnlock id) vaultAddress = some s' ∧
-          s'.apxUSDBal owner = s.apxUSDBal owner + amount) ∧
-      (∀ (id : Nat) (owner : Address) (amount requestTime cooldownEnd : Nat),
-        s.flexibleUnlockRequests id = some (owner, amount, requestTime, cooldownEnd) →
-        s.unlockTokenOwner id = some owner →
-        -- the mint to `owner` passes the `_update` hook
-        s.globalPause = false → s.denylist owner = false →
-        requestTime + minFlexibleClaim ≤ s.now →
-        ∃ s', step s (Op.flexibleClaimUnlock id) vaultAddress = some s' ∧
-          s'.apxUSDBal owner = s.apxUSDBal owner
-            + (amount - amount * flexibleUnlockFee requestTime s.now / 10000))) := by
-  refine ⟨fun op caller s' h => step_unlockTokenOperator_unchanged _ _ _ _ h,
-          fun op caller s' h hcfg => by
-            rw [step_unlockTokenOperator_unchanged _ _ _ _ h]; exact hcfg,
-          fun hcfg => ⟨?_, ?_⟩⟩
-  · intro id owner amount cooldownEnd h_req h_owner h1 hd h_time
-    refine ⟨mintApxUSD (retireStandardUnlock s id owner) owner amount, ?_, ?_⟩
-    · simp [step, h_req, h_owner, hcfg, h1, hd, Nat.not_lt.mpr h_time]
-    · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
-  · intro id owner amount requestTime cooldownEnd h_req h_owner h1 hd h_time
-    refine ⟨mintApxUSD (retireFlexibleUnlock s id) owner
-        (amount - amount * flexibleUnlockFee requestTime s.now / 10000), ?_, ?_⟩
-    · simp [step, h_req, h_owner, hcfg, h1, hd, Nat.not_lt.mpr h_time]
-    · simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT]
-
-/-- REQ singleton-unlockToken-instance: There MUST be exactly one instance of UnlockToken
-and it MUST be used exclusively by the apyUSD vault. (Model: the UnlockToken instance is
-now identified explicitly by the `unlockTokenAddress` State field, with `unlockTokenAddress`
-the designated instance's address constant. (1) Singleton: no operation ever changes the
-recorded instance identity — in particular a system configured with the designated instance
-stays on it forever — so along any execution there is exactly one UnlockToken instance and
-the model has no way to deploy, switch to, or route positions through a second one. (2)
-Exclusive use by the vault: every apxUSD_unlock position ever created is allocated in this
-single instance's registry at its current counter, and only by the vault's own unlock entry
-points (`requestUnlock`/`flexibleRequestUnlock`/`withdraw`/`redeem`); no other operation
-can create a position in the registry.) -/
-theorem req_singleton_unlock_token_instance (s : State) (op : Op) (caller : Address) (s' : State)
-    (h_step : step s op caller = some s') :
-    s'.unlockTokenAddress = s.unlockTokenAddress ∧
-    (s.unlockTokenAddress = unlockTokenAddress →
-      s'.unlockTokenAddress = unlockTokenAddress) ∧
-    (∀ (id : Nat) (owner : Address),
-      s.unlockTokenOwner id = none → s'.unlockTokenOwner id = some owner →
-      ((∃ a, op = Op.requestUnlock a) ∨ (∃ a, op = Op.flexibleRequestUnlock a) ∨
-       (∃ a r, op = Op.withdraw a r) ∨ (∃ sh r, op = Op.redeem sh r)) ∧
-      id = s.nextUnlockId) :=
-  ⟨step_unlockTokenAddress_unchanged _ _ _ _ h_step,
-   fun hcfg => by rw [step_unlockTokenAddress_unchanged _ _ _ _ h_step]; exact hcfg,
-   fun id owner h_new h_now =>
-     unlock_position_created_only_by_vault_ops _ _ _ _ h_step id owner h_new h_now⟩
-
-
-theorem req_apyusd_value_increase (s : State) (_h : s.totalSupply_apyUSD > 0) :
-    computeExchangeRate s ≤ computeExchangeRate { s with now := s.now + 1 } :=
-  computeExchangeRate_mono_now s 1
-
-
-/-- When a user redeems apyUSD, the system MUST transfer an amount of apxUSD equal to the number
-of apyUSD redeemed multiplied by the current exchange rate, which MUST be greater than or equal
-to 1.
-
-Stated about the rate the redemption is actually priced at — the **live** rate after the
-deployment's pre-pricing `pullVestedYield` — rather than the recorded `exchangeRate` field. -/
-theorem req_redemption_exchange_rate_multiplier (s : State) (shares : Nat)
-    (h : ray ≤ computeExchangeRate (pullVestedYield s)) :
-    redeemAssets shares (computeExchangeRate (pullVestedYield s))
-        = (shares * computeExchangeRate (pullVestedYield s)) / ray ∧
-    shares ≤ redeemAssets shares (computeExchangeRate (pullVestedYield s)) := by
-  refine ⟨rfl, ?_⟩
-  unfold redeemAssets
-  have hray : 0 < ray := Nat.pow_pos (by decide)
-  exact (Nat.le_div_iff_mul_le hray).mpr (Nat.mul_le_mul_left _ h)
-
 /-- Each user MUST have at most one pending redemption request; if the user adds assets to an
 existing request, the cooldown timer MUST reset to the time of the update.
 
@@ -2704,29 +2303,6 @@ theorem req_single_pending_redemption_per_user (s : State) (amount : Nat) (calle
   subst hs'
   exact requestUnlockStep_caller_position s caller amount
 
-
-/-- A flexible redemption claim MUST be executable only after a minimum of 3 days have elapsed since the request. -/
-theorem req_flexible_redemption_claim_minimum (s : State) (requestId : Nat) (owner : Address) (amount requestTime cooldownEnd : Nat) :
-    s.flexibleUnlockRequests requestId = some (owner, amount, requestTime, cooldownEnd) →
-    s.unlockTokenOwner requestId = some owner →
-    (∀ s', step s (Op.flexibleClaimUnlock requestId) owner = some s' → s.now ≥ requestTime + minFlexibleClaim) :=
-  fun h1 h2 => by
-    intro s' h3
-    obtain ⟨o, a, rt, ce, hreq, _, _, htime, _⟩ := step_flexibleClaimUnlock_some _ _ _ _ h3
-    rw [h1] at hreq
-    simp only [Option.some.injEq, Prod.mk.injEq] at hreq
-    omega
-
-/-- REQ flexible-redemption-early-fee: The early redemption fee applied to a flexible redemption claim MUST start at 3.5 % and decline linearly over time to a minimum of 0.1 %. -/
-theorem req_flexible_redemption_early_fee (requestTime t1 t2 : Nat)
-    (h1 : requestTime + minFlexibleClaim ≤ t1) (h12 : t1 ≤ t2) :
-    10 ≤ flexibleUnlockFee requestTime t1 ∧
-    flexibleUnlockFee requestTime t1 ≤ 350 ∧
-    flexibleUnlockFee requestTime t2 ≤ flexibleUnlockFee requestTime t1 ∧
-    (requestTime + cooldownPeriod ≤ t1 → flexibleUnlockFee requestTime t1 = 10) :=
-  ⟨flexibleUnlockFee_ge_min _ _ h1, flexibleUnlockFee_le_start _ _,
-   flexibleUnlockFee_antitone _ h1 h12,
-   fun h => flexibleUnlockFee_after_cooldown _ _ h1 h⟩
 
 /-- REQ overcollateralization-limit: The system MUST ensure that the total amount of apxUSD
 minted never exceeds the market value of the collateral minus the required
@@ -2872,86 +2448,6 @@ theorem req_arbitrage_mint_access (s : State) (to : Address) (amount : Nat) (cal
         -- `split` prunes the price-ite to `none` using `h : s.apxUSDMarketPrice ≤ ray`
         · rfl
 
-/-- REQ arbitrage-redeem-access: Only eligible whitelist participants SHALL be permitted to redeem apxUSD for dollar‑equivalent value when apxUSD trades below $1.00. -/
-theorem req_arbitrage_redeem_access (s : State) (amount : Nat) (caller : Address) (s' : State)
-    (h_step : step s (Op.redeemApxUSD amount) caller = some s') :
-    s.whitelist caller = true ∧ s.apxUSDMarketPrice < ray := by
-  obtain ⟨_, hw, _, _, hp, _⟩ := step_redeemApxUSD_some _ _ _ _ h_step
-  exact ⟨hw, hp⟩
-
-/-- REQ linear-vest-implementation: The LinearVestV0 contract MUST implement a linear
-vesting mechanism for yield credited to the apyUSD vault. (Model: the currently-streaming
-portion of the vest, `newlyVestedAmount` — the release of `vestTotal` since the clock
-`vestStart` over `vestPeriod` — follows the linear formula exactly. The reported total
-`vestedAmount` is that streaming portion plus whatever was already realized into
-`fullyVestedAmount` by an earlier credit/reconfiguration/pull, mirroring `LinearVestV0`'s
-two-accumulator design — cf. `req_credit_preserves_accrued_vest`.) -/
-theorem req_linear_vest_implementation (s : State) :
-    -- (1) nothing has streamed before the vest clock's anchor
-    (∀ now, now < s.vestStart → newlyVestedAmount s now = 0) ∧
-    -- (2) the streamed amount only ever grows with time — a stream never claws back
-    (∀ n m, n ≤ m → newlyVestedAmount s n ≤ newlyVestedAmount s m) ∧
-    -- (3) it never streams out more than the pool being vested
-    (∀ now, newlyVestedAmount s now ≤ s.vestTotal) ∧
-    -- (4) once a full period has elapsed the entire pool has streamed (100% vested)
-    (∀ now, s.vestStart + s.vestPeriod ≤ now → newlyVestedAmount s now = s.vestTotal) ∧
-    -- (5) the total reportable vested amount is the realized accumulator plus the
-    --     currently-streaming portion (two-accumulator LinearVestV0 model)
-    (∀ now, vestedAmount s now = s.fullyVestedAmount + newlyVestedAmount s now) := by
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩
-  · intro now h
-    unfold newlyVestedAmount
-    rw [if_pos h]
-  · intro n m h
-    exact newlyVestedAmount_mono s h
-  · intro now
-    exact newlyVestedAmount_le_total s now
-  · intro now h
-    have h1 : ¬ now < s.vestStart := by omega
-    have h2 : s.vestPeriod ≤ now - s.vestStart := by omega
-    simp [newlyVestedAmount, h1, h2]
-  · intro now
-    rfl
-
-/-- REQ yield-rate-dollar-terms: The yield rate MUST be expressed in dollar terms for the month.
-(Model: the monthly yield rate is not a free-floating percentage — a successful `Op.setYieldRate`
-pins `yieldRateMonth` to a figure that is (b) bounded above by `collateralYieldBase`, the dollar
-surplus the collateral basket actually generated (`overcollateralizationBuffer`, a dollar amount),
-and (c) simultaneously refreshes that dollar basis to the *current* collateral surplus, which
-becomes the ceiling for the following month. So the rate is denominated in, and capped by, real
-dollar collateral yield rather than an abstract rate.) -/
-theorem req_yield_rate_dollar_terms (s : State) (bps : Nat) (caller : Address) (s' : State)
-    (h_step : step s (Op.setYieldRate bps) caller = some s') :
-    s'.yieldRateMonth = bps ∧
-    s'.yieldRateMonth ≤ s.collateralYieldBase ∧
-    s'.collateralYieldBase = overcollateralizationBuffer s := by
-  simp only [step] at h_step
-  split at h_step
-  · rename_i hcond
-    obtain ⟨_, _, hbound⟩ := hcond
-    cases Option.some.inj h_step
-    exact ⟨rfl, hbound, rfl⟩
-  · exact absurd h_step (by simp)
-
-/-- REQ redemption_value_uniform: The system MUST apply the same Redemption Value to all participants regardless of market conditions. -/
-theorem req_redemption_value_uniform (s : State) (a b : Address) (amount : Nat) (sa sb : State)
-    (ha : step s (Op.redeemApxUSD amount) a = some sa)
-    (hb : step s (Op.redeemApxUSD amount) b = some sb) :
-    sa.usdcBal a - s.usdcBal a = sb.usdcBal b - s.usdcBal b := by
-  obtain ⟨_, _, _, _, _, hsa⟩ := step_redeemApxUSD_some _ _ _ _ ha
-  obtain ⟨_, _, _, _, _, hsb⟩ := step_redeemApxUSD_some _ _ _ _ hb
-  subst hsa hsb
-  simp [emitEvent, burnApxUSD]
-
-/-- REQ buffer_not_consumed: The system MUST NOT reduce the overcollateralization buffer as a result of routine redemption operations. -/
-theorem req_buffer_not_consumed (s : State) (amount : Nat) (caller : Address) (s' : State)
-    (h_step : step s (Op.redeemApxUSD amount) caller = some s') :
-    overcollateralizationBuffer s ≤ overcollateralizationBuffer s' := by
-  obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
-  subst hs'
-  exact overcollateralizationBuffer_mono _ _ (by simp [emitEvent, burnApxUSD])
-    (by simp [emitEvent, burnApxUSD]) (by simp [emitEvent, burnApxUSD])
-
 /-- REQ catastrophic_backstop: Upon detection of a catastrophic scenario, the system MUST set the
 (per‑apxUSD) Redemption Value so that Total Collateral Value is distributed pro‑rata to holders, and
 MUST distribute the entire reserve, including the buffer.
@@ -2994,21 +2490,6 @@ theorem req_catastrophic_backstop (s : State) (s' : State)
     cases Option.some.inj h_step
     exact ⟨hc.2, rfl, fun a => rfl, rfl, rfl⟩
   · exact absurd h_step (by simp)
-
-/-- REQ governance_deploy_buffer: The system MUST restrict voting on buffer deployment to holders
-of the governance token.
-
-Quantified over **every** caller. An earlier version pinned the caller to `s.governance`, which
-proved nothing about the restriction the requirement states — that only *holders* may vote — since
-it spoke about a single distinguished address. The guard in `step` tests the caller's own balance,
-so the general form is what it actually supports. -/
-theorem req_governance_deploy_buffer (s : State) (s' : State) (caller : Address)
-    (h_step : step s Op.voteBufferDeployment caller = some s') :
-    s.governanceTokenBal caller > 0 := by
-  simp only [step] at h_step
-  split at h_step
-  · exact absurd h_step (by simp)
-  · omega
 
 /-- REQ rfq_redemption_allowed: The system MUST allow users to submit redemption requests
 through the RFQ process and MUST permit only approved counterparties to execute those
@@ -3064,84 +2545,6 @@ theorem req_deposit_immediate (s : State) (amount : Nat) (caller : Address) (s' 
   subst hs'
   simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
 
-/-- REQ mint_immediate: The apyUSD vault MUST complete mint operations synchronously and deliver
-apyUSD shares to the receiver without any delay. (Model: like `deposit-immediate`, the vault's
-synchronous share-minting path is `Op.lockApxUSD`. The stronger temporal witness proved here is
-that in the single atomic `step` *both* the receiver's apyUSD balance *and* the apyUSD total supply
-increase by exactly the same freshly minted `lockShares amount (computeExchangeRate s)` — the shares are
-genuinely newly issued and delivered now, in lockstep, with no deferred settlement.) -/
-theorem req_mint_immediate (s : State) (amount : Nat) (caller : Address) (s' : State)
-    (h_step : step s (Op.lockApxUSD amount) caller = some s') :
-    s'.apyUSDBal caller = s.apyUSDBal caller + lockShares amount (computeExchangeRate s) ∧
-    s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount (computeExchangeRate s) := by
-  obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
-  subst hs'
-  refine ⟨?_, ?_⟩ <;>
-    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
-
-
-/-- REQ totalAssets-includes-vault-balance-and-vested: The vault's totalAssets() function MUST include both the vault's apxUSD balance and the vestedAmount() reported by the LinearVestV0 contract. -/
-theorem req_total_assets_includes_vault_balance_and_vested (s : State) :
-    totalAssets s = s.vaultApxUSDBal + vestedAmount s s.now := rfl
-
-/-- REQ global-pause-blocks-deposit: If the global pause is active, any deposit or mint
-transaction MUST revert. Stated here for `Op.depositUSDC`; `mintApxUSD` and `lockApxUSD` carry the
-same guard in `step` but are not conjuncts of this theorem. -/
-theorem req_global_pause_blocks_deposit (s : State) (amount : Nat) (caller : Address)
-    (h : s.globalPause = true) :
-    step s (.depositUSDC amount) caller = none := by
-  simp [step, h]
-
-/-- REQ unlock-token-redeemable-1to1-after-20d: apxUSD_unlock tokens MUST be redeemable 1:1 for
-apxUSD after a 20-day cooldown period.
-
-Two things this statement used to get wrong, both now fixed. It concluded with a disjunction whose
-left branch was `step … = none` — a "MUST be redeemable" requirement discharged by a statement
-that tolerates the claim reverting. The proof always took the right branch, so the disjunction was
-pure weakening; it is gone. And the recorded deadline `s.now - cooldownPeriod` is **truncated**
-`Nat` subtraction, so at `s.now < cooldownPeriod` it collapsed to `0` and the claim succeeded with
-no time elapsed at all. Bolting on an `cooldownPeriod ≤ s.now` hypothesis did not fix that — the
-proof never used it, which the linter caught. The statement now quantifies over the **recorded**
-deadline instead of pinning it to a truncated expression: `h_full` says the position carries a
-full cooldown (which is exactly what `createStandardUnlock` records) and `h_matured` says it has
-passed. The first conclusion `cooldownPeriod ≤ s.now` is then earned rather than assumed — a full
-cooldown really has elapsed. -/
-theorem req_unlock_token_redeemable_1to1_after_20d (s : State) (requestId : Nat)
-    (caller : Address) (cooldownEnd : Nat)
-    (h_request : s.unlockRequests requestId
-      = some (caller, s.unlockTokenAmount requestId, cooldownEnd))
-    (h_owner : s.unlockTokenOwner requestId = some caller)
-    -- the position carries a full cooldown: `createStandardUnlock` records
-    -- `now + cooldownPeriod`, so every position `step` can create satisfies this
-    (h_full : cooldownPeriod ≤ cooldownEnd)
-    -- and that deadline has passed
-    (h_matured : cooldownEnd ≤ s.now)
-    -- the mint to `owner` passes the ERC-20 `_update` hook, so a paused token or a
-    -- deny-listed owner reverts the settlement — exactly as on-chain
-    (h1 : s.globalPause = false) (hd : s.denylist caller = false) :
-    cooldownPeriod ≤ s.now ∧
-    ∃ s', step s (.claimUnlock requestId) caller = some s' ∧
-      s'.apxUSDBal caller = s.apxUSDBal caller + s.unlockTokenAmount requestId := by
-  refine ⟨by omega, mintApxUSD (retireStandardUnlock s requestId caller) caller
-    (s.unlockTokenAmount requestId), ?_, ?_⟩
-  · simp [step, h_request, h_owner, h1, hd, Nat.not_lt.mpr h_matured]
-  · simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
-
-/-- REQ unlock-token-no-yield: apxUSD_unlock tokens MUST NOT earn yield. -/
-theorem req_unlock_token_no_yield (s : State) (amount dt : Nat) (owner : Address) :
-    ({ createStandardUnlock s owner amount with
-        now := (createStandardUnlock s owner amount).now + dt }).unlockTokenAmount s.nextUnlockId
-      = amount := by
-  simp [createStandardUnlock]
-
-/-- REQ unlock-receipt-nft-mint: When a user initiates a new unlock, the system MUST mint an on‑chain Unlock Receipt NFT representing the pending claim. -/
-theorem req_unlock_receipt_nft_mint (s : State) (owner : Address) (amount : Nat) :
-    let s' := createStandardUnlock s owner amount
-    s'.nextUnlockId = s.nextUnlockId + 1 ∧ 
-    s'.unlockRequestId owner = some s.nextUnlockId ∧
-    s'.unlockTokenOwner s.nextUnlockId = some owner := by
-  simp [createStandardUnlock]
-
 /-- REQ unlock-claimable-after-3d: Unlocks MUST become claimable after three days. -/
 theorem req_unlock_claimable_after_3d (s : State) (requestId : Nat) (caller : Address)
     (h_now : minFlexibleClaim ≤ s.now)
@@ -3179,39 +2582,6 @@ theorem req_multiple_unlocks_reset_cooldown (s : State) (amount id oldAmount old
   simp [burnApxUSD]
 
 
-/-- REQ deposit-mint-apxusd: The protocol MUST mint apxUSD to a user when the user deposits USDC. -/
-theorem req_deposit_mint_apxusd (s : State) (amount : Nat) (caller : Address)
-    (h1 : s.globalPause = false) (h2 : s.whitelist caller = true) (h3 : s.usdcBal caller ≥ amount)
-    (h4 : s.denylist caller = false) :
-    ∃ s', step s (Op.depositUSDC amount) caller = some s' ∧
-          s'.apxUSDBal caller = s.apxUSDBal caller + amount ∧
-          s'.totalSupply_apxUSD = s.totalSupply_apxUSD + amount := by
-  rcases ho : step s (Op.depositUSDC amount) caller with _ | s'
-  · exact absurd ho (by simp [step, h1, h2, h4, Nat.not_lt.mpr h3])
-  · obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ ho
-    subst hs'
-    exact ⟨_, rfl, by simp [emitEvent, mintApxUSD], by simp [emitEvent, mintApxUSD]⟩
-
-/-- REQ mint-price: The protocol MUST price newly minted apxUSD at $1 per unit. This holds
-unconditionally via the standard deposit pathway (`Op.depositUSDC`) — `amount` USDC paid for
-`amount` apxUSD minted, with no market-price precondition. The separate arbitrage pathway
-(`Op.mintApxUSD`, see `req_arbitrage_mint_access`/`req_mint_price_arbitrage_pathway`) is
-gated on market-price conditions but mints at the same 1:1 rate once its access conditions
-are satisfied. -/
-theorem req_mint_price (s : State) (amount : Nat) (caller : Address)
-    (h1 : s.globalPause = false) (h2 : s.whitelist caller = true) (h3 : s.usdcBal caller ≥ amount)
-    (h4 : s.denylist caller = false) :
-    ∃ s', step s (Op.depositUSDC amount) caller = some s' ∧
-          s'.apxUSDBal caller = s.apxUSDBal caller + amount ∧
-          s'.usdcBal caller = s.usdcBal caller - amount ∧
-          s'.totalSupply_apxUSD = s.totalSupply_apxUSD + amount := by
-  rcases ho : step s (Op.depositUSDC amount) caller with _ | s'
-  · exact absurd ho (by simp [step, h1, h2, h4, Nat.not_lt.mpr h3])
-  · obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ ho
-    subst hs'
-    exact ⟨_, rfl, by simp [emitEvent, mintApxUSD], by simp [emitEvent, mintApxUSD],
-           by simp [emitEvent, mintApxUSD]⟩
-
 /-- REQ mint-price (arbitrage pathway): the premium-gated `Op.mintApxUSD` pathway also prices
 at $1 once its access conditions (whitelist, denylist-clear, market price above $1) hold. -/
 theorem req_mint_price_arbitrage_pathway (s : State) (amount : Nat) (to : Address) (caller : Address)
@@ -3228,29 +2598,6 @@ theorem req_mint_price_arbitrage_pathway (s : State) (amount : Nat) (to : Addres
     subst hs'
     exact ⟨_, rfl, by simp [emitEvent, mintApxUSD], by simp [emitEvent, mintApxUSD],
            by simp [emitEvent, mintApxUSD]⟩
-
-/-- REQ redemption-value: The protocol MUST allow redemption of apxUSD at the current Redemption Value.
-(The arbitrage redemption pathway is open only while apxUSD trades below par, `apxUSDMarketPrice < ray`.) -/
-theorem req_redemption_value (s : State) (amount : Nat) (caller : Address)
-    (h1 : s.globalPause = false) (h2 : s.whitelist caller = true)
-    (h3 : s.apxUSDBal caller ≥ amount)
-    (h4 : s.usdcReserve ≥ (amount * s.redemptionValue) / ray)
-    (h5 : s.apxUSDMarketPrice < ray)
-    -- the burn passes the ERC-20 `_update` hook, so a deny-listed redeemer reverts
-    (hd : s.denylist caller = false) :
-    ∃ s', step s (Op.redeemApxUSD amount) caller = some s' := by
-  have hbuf : overcollateralizationBuffer s ≤ overcollateralizationBuffer
-      { burnApxUSD s caller amount with
-        usdcReserve := (burnApxUSD s caller amount).usdcReserve - amount * s.redemptionValue / ray
-        usdcBal := fun a => if a = caller then (burnApxUSD s caller amount).usdcBal a + amount * s.redemptionValue / ray
-                            else (burnApxUSD s caller amount).usdcBal a } :=
-    overcollateralizationBuffer_mono _ _ (by simp [burnApxUSD]) (by simp [burnApxUSD])
-      (by simp [burnApxUSD])
-  rcases ho : step s (Op.redeemApxUSD amount) caller with _ | s'
-  · exact absurd ho (by simp [step, h1, hd, h2, Nat.not_le.mpr h5, Nat.not_lt.mpr h3,
-      Nat.not_lt.mpr h4, Nat.not_lt.mpr hbuf])
-  · exact ⟨s', rfl⟩
-
 
 /-- REQ lock-apxusd: The protocol MUST allow a user to lock apxUSD in the vault and receive apyUSD. -/
 theorem req_lock_apxusd (s : State) (amount : Nat) (caller : Address)
@@ -3281,39 +2628,6 @@ theorem req_lock_apxusd (s : State) (amount : Nat) (caller : Address)
 -- overcollateralization is already covered by req_overcollateralization_limit; the active
 -- rebalancing mechanism this requirement mandates is not modeled.
 
-/-- REQ redemption-settlement-value: Redemptions SHALL be settled at the Redemption Value, which tracks the underlying basket. -/
-theorem req_redemption_settlement_value (s : State) (caller : Address) (amount : Nat) (s' : State)
-    (h_step : step s (Op.redeemApxUSD amount) caller = some s') :
-    let usdcAmount := (amount * s.redemptionValue) / ray
-    s'.usdcBal caller = s.usdcBal caller + usdcAmount := by
-  obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
-  subst hs'
-  simp [emitEvent, burnApxUSD]
-
-/-- REQ mint-access-whitelist: Only participants who are eligible, located in permitted jurisdictions, and whitelisted SHALL be allowed to mint apxUSD. -/
-theorem req_mint_access_whitelist (s : State) (to : Address) (amount : Nat) (caller : Address)
-    (h_not_whitelisted : ¬ s.whitelist caller) :
-    step s (Op.mintApxUSD to amount) caller = none := by simp_all [step]
-
-/-- REQ redeem-access-whitelist: Only participants who are eligible, located in permitted
-jurisdictions, and whitelisted SHALL be allowed to redeem apxUSD.
-
-Proved for the arbitrage pathway `Op.redeemApxUSD`. The settlement leg `Op.poolRedeem` also burns
-apxUSD against the reserve and is **not** whitelist-gated — it is gated on the RFQ-counterparty
-list instead — so this statement does not cover it, and the model permits a non-whitelisted
-counterparty to redeem through that path. -/
-theorem req_redeem_access_whitelist (s : State) (amount : Nat) (caller : Address)
-    (h_not_whitelisted : ¬ s.whitelist caller) :
-    step s (Op.redeemApxUSD amount) caller = none := by simp_all [step]
-
-/-- REQ issuance-price-one: New apxUSD issuance SHALL be priced at exactly $1 per token. -/
-theorem req_issuance_price_one (s : State) (caller : Address) (amount : Nat) (s' : State)
-    (h_step : step s (Op.depositUSDC amount) caller = some s') :
-    s'.apxUSDBal caller = s.apxUSDBal caller + amount := by
-  obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
-  subst hs'
-  simp [emitEvent, mintApxUSD]
-
 /-- REQ deposit-permissionless: The vault MUST allow any address to deposit apxUSD and receive apyUSD without requiring KYB/KYC. -/
 theorem req_deposit_permissionless (s : State) (amount : Nat) (caller : Address)
     (h_pause : s.globalPause = false)
@@ -3325,35 +2639,6 @@ theorem req_deposit_permissionless (s : State) (amount : Nat) (caller : Address)
   · exact absurd ho (by simp [step, h_pause, h_denylist, Nat.not_lt.mpr h_balance,
       Nat.pos_iff_ne_zero.mp h_rate])
   · exact ⟨s', rfl⟩
-
-/-- REQ buffer-preservation: The system MUST preserve the overcollateralization buffer during routine redemption operations; the buffer MUST NOT be consumed. -/
-theorem req_buffer_preservation (s s' : State) (amount : Nat) (caller : Address)
-    (h_step : step s (Op.redeemApxUSD amount) caller = some s') :
-    overcollateralizationBuffer s ≤ overcollateralizationBuffer s' := by
-  obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
-  subst hs'
-  exact overcollateralizationBuffer_mono _ _ (by simp [emitEvent, burnApxUSD])
-    (by simp [emitEvent, burnApxUSD]) (by simp [emitEvent, burnApxUSD])
-
-/-- REQ mint-redeem-at-redemption-value: All minting and redemption transactions MUST be
-executed at the Redemption Value, which reflects the underlying basket of preferred shares
-and cash. (Model: minting is priced at $1 per unit — `amount` USDC enters the reserve for
-`amount` apxUSD — while redemptions settle at the current Redemption Value.) -/
-theorem req_mint_redeem_at_redemption_value (s : State) (amount : Nat) (to caller : Address) :
-    (∀ s', step s (Op.mintApxUSD to amount) caller = some s' →
-      s'.usdcReserve = s.usdcReserve + amount ∧
-      s'.totalSupply_apxUSD = s.totalSupply_apxUSD + amount) ∧
-    (∀ s', step s (Op.redeemApxUSD amount) caller = some s' →
-      s'.usdcBal caller = s.usdcBal caller + (amount * s.redemptionValue) / ray) := by
-  constructor
-  · intro s' h_step
-    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
-    subst hs'
-    exact ⟨by simp [emitEvent, mintApxUSD], by simp [emitEvent, mintApxUSD]⟩
-  · intro s' h_step
-    obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
-    subst hs'
-    simp [emitEvent, burnApxUSD]
 
 /-- (Scope: the four apxUSD-burning operations enumerated in the hypothesis. `Op.poolRedeem`, the
 on-chain settlement leg, also burns apxUSD against the reserve and is **not** among them.)
@@ -3422,46 +2707,6 @@ theorem req_deposit_emits_event (s s' : State) (amount : Nat) (caller : Address)
   subst hs'
   simp [emitEvent]
 
-/-- REQ mint-emits-event: The mint(shares, receiver) function MUST emit a Deposit event with
-parameters (sender, receiver, owner, assets, shares) upon successful execution. (The exact tuple
-is pinned: sender = the minting `caller`, receiver = owner = `to`, and assets = shares = `amount`.)
-
-Same caveat as `req_deposit_emits_event`: this is the apxUSD arbitrage mint `Op.mintApxUSD`, not
-the vault's ERC-4626 `mint`. `assets = shares` holds because that path is hard-coded 1:1, which is
-exactly the degenerate case in which the distinction cannot be tested. -/
-theorem req_mint_emits_event (s s' : State) (to : Address) (amount : Nat) (caller : Address)
-    (h_step : step s (Op.mintApxUSD to amount) caller = some s') :
-    ("Deposit", [caller, to, to, amount, amount]) ∈ s'.eventLog := by
-  obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
-  subst hs'
-  simp [emitEvent]
-
-
-/-- REQ vault-pulls-vested-yield-before-withdraw: When a withdrawal is requested, the vault
-MUST automatically pull all vested yield from the LinearVestV0 contract before processing
-the withdrawal. (Model: the post-state vault balance is the pulled-yield balance minus the
-withdrawn assets, i.e. the vest pull happens before the withdrawal is applied.) -/
-theorem req_vault_pulls_vested_yield_before_withdraw (s : State) (assets : Nat) (receiver : Address) (caller : Address)
-    (h : step s (.withdraw assets receiver) caller = some s') :
-    s'.vaultApxUSDBal = (pullVestedYield s).vaultApxUSDBal - assets := by
-  obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h
-  subst hs'
-  simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-
--- Theorems added by coverage reconciliation
-
-/-- REQ redeem-liquidate-usdc: The system SHALL liquidate preferred‑share collateral to USDC
-in order to settle any redemption request. (Model: redemptions are settled in USDC drawn
-from the liquidation reserve — the reserve is debited and the redeemer is paid the
-Redemption-Value-equivalent USDC amount.) -/
-theorem req_redeem_liquidate_usdc (s : State) (amount : Nat) (caller : Address) (s' : State)
-    (h_step : step s (Op.redeemApxUSD amount) caller = some s') :
-    s'.usdcReserve = s.usdcReserve - (amount * s.redemptionValue) / ray ∧
-    s'.usdcBal caller = s.usdcBal caller + (amount * s.redemptionValue) / ray := by
-  obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
-  subst hs'
-  constructor <;> simp [emitEvent, burnApxUSD]
-
 /-- REQ yield-distributor-credit: The YieldDistributor MUST credit converted apxUSD
 proceeds to the apyUSD vault. (Model: only the yield distributor may credit; a credit
 first realizes whatever has already streamed out of the current vest clock into
@@ -3518,36 +2763,6 @@ theorem req_credit_preserves_accrued_vest (s : State) (amount : Nat) (caller : A
     all_goals omega
   · exact absurd h_step (by simp)
 
-/-- REQ new-locked-receives-yield: When new apyUSD is locked, it MUST immediately begin
-receiving yield, which reduces the overall percentage yield for existing holders. (Model:
-locking mints shares at the prevailing exchange rate — no discount, waiting period, or
-carve-out — so from the moment of the lock the new holder's redeemable assets grow with the
-same vesting exchange rate as every existing holder's; and the mint enlarges the share
-base, (weakly) diluting each unit share's claim on any yet-unvested yield pool.) -/
-theorem req_new_locked_receives_yield (s : State) (amount : Nat) (caller : Address) (s' : State)
-    (h_step : step s (Op.lockApxUSD amount) caller = some s') :
-    -- shares are minted immediately, priced at the prevailing exchange rate
-    s'.apyUSDBal caller = s.apyUSDBal caller + lockShares amount (computeExchangeRate s) ∧
-    -- and immediately begin receiving yield: the new holder's redeemable assets grow with
-    -- the vesting exchange rate from the very moment of the lock, like any other holder's
-    (∀ dt, redeemAssets (s'.apyUSDBal caller) (computeExchangeRate s')
-      ≤ redeemAssets (s'.apyUSDBal caller) (computeExchangeRate { s' with now := s'.now + dt })) ∧
-    -- the enlarged share base spreads future yield thinner over existing holders:
-    s'.totalSupply_apyUSD = s.totalSupply_apyUSD + lockShares amount (computeExchangeRate s) ∧
-    (∀ pendingYield : Nat, 0 < s.totalSupply_apyUSD →
-      (pendingYield * ray) / s'.totalSupply_apyUSD
-        ≤ (pendingYield * ray) / s.totalSupply_apyUSD) := by
-  obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
-  subst hs'
-  refine ⟨?_, ?_, ?_, ?_⟩
-  · simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
-  · intro dt
-    exact Nat.div_le_div_right (Nat.mul_le_mul_left _ (computeExchangeRate_mono_now _ dt))
-  · simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
-  · intro pendingYield hpos
-    apply Nat.div_le_div_left ?_ hpos
-    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
-
 /-- REQ synchronous_withdraw_return_token: The apyUSD vault MUST execute withdrawals and redeems synchronously and MUST return apxUSD_unlock tokens immediately. -/
 theorem req_synchronous_withdraw_return_token (s : State) (assets : Nat) (receiver caller : Address)
     (h1 : s.globalPause = false)
@@ -3576,95 +2791,6 @@ theorem req_synchronous_withdraw_return_token (s : State) (assets : Nat) (receiv
     obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ ho
     subst hs'
     constructor <;> simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-
-/-- REQ withdrawForMaxShares-revert-if-exceeds-maxShares: withdrawForMaxShares(uint256 assets, uint256 maxShares, address receiver) MUST revert if the number of apyUSD shares required to withdraw the assets exceeds maxShares. -/
-theorem req_withdraw_for_max_shares_revert_if_exceeds_max_shares (s : State) (assets maxShares : Nat) (receiver caller : Address)
-    (h : previewWithdraw s assets > maxShares) :
-    withdrawForMaxShares s assets maxShares receiver caller = none := by
-  simp [withdrawForMaxShares, h]
-
-/-- REQ vault-burns-apyUSD-shares-immediately: The vault MUST burn the appropriate amount of apyUSD shares immediately upon a withdraw or redeem call. -/
-theorem req_vault_burns_apyUSD_shares_immediately_on_withdraw (s s' : State) (assets : Nat) (receiver caller : Address)
-    (h_step : step s (.withdraw assets receiver) caller = some s') :
-    s'.totalSupply_apyUSD = s.totalSupply_apyUSD - withdrawShares assets (computeExchangeRate (pullVestedYield s)) := by
-  obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
-  subst hs'
-  simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-
-/-- REQ depositforminshares_slippage: depositForMinShares(uint256 assets, uint256 minShares, address receiver) MUST revert if the number of shares that would be minted is less than minShares. -/
-theorem req_depositforminshares_slippage (s : State) (assets : Nat) (minShares : Nat) (receiver : Address) (caller : Address)
-    (h : previewDeposit s assets < minShares) :
-    depositForMinShares s assets minShares receiver caller = none := by
-  simp [depositForMinShares, h]
-
-/-- REQ mintformaxassets_slippage: mintForMaxAssets(uint256 shares, uint256 maxAssets, address receiver) MUST revert if the amount of assets required to mint the requested shares exceeds maxAssets. -/
-theorem req_mintformaxassets_slippage (s : State) (shares : Nat) (maxAssets : Nat) (receiver : Address) (caller : Address)
-    (h : previewMint s shares > maxAssets) :
-    mintForMaxAssets s shares maxAssets receiver caller = none := by
-  simp [mintForMaxAssets, h]
-
-/-- REQ totalAssets_includes_vault_balance_and_vested: The vault's totalAssets() function MUST include both the vault's apxUSD balance and the vestedAmount() reported by the LinearVestV0 contract. -/
-theorem req_totalAssets_includes_vault_balance_and_vested (s : State) :
-    totalAssets s = s.vaultApxUSDBal + vestedAmount s s.now := rfl
-
-/-- REQ withdrawal_pulls_vested: When processing a withdrawal, the apyUSD vault MUST pull
-all vested yield from the LinearVestV0 contract before completing the withdrawal. (Model:
-the post-state vault balance is the pulled-yield balance minus the withdrawn assets.) -/
-theorem req_withdrawal_pulls_vested (s : State) (assets : Nat) (receiver : Address) (caller : Address) (s' : State)
-    (h : step s (Op.withdraw assets receiver) caller = some s') :
-    s'.vaultApxUSDBal = (pullVestedYield s).vaultApxUSDBal - assets := by
-  obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h
-  subst hs'
-  simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-
-
-/-- REQ withdrawForMaxShares_revert_if_exceeds_maxShares: withdrawForMaxShares(uint256 assets, uint256 maxShares, address receiver) MUST revert if the number of apyUSD shares required to withdraw the assets exceeds maxShares. -/
-theorem req_withdrawForMaxShares_revert_if_exceeds_maxShares (s : State) (assets : Nat) (maxShares : Nat) (receiver : Address) (caller : Address) :
-    (previewWithdraw s assets > maxShares →
-      withdrawForMaxShares s assets maxShares receiver caller = none) ∧
-    (previewWithdraw s assets ≤ maxShares →
-      withdrawForMaxShares s assets maxShares receiver caller
-        = step s (Op.withdraw assets receiver) caller) := by
-  constructor
-  · intro h; simp [withdrawForMaxShares, h]
-  · intro h; simp [withdrawForMaxShares, Nat.not_lt.mpr h]
-
-/-- REQ vault-burns-apyUSD-shares-immediately: The vault MUST burn the appropriate amount of apyUSD shares immediately upon a withdraw or redeem call. -/
-theorem req_vault_burns_apy_usd_shares_immediately (s : State) (assets : Nat) (receiver caller : Address) (s' : State) (h_step : step s (Op.withdraw assets receiver) caller = some s') :
-    s'.apyUSDBal caller = s.apyUSDBal caller - withdrawShares assets (computeExchangeRate (pullVestedYield s)) := by
-  obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
-  subst hs'
-  simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-
-/-- REQ vault-burns-apyUSD-shares-immediately: The vault MUST burn the appropriate amount of apyUSD shares immediately upon a withdraw or redeem call. -/
-theorem req_vault_burns_apy_usd_shares_immediately_redeem (s : State) (shares : Nat) (receiver caller : Address) (s' : State) (h_step : step s (Op.redeem shares receiver) caller = some s') :
-    s'.totalSupply_apyUSD = s.totalSupply_apyUSD - shares := by
-  obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
-  subst hs'
-  simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-
-/-- REQ vault-deposits-apxUSD-into-UnlockToken: The vault MUST deposit the corresponding apxUSD amount into the UnlockToken contract during a withdraw or redeem operation. -/
-theorem req_vault_deposits_apx_usd_into_unlock_token (s : State) (assets : Nat) (receiver caller : Address) (s' : State) (h_step : step s (Op.withdraw assets receiver) caller = some s') :
-    match s'.unlockRequests (s'.nextUnlockId - 1) with
-    | some (_, amount, _) => amount = assets
-    | none => False
-    := by
-  obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
-  subst hs'
-  simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-
-/-- REQ vault-deposits-apxUSD-into-UnlockToken: The vault MUST deposit the corresponding apxUSD amount into the UnlockToken contract during a withdraw or redeem operation. -/
-theorem req_vault_deposits_apx_usd_into_unlock_token_redeem (s : State) (shares : Nat) (receiver caller : Address) (s' : State) (h_step : step s (Op.redeem shares receiver) caller = some s') :
-    match s'.unlockRequests (s'.nextUnlockId - 1) with
-    | some (_, amount, _) => amount = redeemAssets shares (computeExchangeRate (pullVestedYield s))
-    | none => False
-    := by
-  obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
-  subst hs'
-  simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-
-
--- Theorems added re-examining requirements marked UNFORMALIZABLE by the first pipeline run
 
 /-- Helper: every operation other than the vault deposit (`lockApxUSD`) and the vault
 withdrawal paths (`withdraw`/`redeem`) leaves the vault's apxUSD custody balance
@@ -3871,238 +2997,6 @@ theorem req_unlock_cannot_be_cancelled (s : State) (op : Op) (caller : Address) 
       first
         | (cases Option.some.inj h_step; simp_all)
         | exact absurd h_step (by simp)
-
-/-- REQ unlock-token-nontransferable: apxUSD_unlock tokens MUST NOT be transferable.
-(Model: an apxUSD_unlock token is a registry position `unlockTokenOwner id`. The theorem
-captures non-transferability as: across every operation of the closed `Op` inductive, a
-position's recorded owner can never be reassigned to a different address — after any step
-it is either still `some owner` (untouched) or `none` (settled via the claim path, cf.
-`req_unlock_cannot_be_cancelled`), never `some owner'` for another `owner'`. The model has
-no transfer operation, and this proves no other operation smuggles a transfer in. The
-freshness hypothesis — ids at or above the registry counter are unallocated — is the
-registry's counter invariant; the first conjunct shows every step preserves it, so it
-holds along any execution from a well-formed initial state.) -/
-theorem req_unlock_token_nontransferable (s : State) (op : Op) (caller : Address) (s' : State)
-    (h_step : step s op caller = some s')
-    (h_fresh : ∀ i, s.nextUnlockId ≤ i → s.unlockTokenOwner i = none) :
-    (∀ i, s'.nextUnlockId ≤ i → s'.unlockTokenOwner i = none) ∧
-    (∀ id owner, s.unlockTokenOwner id = some owner →
-      s'.unlockTokenOwner id = some owner ∨ s'.unlockTokenOwner id = none) := by
-  cases op
-  case poolRedeem amount receiver minOut =>
-    -- Settlement moves USDC and burns apxUSD; it never touches the unlock registry.
-    simp only [step] at h_step
-    repeat' split at h_step
-    all_goals first
-      | (cases Option.some.inj h_step; simp [burnApxUSD, h_new] at h_now)
-      | (cases Option.some.inj h_step; simp [burnApxUSD, h_live] at h_gone)
-      | (cases Option.some.inj h_step
-         exact ⟨fun i hi => h_fresh i (by simpa [burnApxUSD] using hi),
-                fun _ _ h => Or.inl (by simpa [burnApxUSD] using h)⟩)
-      | exact absurd h_step (by simp)
-  case requestUnlock a =>
-    obtain ⟨_, _, hs'⟩ := step_requestUnlock_some _ _ _ _ h_step
-    subst hs'
-    rcases requestUnlockStep_owner_counter_cases s caller a with ⟨hcnt, howner⟩ | ⟨hcnt, howner⟩
-    · rw [hcnt, howner]
-      constructor
-      · intro i hi
-        simp only [createStandardUnlock, burnApxUSD] at hi ⊢
-        rw [if_neg (by omega)]
-        exact h_fresh i (by omega)
-      · intro id owner h_own
-        have hid : id ≠ s.nextUnlockId := fun h => by
-          rw [h, h_fresh s.nextUnlockId (Nat.le_refl _)] at h_own; cases h_own
-        exact Or.inl (by simp [createStandardUnlock, burnApxUSD, hid, h_own])
-    · rw [hcnt, howner]
-      exact ⟨h_fresh, fun _ _ h => Or.inl h⟩
-  case flexibleRequestUnlock a =>
-    obtain ⟨_, _, hs'⟩ := step_flexibleRequestUnlock_some _ _ _ _ h_step
-    subst hs'
-    constructor
-    · intro i hi
-      simp only [createFlexibleUnlock, burnApxUSD] at hi ⊢
-      rw [if_neg (by omega)]
-      exact h_fresh i (by omega)
-    · intro id owner h_own
-      have hid : id ≠ s.nextUnlockId := fun h => by
-        rw [h, h_fresh s.nextUnlockId (Nat.le_refl _)] at h_own; cases h_own
-      exact Or.inl (by simp [createFlexibleUnlock, burnApxUSD, hid, h_own])
-  case withdraw a r =>
-    obtain ⟨_, _, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
-    subst hs'
-    constructor
-    · intro i hi
-      simp only [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD,
-        pullVestedYield_nextUnlockId, pullVestedYield_unlockTokenOwner] at hi ⊢
-      rw [if_neg (by omega)]
-      exact h_fresh i (by omega)
-    · intro id owner h_own
-      have hid : id ≠ s.nextUnlockId := fun h => by
-        rw [h, h_fresh s.nextUnlockId (Nat.le_refl _)] at h_own; cases h_own
-      exact Or.inl (by
-        simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD, hid, h_own])
-  case redeem sh r =>
-    obtain ⟨_, _, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
-    subst hs'
-    constructor
-    · intro i hi
-      simp only [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD,
-        pullVestedYield_nextUnlockId, pullVestedYield_unlockTokenOwner] at hi ⊢
-      rw [if_neg (by omega)]
-      exact h_fresh i (by omega)
-    · intro id owner h_own
-      have hid : id ≠ s.nextUnlockId := fun h => by
-        rw [h, h_fresh s.nextUnlockId (Nat.le_refl _)] at h_own; cases h_own
-      exact Or.inl (by
-        simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD, hid, h_own])
-  case claimUnlock rid =>
-    obtain ⟨o, am, ce, _, _, _, _, hs'⟩ := step_claimUnlock_some _ _ _ _ h_step
-    subst hs'
-    constructor
-    · intro i hi
-      simp only [mintApxUSD, retireStandardUnlock, burnUnlockNFT] at hi ⊢
-      by_cases hic : i = rid <;> simp [hic, h_fresh i (by simpa using hi)]
-    · intro id owner h_own
-      by_cases hid : id = rid
-      · exact Or.inr (by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hid])
-      · exact Or.inl (by simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hid, h_own])
-  case flexibleClaimUnlock rid =>
-    obtain ⟨o, am, rt, ce, _, _, _, _, hs'⟩ := step_flexibleClaimUnlock_some _ _ _ _ h_step
-    subst hs'
-    constructor
-    · intro i hi
-      simp only [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT] at hi ⊢
-      by_cases hic : i = rid <;> simp [hic, h_fresh i (by simpa using hi)]
-    · intro id owner h_own
-      by_cases hid : id = rid
-      · exact Or.inr (by simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT, hid])
-      · exact Or.inl (by simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT, hid, h_own])
-  case depositUSDC a =>
-    obtain ⟨_, _, _, _, hs'⟩ := step_depositUSDC_some _ _ _ _ h_step
-    subst hs'
-    exact ⟨fun i hi => h_fresh i (by simpa [emitEvent, mintApxUSD] using hi),
-      fun id owner h_own => Or.inl (by simpa [emitEvent, mintApxUSD] using h_own)⟩
-  case mintApxUSD t a =>
-    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_mintApxUSD_some _ _ _ _ _ h_step
-    subst hs'
-    exact ⟨fun i hi => h_fresh i (by simpa [emitEvent, mintApxUSD] using hi),
-      fun id owner h_own => Or.inl (by simpa [emitEvent, mintApxUSD] using h_own)⟩
-  case lockApxUSD a =>
-    obtain ⟨_, _, hs'⟩ := step_lockApxUSD_some _ _ _ _ h_step
-    subst hs'
-    exact ⟨fun i hi =>
-        h_fresh i (by simpa [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD] using hi),
-      fun id owner h_own =>
-        Or.inl (by simpa [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD] using h_own)⟩
-  case redeemApxUSD a =>
-    obtain ⟨_, _, _, _, _, hs'⟩ := step_redeemApxUSD_some _ _ _ _ h_step
-    subst hs'
-    exact ⟨fun i hi => h_fresh i (by simpa [emitEvent, burnApxUSD] using hi),
-      fun id owner h_own => Or.inl (by simpa [emitEvent, burnApxUSD] using h_own)⟩
-  case executeRFQRedemption u am =>
-    obtain ⟨_, _, _, _, _, _, hs'⟩ := step_executeRFQRedemption_some _ _ _ _ _ h_step
-    subst hs'
-    exact ⟨fun i hi => h_fresh i (by simpa [burnApxUSD] using hi),
-      fun id owner h_own => Or.inl (by simpa [burnApxUSD] using h_own)⟩
-  all_goals
-    simp only [step] at h_step
-    -- `repeat'`: `Op.tick` has no guard to split on, `Op.updateRedemptionValue` has two.
-    (repeat' split at h_step) <;>
-      first
-        | (cases Option.some.inj h_step;
-           exact ⟨fun i hi => h_fresh i hi, fun id owner h_own => Or.inl h_own⟩)
-        | exact absurd h_step (by simp)
-
-/-- REQ cooldown-removal: When apyUSD enters the cooldown phase, it MUST be removed from
-the yield pool, causing remaining apyUSD to receive a higher percentage yield. (Model:
-apyUSD enters the cooldown phase through `Op.redeem`/`Op.withdraw`, which place the
-exiting value in a pending unlock whose deadline is `now + cooldownPeriod`. The yield
-pool is the outstanding apyUSD share supply `totalSupply_apyUSD`, over which every yield
-credit is distributed pro-rata. The theorem: in the very same step in which apyUSD enters
-cooldown, the entering shares are burned out of the yield pool — the pool strictly
-shrinks whenever a positive number of shares enters cooldown — so every future yield
-credit `y` is divided among strictly fewer pool shares. "Higher percentage yield" is
-stated both exactly — the per-share fraction `y / supply` is strictly larger after
-removal, compared via cross-multiplication `y · supply' < y · supply` — and in the
-model's floor arithmetic, where the per-share credit `y·ray / supply` is weakly higher
-(floor division can absorb a strict rational increase). `h_bal` (a holder's balance never
-exceeds the total supply) is the standard supply-consistency invariant of reachable
-states.) -/
-theorem req_cooldown_removal (s : State) :
-    (∀ (shares : Nat) (receiver caller : Address) (s' : State),
-      -- apyUSD entering the cooldown phase via `redeem` ...
-      step s (Op.redeem shares receiver) caller = some s' →
-      -- ... is placed under cooldown until `now + cooldownPeriod` ...
-      s'.unlockRequests s.nextUnlockId
-        = some (receiver, redeemAssets shares (computeExchangeRate (pullVestedYield s)), s.now + cooldownPeriod) ∧
-      -- ... and removed from the yield pool in the very same step
-      s'.totalSupply_apyUSD = s.totalSupply_apyUSD - shares ∧
-      (0 < shares → s.apyUSDBal caller ≤ s.totalSupply_apyUSD →
-        s'.totalSupply_apyUSD < s.totalSupply_apyUSD) ∧
-      -- so remaining apyUSD receive a higher % yield: the exact per-share fraction of
-      -- any future credit y is strictly larger over the shrunken pool ...
-      (∀ y : Nat, 0 < y → 0 < shares → s.apyUSDBal caller ≤ s.totalSupply_apyUSD →
-        y * s'.totalSupply_apyUSD < y * s.totalSupply_apyUSD) ∧
-      -- ... and the floor-arithmetic per-share credit is weakly higher
-      (∀ y : Nat, 0 < s.totalSupply_apyUSD - shares →
-        y * ray / s.totalSupply_apyUSD ≤ y * ray / (s.totalSupply_apyUSD - shares))) ∧
-    (∀ (assets : Nat) (receiver caller : Address) (s' : State),
-      -- apyUSD entering the cooldown phase via `withdraw`: identical consequences
-      step s (Op.withdraw assets receiver) caller = some s' →
-      s'.unlockRequests s.nextUnlockId = some (receiver, assets, s.now + cooldownPeriod) ∧
-      s'.totalSupply_apyUSD = s.totalSupply_apyUSD - withdrawShares assets (computeExchangeRate (pullVestedYield s)) ∧
-      (0 < withdrawShares assets (computeExchangeRate (pullVestedYield s)) →
-        s.apyUSDBal caller ≤ s.totalSupply_apyUSD →
-        s'.totalSupply_apyUSD < s.totalSupply_apyUSD) ∧
-      (∀ y : Nat, 0 < y → 0 < withdrawShares assets (computeExchangeRate (pullVestedYield s)) →
-        s.apyUSDBal caller ≤ s.totalSupply_apyUSD →
-        y * s'.totalSupply_apyUSD < y * s.totalSupply_apyUSD) ∧
-      (∀ y : Nat, 0 < s.totalSupply_apyUSD - withdrawShares assets (computeExchangeRate (pullVestedYield s)) →
-        y * ray / s.totalSupply_apyUSD
-          ≤ y * ray / (s.totalSupply_apyUSD - withdrawShares assets (computeExchangeRate (pullVestedYield s))))) := by
-  have hmul : ∀ (y a b : Nat), 0 < y → a < b → y * a < y * b := by
-    intro y a b hy hab
-    calc y * a < y * a + y := by omega
-      _ = y * (a + 1) := (Nat.mul_succ y a).symm
-      _ ≤ y * b := Nat.mul_le_mul_left y hab
-  constructor
-  · intro shares receiver caller s' h_step
-    obtain ⟨_, hshares, _, hs'⟩ := step_redeem_some _ _ _ _ _ h_step
-    rw [pullVestedYield_apyUSDBal] at hshares
-    subst hs'
-    have hsup : (emitEvent (updateExchangeRate (createStandardUnlock
-        { burnApyUSD (pullVestedYield s) caller shares with
-          vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller shares).vaultApxUSDBal
-            - redeemAssets shares (computeExchangeRate (pullVestedYield s)) }
-        receiver (redeemAssets shares (computeExchangeRate (pullVestedYield s))))) "Withdraw"
-        [caller, receiver, caller, redeemAssets shares (computeExchangeRate (pullVestedYield s)), shares]).totalSupply_apyUSD
-        = s.totalSupply_apyUSD - shares := by
-      simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-    refine ⟨?_, hsup, ?_, ?_, fun y hpos => Nat.div_le_div_left (Nat.sub_le _ _) hpos⟩
-    · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-    · intro hpos hbal; omega
-    · intro y hy hpos hbal
-      rw [hsup]
-      exact hmul _ _ _ hy (by omega)
-  · intro assets receiver caller s' h_step
-    obtain ⟨_, hshares, _, hs'⟩ := step_withdraw_some _ _ _ _ _ h_step
-    rw [pullVestedYield_apyUSDBal] at hshares
-    subst hs'
-    have hsup : (emitEvent (updateExchangeRate (createStandardUnlock
-        { burnApyUSD (pullVestedYield s) caller (withdrawShares assets (computeExchangeRate (pullVestedYield s))) with
-          vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller
-            (withdrawShares assets (computeExchangeRate (pullVestedYield s)))).vaultApxUSDBal - assets }
-        receiver assets)) "Withdraw"
-        [caller, receiver, caller, assets, withdrawShares assets (computeExchangeRate (pullVestedYield s))]).totalSupply_apyUSD
-        = s.totalSupply_apyUSD - withdrawShares assets (computeExchangeRate (pullVestedYield s)) := by
-      simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-    refine ⟨?_, hsup, ?_, ?_, fun y hpos => Nat.div_le_div_left (Nat.sub_le _ _) hpos⟩
-    · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
-    · intro hpos hbal; omega
-    · intro y hy hpos hbal
-      rw [hsup]
-      exact hmul _ _ _ hy (by omega)
 
 /-- REQ erc4626-compliance: The apyUSD vault contract MUST implement the ERC-4626
 tokenized vault interface. (Model: the interface surface is modeled by

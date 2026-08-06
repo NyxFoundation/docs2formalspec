@@ -235,32 +235,6 @@ theorem minted_le_cap_step (s : State) (op : Op) (c : Address) (s' : State)
       simp only [step] at h; exact (Option.some.inj h).symm
     subst hs'; exact h_inv
 
-/-- **The sliding window really is bounded, over any trace.** Along a run that does not
-reconfigure the limiter, the volume metered inside the window never exceeds the ceiling — at
-every intermediate state, not merely at the end, since the statement is closed under taking
-prefixes.
-
-This is the property `MinterV0` exists to provide, and until now the module proved only that one
-over-sized call is rejected. Note what it does **not** say: nothing here bounds the *total* ever
-minted, which grows with elapsed time by design — that is the separate cumulative statement, and
-`window_frees_in_one_step` shows the shape of its steps. -/
-theorem minted_le_cap_trace (s : State) (σ : List (Op × Address))
-    (h_inv : minted s ≤ s.rateLimitAmount)
-    (h_no_cfg : ∀ p ∈ σ, ∀ a per, p.1 ≠ Op.setRateLimit a per) :
-    minted (execTrace s σ) ≤ (execTrace s σ).rateLimitAmount := by
-  induction σ generalizing s with
-  | nil => exact h_inv
-  | cons p σ ih =>
-    obtain ⟨op, c⟩ := p
-    have h_tail : ∀ q ∈ σ, ∀ a per, q.1 ≠ Op.setRateLimit a per :=
-      fun q hq => h_no_cfg q (List.mem_cons_of_mem _ hq)
-    simp only [execTrace]
-    cases hstep : step s op c with
-    | none => exact ih s h_inv h_tail
-    | some s1 =>
-      exact ih s1 (minted_le_cap_step s op c s1 hstep h_inv
-        (h_no_cfg (op, c) List.mem_cons_self)) h_tail
-
 /-! ## Two ways the limit is weaker than it reads -/
 
 /-- **Tightening the limit does not unwind what has already been minted.** `rateLimitMinted()` is

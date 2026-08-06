@@ -101,58 +101,6 @@ the zero address; no timelock, no acknowledgement from the outgoing beneficiary.
 def setBeneficiary (v : VestState) (newB : Address) : Option VestState :=
   if newB = 0 then none else some { v with beneficiary := newB }
 
-/-- **A witness in which two calls move the entire pending yield to an attacker address.**
-
-The beneficiary is repointed at an address the attacker controls, and that address pulls. The
-attacker ends holding exactly the yield that was owed to the vault, and nothing is credited to
-the vault. The contrast conjunct is the point — from the same state, the attacker pulling
-*without* the beneficiary change is refused outright (`onlyBeneficiary`), so the retarget is
-doing all the work.
-
-This is an `∃` over one state, not a universal claim, and the pool here is **streaming**
-(`vestingAmount = 200` at the midpoint of a 10-tick period) rather than pre-banked, so the 100
-taken is what `vestedAmount()` computes from the clock rather than a figure already sitting in
-the `fullyVested` accumulator.
-
-`BlastRadius.lean`'s `admin_cannot_touch_balances` and the `admin alone` row of
-`single_key_bounds` say a compromised admin extracts zero. Both are true **of the model**, which
-has no `setBeneficiary` operation.
-
-*Outside Lean*: the sourcify-verified `LinearVestV0` has `pullVestedYield` gated `onlyBeneficiary`
-and paying `beneficiary`, and `setBeneficiary` as a `restricted` call — which the AccessManager
-assigns to **role 24**, the 3-day scheduled role, so the retarget is announced three days ahead
-rather than executed on the spot. A live read put `vestedAmount()` at roughly 122k apxUSD. None
-of that is established by the theorem below, which is arithmetic over a hand-written state. -/
-theorem admin_alone_redirects_vested_yield :
-    ∃ (v v1 v2 : VestState) (vault attacker : Address),
-      v.beneficiary = vault ∧
-      attacker ≠ vault ∧
-      0 < v.vested ∧
-      v.bal attacker = 0 ∧
-      -- without the admin call the attacker cannot pull at all
-      pullVest v attacker = none ∧
-      -- with it, two steps move the whole pool
-      setBeneficiary v attacker = some v1 ∧
-      pullVest v1 attacker = some v2 ∧
-      v2.bal attacker = v.vested ∧
-      v2.bal vault = v.bal vault := by
-  refine ⟨{ vestingAmount := 200, fullyVested := 0, lastDeposit := 0, lastTransfer := 0
-            period := 10, beneficiary := 1, bal := fun _ => 0, now := 5 },
-          _, _, 1, 2, rfl, by decide, by decide, rfl, rfl, rfl, rfl, rfl, rfl⟩
-
-/-- The pre-banked variant, for contrast: the pool has finished streaming and the 100 sits in
-`fullyVested`. The retarget takes it just the same, so neither accumulator is safer than the
-other. (Toy numbers — not to be confused with the mainnet `vestedAmount()` figure quoted above.) -/
-theorem admin_redirect_takes_the_banked_accumulator :
-    ∃ (v v1 v2 : VestState) (attacker : Address),
-      v.vested = 100 ∧ v.vestingAmount = 0 ∧
-      setBeneficiary v attacker = some v1 ∧
-      pullVest v1 attacker = some v2 ∧
-      v2.bal attacker = 100 := by
-  refine ⟨{ vestingAmount := 0, fullyVested := 100, lastDeposit := 0, lastTransfer := 0
-            period := 1, beneficiary := 1, bal := fun _ => 0, now := 0 },
-          _, _, 2, by decide, rfl, rfl, rfl, rfl⟩
-
 /-! ## §B. The supply cap, and the coalition that lifts it -/
 
 /-- `ApxUSD.mint`'s guard: `totalSupply() + amount <= supplyCap`. -/
@@ -210,19 +158,6 @@ theorem admin_minter_coalition_escapes_cap (cap supply target : Nat) (h : supply
   · unfold setCap; rw [if_neg (by omega)]
   · unfold mintUnderCap; rw [if_pos (by omega)]; congr 1; omega
 
-/-- **The coalition result is not vacuous at the live configuration.** Instantiated at the values
-read from mainnet — cap `750,000,000e18`, supply `327,073,514.822856436999740169e18` — the pair
-reaches a supply of one billion, well past the cap the lone minter is held to. -/
-theorem live_cap_escaped_at_one_billion :
-    ∃ cap' supply',
-      setCap 750000000000000000000000000 327073514822856436999740169
-          1000000000000000000000000000 = some cap' ∧
-      mintUnderCap cap' 327073514822856436999740169
-          (1000000000000000000000000000 - 327073514822856436999740169) = some supply' ∧
-      supply' = 1000000000000000000000000000 :=
-  admin_minter_coalition_escapes_cap 750000000000000000000000000 327073514822856436999740169
-    1000000000000000000000000000 (by decide)
-
 /-! ## §C. The vest clock — pulling should not move the finish line
 
 `pullVestedYield` writes `lastTransferTimestamp = block.timestamp` and leaves
@@ -271,18 +206,6 @@ theorem periodEnd_invariant_under_pullEvery (v : VestState) (dt : Nat) :
   induction n with
   | zero => rfl
   | succ k ih => exact ih
-
-/-- And the clock really does advance under that traffic, so the invariant above is not holding
-because nothing moved. -/
-theorem pullEvery_advances_the_clock (v : VestState) (dt : Nat) :
-    ∀ n, (pullEvery v dt n).now = v.now + n * dt := by
-  intro n
-  induction n with
-  | zero => simp [pullEvery]
-  | succ k ih =>
-    show (pullEvery v dt k).now + dt = v.now + (k + 1) * dt
-    rw [ih, Nat.succ_mul]
-    omega
 
 /-! ### The same traffic against the model's clock
 
@@ -381,26 +304,5 @@ theorem model_pull_defers_completion (s : State)
   constructor
   · rw [hv]; omega
   · rw [hv]; omega
-
-/-- A closed arithmetic witness for the size of the deferral: a 200-unit pool over a 10-tick
-period, pulled at the midpoint. Every conjunct below is about the **model** (`State`,
-`newlyVestedAmount`, `pullVestedYield`); the deployment's side is not computed here, though by
-`periodEnd_invariant_under_pull` its finish line would still be tick 10. The model, having
-restarted its clock, has streamed only half of the remaining 100 by then, and does not finish
-until tick 15. -/
-theorem vest_stretch_witness :
-    ∃ (s : State),
-      s.vestTotal = 200 ∧ s.vestPeriod = 10 ∧ s.vestStart = 0 ∧ s.now = 5 ∧
-      -- `model_pull_defers_completion`'s two hypotheses hold here, so it is not vacuous
-      s.vestStart < s.now ∧ 0 < s.fullyVestedAmount + newlyVestedAmount s s.now ∧
-      newlyVestedAmount s s.now = 100 ∧
-      -- after the pull the model's clock restarts at 5 with 100 left …
-      (pullVestedYield s).vestStart = 5 ∧ (pullVestedYield s).vestTotal = 100 ∧
-      -- … so at the deployment's finish line (tick 10) only half of it has streamed
-      newlyVestedAmount (pullVestedYield s) 10 = 50 ∧
-      -- and the model does not finish until tick 15
-      newlyVestedAmount (pullVestedYield s) 15 = 100 := by
-  refine ⟨{ (default : State) with vestTotal := 200, vestPeriod := 10, vestStart := 0, now := 5 },
-    rfl, rfl, rfl, rfl, by decide, by decide, by decide, ?_, ?_, by decide, by decide⟩ <;> rfl
 
 end Apyx

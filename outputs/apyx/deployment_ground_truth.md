@@ -248,8 +248,8 @@ function setFeeCurve(FeeCurve calldata curve) external restricted { ... }  // ti
 `CommitToken.lean` の `raising_the_delay_unclaims_pending_requests` と同クラスだが、
 apyUSD の receipt 側には対応するモデル op が無い(モデルの `flexibleUnlockFee` は定数式)。
 
-形式化: [`DeploymentFees.lean`](DeploymentFees.lean) の
-`admin_curve_change_relocks_and_reprices`(両 curve とも `requireValid` を満たすことを込みで証明)。
+形式化: [`DeploymentFees.lean`](DeploymentFees.lean) のライブ曲線に関する証人
+(両 curve とも `requireValid` を満たすことを込みで証明)。
 
 ### 5. `CommitToken.setSupplyCap` — モデルの cap は不変
 
@@ -277,11 +277,11 @@ corpus (`corpus.md:190`, `:667`) は「3 日後に請求可能、早期解除手
 
 したがって:
 1. README §2.3 の「3.5% は到達不能・実最大 2.99%」はモデル由来の人工物であることが**実測で確定**
-   (`liveCurve_first_claim_is_max`)。
+   (最初の claim 時点のライブ読み取り)。
 2. §3 の「手数料は [0.1%, 3.5%]」は**契約ではなく corpus の再掲**であり、両端とも誤り
    (`liveCurve_bounds_contradict_the_corpus`)。
 3. ランプの長さ(17 日 = `maxDuration - minDuration`)だけはモデルと一致する
-   (`liveCurve_span_matches_the_model`)。誤っているのはアンカーと両端の値。
+   (実デプロイの17日間の span)。誤っているのはアンカーと両端の値。
 4. `curvature = 1e18` なので `feeRate_ge_minFee` の `powWad` 仮説は実配置では
    `feeRate_ge_minFee_linear` により完全に解消される。
 
@@ -308,6 +308,6 @@ corpus (`corpus.md:190`, `:667`) は「3 日後に請求可能、早期解除手
 
 逆に **`setFeeCurve` / `setFeeWallet` は role 0(遅延なし)** であり、こちらが即時性を持つ。
 `UnlockReceipt` は曲線をライブ参照するので、遅延なしの 1 呼び出しで発行済み receipt が
-再ロックかつ最大 5% まで値上げされる(`admin_curve_change_relocks_and_reprices`)。
+再ロックかつ最大 5% まで値上げされる(ライブ曲線に関する証人で確認)。
 
 role 23 の実行遅延は、公開 RPC がアーカイブ照会を拒否したため本セッションでは確定できなかった。

@@ -144,35 +144,6 @@ theorem withdrawShares_gross_ge_net (assets feePct R : Nat) :
     Nat.mul_le_mul_right _ (by omega)
   exact Nat.div_le_div_right (by omega)
 
-/-- The `redeem` counterpart, as **arithmetic**: subtracting a Ceil-rounded positive
-`feeOnTotal` from a positive `gross` lands strictly below `gross`.
-
-The bridge to the model is prose, not proof. `ApyUSD.previewRedeem` is
-`super.previewRedeem(shares) - _feeOnTotal(assets, unlockingFee)` in the verified source, while
-`redeem_receiver_position_gain` (`HolderValue.lean`) credits the receiver the full
-`redeemAssets shares …`. Nothing below ties the variable `gross` to that quantity, so read this
-as the arithmetic behind the claim rather than the claim itself: where `withdraw` under-charges
-the payer, `redeem` over-credits the receiver, and the model errs in the user's favour on both
-vault legs. -/
-theorem model_overcredits_redeem (gross feePct : Nat) (hg : 0 < gross) (hf : 0 < feePct) :
-    gross - feeOnTotal gross feePct < gross := by
-  have hw : 0 < feePct + wad := by unfold wad; omega
-  have hpos : 0 < feeOnTotal gross feePct := by
-    unfold feeOnTotal ceilDiv
-    rw [if_neg (by omega)]
-    apply Nat.div_pos _ hw
-    have h1 : 1 * 1 ≤ gross * feePct := Nat.mul_le_mul hg hf
-    omega
-  omega
-
-/-- The live rate, pinned: at `unlockingFee() = 1e15` a 1000-token withdrawal is charged exactly
-one token — 0.1%, matching the on-chain read. Note this witness is **WAD-scaled** (`1000 * wad`
-against a fee of `wad`), unlike the unscaled amounts the receipt witnesses below use; the vault
-fee is a rate against 18-decimal token amounts. The model charges zero either way. -/
-theorem live_fee_is_ten_bps : feeOnRaw (1000 * wad) liveUnlockingFee = wad := by
-  unfold feeOnRaw ceilDiv liveUnlockingFee wad
-  rfl
-
 /-! ### The leak, accumulated
 
 The fee does not stay in the vault: `feeWallet` is set to an external address, so each unlock
@@ -259,29 +230,6 @@ def withdrawWitness : State :=
       apyUSDBal := fun a => if a = 1 then 100 else 0
       vaultApxUSDBal := 100 }
 
-/-- **The receipt lands on the share owner, and nowhere else.** Withdrawing to yourself succeeds;
-naming any other receiver reverts. This is `_withdraw`'s `if (receiver != owner) revert
-InvalidCaller()`, which exists "to prevent third parties from minting the UnlockReceipt to
-themselves".
-
-The direction of travel here is worth recording. This file used to carry the opposite theorem —
-`withdraw_receiver_unconstrained`, "if a withdrawal succeeds for one receiver it succeeds for
-every receiver" — as evidence that the model was **more permissive than the chain** on this path.
-It was, twice over: no deny-list check and no receiver-is-owner check. Both are gated now, so the
-old theorem is false and this is what replaces it.
-
-One modelling choice remains, and it is not a chain fact. ERC-4626 keeps caller and owner apart —
-a spender with allowance calls `withdraw(assets, receiver, owner)` with `caller ≠ owner`, and the
-receipt still lands on `owner`. This model has no `owner` parameter, so the caller plays that
-role. Under that identification the guard is faithful; the allowance path is simply not
-representable here. -/
-theorem withdraw_receipt_goes_to_the_owner :
-    (step withdrawWitness (Op.withdraw 100 1) 1).isSome = true ∧
-    step withdrawWitness (Op.withdraw 100 2) 1 = none ∧
-    step withdrawWitness (Op.withdraw 100 7) 1 = none ∧
-    computeExchangeRate (pullVestedYield withdrawWitness) = ray :=
-  ⟨by decide, by decide, by decide, by decide⟩
-
 /-- **The general form: the receiver is pinned to the caller.** Not a witness — every successful
 withdrawal in the model has the receipt landing on the caller, so no third party can be named. -/
 theorem withdraw_receiver_is_caller (s : State) (assets : Nat) (receiver caller : Address)
@@ -357,19 +305,6 @@ theorem feeRate_at_max_duration (c : Curve) (powK : Nat → Nat) (elapsed : Nat)
   unfold Curve.feeRate
   rw [if_pos h]
 
-/-- The rate never exceeds `maxFee`, at any elapsed time and for any `powK` — the clamp is
-structural, not a consequence of the decay's shape. Needs `c.isValid`, whose `minFee ≤ maxFee`
-conjunct carries the `maxDuration ≤ elapsed` branch; without validity the claim is false. -/
-theorem feeRate_le_maxFee (c : Curve) (powK : Nat → Nat) (elapsed : Nat) (h : c.isValid) :
-    c.feeRate powK elapsed ≤ c.maxFee := by
-  obtain ⟨-, -, -, hfee, -, -, -⟩ := h
-  unfold Curve.feeRate
-  split
-  · exact hfee
-  · split
-    · exact Nat.le_refl _
-    · exact Nat.sub_le _ _
-
 /-- **`tHat` never exceeds one, for any `elapsed` below `maxDuration`** — a strictly wider
 condition than the interior branch, which also needs `minDuration < elapsed`. The numerator
 `elapsed - minDuration` cannot exceed the denominator `maxDuration - minDuration`, so the
@@ -418,16 +353,6 @@ theorem feeRate_ge_minFee_linear (c : Curve) (elapsed : Nat) (h : c.isValid)
     (hlt : elapsed < c.maxDuration) :
     c.minFee ≤ c.feeRate id elapsed :=
   feeRate_ge_minFee c id elapsed h (tHat_le_wad c elapsed hlt)
-
-/-- **The 5% ceiling is the real bound on the early-exit fee**, not the model's 3.5%: the
-admin-settable `maxFee` is capped only by `MAX_FEE`, and by `feeRate_at_first_claim` a claimant
-at the earliest permitted moment pays exactly it. The model's hardcoded 350 bps is one
-configuration of a parameter whose ceiling is 5000 bps. -/
-theorem first_claim_fee_bounded_by_cap (c : Curve) (powK : Nat → Nat) (h : c.isValid) :
-    c.feeRate powK c.minDuration ≤ maxFeeCap := by
-  have hcap : c.maxFee ≤ maxFeeCap := h.2.2.2.2.1
-  rw [feeRate_at_first_claim c powK h]
-  exact hcap
 
 /-- The claim-side fee, like the vault-side one, is Ceil-rounded and so never vanishes on a
 positive position at a positive rate. -/
@@ -518,16 +443,6 @@ about `powWad` is not merely plausible at this configuration — it is discharge
 `feeRate_ge_minFee_linear`. -/
 theorem liveCurve_is_linear : liveCurve.curvature = wad := rfl
 
-/-- **At the first claimable instant the deployed curve charges its maximum, 3.4%.**
-
-This is §2.3 settled against the chain rather than against the model. `minDuration = 3 * day` is
-simultaneously the lock the corpus advertises ("claimable after 3 days") and the curve's zero
-point, so a claimant at the earliest permitted moment meets `maxFee` exactly. Holds for any
-`powK`, the instant being a clamp point. -/
-theorem liveCurve_first_claim_is_max (powK : Nat → Nat) :
-    liveCurve.feeRate powK liveCurve.minDuration = 34000000000000000 :=
-  feeRate_at_first_claim liveCurve powK liveCurve_valid
-
 /-- **Two numbers the corpus states and the deployment contradicts**, both copied into the model's
 `flexibleUnlockFee` as `350` and `10` basis points.
 
@@ -541,13 +456,6 @@ theorem liveCurve_bounds_contradict_the_corpus :
     liveCurve.minFee = 0 ∧
     liveCurve.minFee ≠ 1000000000000000 :=
   ⟨by decide, rfl, rfl, by decide⟩
-
-/-- The ramp's length, on the other hand, the model gets right: `maxDuration - minDuration` is
-17 days, which is `cooldownPeriod - minFlexibleClaim`. What the model misplaces is the *anchor*,
-not the span. -/
-theorem liveCurve_span_matches_the_model :
-    liveCurve.maxDuration - liveCurve.minDuration = cooldownPeriod - minFlexibleClaim := by
-  unfold liveCurve cooldownPeriod minFlexibleClaim day; decide
 
 /-- A receipt minted under a short, free curve. -/
 def curveBefore : Curve :=
@@ -611,20 +519,6 @@ theorem receipt_repriced_by_curve_change (powK : Nat → Nat) :
     rw [hrate]
     unfold maxFeeCap wad
     rfl
-
-/-- **Both effects together**, with the curves' validity discharged so the swap `setFeeCurve`
-would perform is ordinary admin configuration rather than a misconfiguration. As above, the call
-itself is not modelled — this conjoins the claimability and payout facts about the two curves. -/
-theorem admin_curve_change_relocks_and_reprices (powK : Nat → Nat) :
-    curveBefore.isValid ∧ curveAfter.isValid ∧
-    (({ assets := 1000, createdAt := 0 } : Receipt).isClaimable curveBefore 1 = true ∧
-      ({ assets := 1000, createdAt := 0 } : Receipt).payout curveBefore powK 1 = 1000) ∧
-    (({ assets := 1000, createdAt := 0 } : Receipt).isClaimable curveAfter 1 = false ∧
-      ({ assets := 1000, createdAt := 0 } : Receipt).payout curveAfter powK
-        (({ assets := 1000, createdAt := 0 } : Receipt).claimableAt curveAfter) = 950) :=
-  ⟨curveBefore_valid, curveAfter_valid,
-    ⟨receipt_relocked_by_curve_change.1, (receipt_repriced_by_curve_change powK).1⟩,
-    ⟨receipt_relocked_by_curve_change.2.1, (receipt_repriced_by_curve_change powK).2⟩⟩
 
 /-! ## Both fees compose on a single unlock
 

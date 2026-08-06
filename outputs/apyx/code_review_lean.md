@@ -317,19 +317,19 @@ README は「18 theorems quantify over an arbitrary operation sequence (`execTra
 
 ---
 
-## 4. 定理数の不一致
+## 4. 定理数の不一致（2026-07-30時点の旧スナップショット）
 
 | README の主張 | 実測 |
 |---|---|
 | BlastRadius 56 | public `theorem` **61** (private 25 を除く)。56 になる自然な部分集合は見当たらない |
 | Safety 30 | **32** |
-| Apyx 82 (requirement) | `req_` 接頭辞 **82** で一致 (ファイル全体の theorem は 119) |
+| Apyx 82 (requirement) | 旧スナップショットでは `req_` 接頭辞 **82** で一致。proof map cleanup 後の active `req_` 宣言は **27** |
 | SpecDefects 2 / CommitToken 9 / RedemptionOracle 8 / MinterRateLimit 4 / LiquidationBatcher 5 | すべて一致 |
 | `BlastRadius.lean:37` ヘッダ「81 requirement theorems」 | README と `leancheck.json` は 82 |
 | `BlastRadius.lean:810, 613`「the eight of `AdminOp`」 | `AdminOp` (L80) の constructor は **10** |
 
-`leancheck.json` の `"theorems": 82` は Apyx.lean の requirement 集合のみで、README の 170 という
-合計とは別系統です。
+`leancheck.json` の active requirement count は cleanup 後に **27**。`requirements.json` の82件は
+抽出された要求レコード数であり、active Lean theorem surface の数ではありません。
 
 ---
 
@@ -339,11 +339,11 @@ README は「18 theorems quantify over an arbitrary operation sequence (`execTra
 - **`Apyx.lean` に約800行の `-- BROKEN:` コメント死骸** (L2052-2252, L2875-3266 ほか6ブロック)。中に
   `State` / `step` の**古い重複モデルが3つ**、`sorry` を含む形で残っています。読み間違いを招くので
   削除すべきです。
-- 内容のない定理: `req_total_assets_includes_vault_balance_and_vested` (L2675) と重複 (L3560) は
-  文字どおり `rfl`。`req_unlock_token_no_yield` (L2697) は `unlockTokenAmount` が `now` に言及しない
-  ので無内容。`step2tl_queue_exact` / `step2tl_tick_exact` (L2526/2532) も `rfl`。
-- 重複ペア: `req_buffer_not_consumed` / `req_buffer_preservation`、
-  `req_vault_pulls_vested_yield_before_withdraw` (L3410) / `req_withdrawal_pulls_vested` (L3566)、
+- 内容のない定理: `totalAssets` の重複定理と、`unlockTokenAmount` が `now` に言及しない
+  no-yield 定理は、proof map に不要な生成物として削除済み。`step2tl_queue_exact` /
+  `step2tl_tick_exact` (L2526/2532) も `rfl`。
+- 重複ペア: buffer 要求、vault-pull 要求、`withdrawForMaxShares` の旧版は、
+  proof map に採用した証明面から外して削除済み。
   `withdrawForMaxShares` の2定理 (L3534, L3587)。
 - `BlastRadius.lean` の docstring に古い記述が残存: L927, L1537, L1856 は `updateRedemptionValue` を
   「placeholder no-op」と書いており、同ファイルの `step_updateRedemptionValue_exact` (L944) と
@@ -378,9 +378,9 @@ README は「18 theorems quantify over an arbitrary operation sequence (`execTra
   このモジュールの価値です。
 - **`LiquidationBatcher.lean` 全体** — 5定理すべて健全。「遅延なし」と「無制限」を分離するという
   目的にちょうど合った強さ。
-- **`CommitToken.lean`** — 9定理。`cycle_closes_at_every_live_deployment` が4インスタンスすべてを
-  カバーし、`topup_restarts_the_whole_cooldown` / `no_partial_claim` /
-  `raising_the_delay_unclaims_pending_requests` の3つは実際にホルダーが知るべき挙動。
+- **`CommitToken.lean`** — active surface は clock、cooldown、delay-change、commitment-bound の
+  基礎定理に絞った。4インスタンス用の liveness witness と、top-up / all-or-nothing claim の
+  単独 witness は proof map 外の生成物として削除済み。
   ただし `h_mem : d ∈ liveDeployments` が証明中で使われておらず (lint 警告)、定理は
   `h_cfg : s.unlockingDelay = d.unlockingDelay` だけで通ります — つまり「live な4つ」という
   限定は飾りで、実質は任意の delay に対する一般命題です(命題としては強いので害はないが、
@@ -389,8 +389,8 @@ README は「18 theorems quantify over an arbitrary operation sequence (`execTra
   `window_frees_in_one_step` はどちらも具体 witness で正確。
 - **`SpecDefects.lean`** — 2定理。`redemption_has_no_floor` は
   `∃ s'` を revert 分岐の排除まで含めてきちんと証明しています。
-- **`Apyx.lean` で正確なもの**: `req_mint_price` / `req_issuance_price_one` (1:1 mint)、
-  20日クールダウン (`req_redemption_cooldown_period`, `redemption_cycle_closes_after_cooldown` —
+- **`Apyx.lean` で正確なもの**: 1:1 mint と 20日クールダウンの遷移効果、および
+  `redemption_cycle_closes_after_cooldown` —
   deadline の `<` / `≤` 境界は正しく、ちょうど deadline での claim は成功)、
   flexible の3日最短と並行リクエスト、二重アキュムレータ vesting の保存
   (`req_credit_preserves_accrued_vest`)、no-rehypothecation (閉じた `Op` の全網羅)、

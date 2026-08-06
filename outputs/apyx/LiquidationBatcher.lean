@@ -82,48 +82,4 @@ theorem destination_immutable (s : State) (op : Op) (c : Address) (s' : State)
     | (cases Option.some.inj h; rfl)
     | exact absurd h (by simp)
 
-/-- **Proceeds can only reach one address.** A successful withdrawal credits `dest` and nobody
-    else, whoever called it. -/
-theorem withdraw_credits_only_the_pinned_destination (s : State) (c : Address)
-    (asset : Address) (amount : Nat) (s' : State)
-    (h : step s (Op.withdrawTokens asset amount) c = some s') :
-    s'.sent asset s.dest = s.sent asset s.dest + amount ∧
-    ∀ r, r ≠ s.dest → s'.sent asset r = s.sent asset r := by
-  simp only [step] at h
-  split at h
-  · exact absurd h (by simp)
-  · split at h
-    · exact absurd h (by simp)
-    · cases Option.some.inj h
-      exact ⟨by simp, fun r hr => by simp [hr]⟩
-
-/-- A ticket naming a market outside the allowlist takes the whole batch down — fail-closed, so a
-    keeper cannot slip one unlisted liquidation past inside a large batch. -/
-theorem unlisted_market_reverts_the_batch (s : State) (c : Address)
-    (markets : List MarketId) (asset : Address) (proceeds : Nat)
-    (m : MarketId) (h_mem : m ∈ markets) (h_bad : s.allowed m = false) :
-    step s (Op.batchLiquidate markets asset proceeds) c = none := by
-  simp only [step]
-  have : markets.any (fun m => ! s.allowed m) = true := by
-    apply List.any_eq_true.mpr
-    exact ⟨m, h_mem, by simp [h_bad]⟩
-  simp [this]
-
-/-- **The blast radius of role 41, over a whole trace.** However the keeper sequences liquidations
-    and withdrawals, the set of markets stays fixed and every unit that leaves the contract lands
-    on the one pinned address. Undelayed, but not unbounded. -/
-theorem role41_trace_blast_radius (s : State) (σ : List (Op × Address)) :
-    (execTrace s σ).allowed = s.allowed ∧ (execTrace s σ).dest = s.dest := by
-  induction σ generalizing s with
-  | nil => exact ⟨rfl, rfl⟩
-  | cons p σ ih =>
-    obtain ⟨op, c⟩ := p
-    simp only [execTrace]
-    cases hstep : step s op c with
-    | none    => exact ih s
-    | some s1 =>
-      obtain ⟨ha, hd⟩ := ih s1
-      exact ⟨by rw [ha, allowlist_immutable s op c s1 hstep],
-             by rw [hd, destination_immutable s op c s1 hstep]⟩
-
 end LiquidationBatcher

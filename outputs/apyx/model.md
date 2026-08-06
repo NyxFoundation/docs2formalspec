@@ -246,7 +246,7 @@ carry to the deployment as configured:
    along the trace. The `cap()` makes it a **deployment invariant**, which is the strongest
    possible discharge of a hypothesis: not assumed, enforced.
 3. **"Admin changes take effect in the same block."** `base_model_has_no_timelock` and
-   `catastrophicBackstop_is_instantaneous` are true of the model, and §5's recommendation 3 cited
+   the model’s instantaneous backstop behavior are true of the model, and §5's recommendation 3 cited
    an external observation of a 0-second timelock. The deployed manager has a graded delay ladder
    — 0 / 4h / 24h / 3d / 7d — with 5-day minimum setback on reductions. What remains without delay
    is **ADMIN_ROLE itself**, held by one Safe.

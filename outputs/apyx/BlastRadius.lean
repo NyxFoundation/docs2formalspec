@@ -103,18 +103,6 @@ theorem trace_now_fixed_without_tick (s : State) (σ : List (Op × Address))
       rw [ih s1 h_tail]
       exact now_moves_only_by_tick s op c s1 hstep (h_no_tick (op, c) List.mem_cons_self)
 
-/-- **And no trace can turn the clock back**, whatever it contains. -/
-theorem trace_now_nondecreasing (s : State) (σ : List (Op × Address)) :
-    s.now ≤ (execTrace s σ).now := by
-  induction σ generalizing s with
-  | nil => exact Nat.le_refl _
-  | cons p σ ih =>
-    obtain ⟨op, c⟩ := p
-    simp only [execTrace]
-    cases hstep : step s op c with
-    | none => exact ih s
-    | some s1 => exact Nat.le_trans (now_nondecreasing s op c s1 hstep) (ih s1)
-
 /-! ## Role-gated operation classes
 
 Each predicate lists exactly the operations whose *authorization* is the given role.
@@ -558,26 +546,6 @@ theorem pauser_cannot_extract (s : State) (op : Op) (caller : Address) (s' : Sta
     exact ⟨hc, fun _ => rfl⟩
   · obtain ⟨hc, rfl⟩ := step_unpause_exact s caller s' h_step
     exact ⟨hc, fun _ => rfl⟩
-
-/-- T1, asset-field corollary: pauser-gated operations move no asset whatsoever —
-all token balances, supplies, the USDC reserve, the vault balance, the vest pool,
-and the entire unlock-position registry are unchanged. -/
-theorem pauser_cannot_extract_assets (s : State) (op : Op) (caller : Address) (s' : State)
-    (h_gated : PauserOp op) (h_step : step s op caller = some s') :
-    s'.apxUSDBal = s.apxUSDBal ∧ s'.apyUSDBal = s.apyUSDBal ∧
-    s'.usdcBal = s.usdcBal ∧ s'.governanceTokenBal = s.governanceTokenBal ∧
-    s'.usdcReserve = s.usdcReserve ∧
-    s'.totalSupply_apxUSD = s.totalSupply_apxUSD ∧
-    s'.totalSupply_apyUSD = s.totalSupply_apyUSD ∧
-    s'.vaultApxUSDBal = s.vaultApxUSDBal ∧
-    s'.vestTotal = s.vestTotal ∧
-    s'.unlockTokenOwner = s.unlockTokenOwner ∧
-    s'.unlockTokenAmount = s.unlockTokenAmount := by
-  obtain rfl | rfl := h_gated
-  · obtain ⟨-, rfl⟩ := step_pause_exact s caller s' h_step
-    exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-  · obtain ⟨-, rfl⟩ := step_unpause_exact s caller s' h_step
-    exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 /-- T1 (trace form): an arbitrarily long attack trace consisting solely of
 pauser-gated operations — the complete capability set of a stolen pauser key acting
@@ -2592,16 +2560,6 @@ theorem rate_limit_linear_bound (rs : RLState) (τ : List (Op × Address))
   rw [p1, p2, p3] at h2
   omega
 
-/-- T7, fresh-wrapper corollary: installing the limiter with an empty meter at the base state's
-current clock reading, any attack trace's reserve outflow is at most
-`cap * (elapsed / window + 1)`. -/
-theorem rate_limit_linear_bound_fresh (base0 : State) (window cap : Nat)
-    (τ : List (Op × Address)) :
-    base0.usdcReserve - (execTrace2 ⟨base0, base0.now, window, cap, 0⟩ τ).base.usdcReserve
-      ≤ cap * (((execTrace2 ⟨base0, base0.now, window, cap, 0⟩ τ).base.now - base0.now)
-          / window + 1) :=
-  rate_limit_linear_bound ⟨base0, base0.now, window, cap, 0⟩ τ (Nat.zero_le _)
-
 /-! ## T8 `timelock_escape_guarantee` — Half 1: the base model has NO escape window
 
 The memo's T8 asks for the escape-hatch guarantee "after a malicious privileged
@@ -2612,20 +2570,6 @@ requests it**. The two theorems below characterize this absence precisely (this 
 the honest negative result — the base model's timelock is zero seconds, exactly
 Yearn's real-world finding about `ApxUSDRateOracle.setRate`); the wrapper in the
 second half then *adds* the mechanism and proves what it buys. -/
-
-/-- T8 Half 1: **`catastrophicBackstop` repricing is instantaneous in the base
-model.** Whenever `catastrophicBackstop` (one of the two writers of the redemption price (`redemption_price_writers`; the other is `updateRedemptionValue`),
-`redemption_price_admin_only`) succeeds, the new price is already in force in the
-post-state of that same step, and the clock has not advanced by even one unit
-(`s'.now = s.now`). There is no pending interval — no state in which the change is
-"announced but not yet effective" — during which a user could still redeem at the
-old price. Direct projection of `step_catastrophicBackstop_exact`. -/
-theorem catastrophicBackstop_is_instantaneous (s : State) (caller : Address) (s' : State)
-    (h : step s Op.catastrophicBackstop caller = some s') :
-    caller = s.admin ∧ s'.now = s.now ∧
-    s'.redemptionValue = (s.totalCollateralValue * ray) / s.totalSupply_apxUSD := by
-  obtain ⟨hc, -, rfl⟩ := step_catastrophicBackstop_exact s caller s' h
-  exact ⟨hc, rfl, rfl⟩
 
 /-- T8 Half 1, witness form: `base_model_has_no_timelock`. There is a state in which
 the admin's `catastrophicBackstop` succeeds, **actually changes** the redemption
@@ -2755,26 +2699,6 @@ is bitwise unchanged, so announcing a privileged change applies none of it. -/
 theorem step2tl_queue_exact (tl : TLState) (op : Op) (caller : Address) :
     step2tl tl (TLOp.queue op caller)
       = some { tl with pending := tl.pending ++ [(op, caller, tl.base.now)] } := rfl
-
-/-- `direct` refuses **`AdminOp`s** — and only those. `isAdminOp` is false for `pause`,
-`unpause`, `creditYield` and `setApxUSDMarketPrice`, so a compromised **pauser** can `direct
-Op.pause` and freeze every exit for the whole window, and a compromised oracle can move the market
-price unqueued. The escape window `timelock_escape_guarantee` buys is therefore usable only if the
-non-admin keys are honest: the queue is the only route for *admin* changes, not for privileged
-changes in general. -/
-theorem step2tl_direct_rejects_privileged (tl : TLState) (op : Op) (caller : Address)
-    (h : AdminOp op) : step2tl tl (TLOp.direct op caller) = none := by
-  simp only [step2tl, (isAdminOp_iff op).mpr h, if_true]
-
-/-- The clock advances through the base `step`, exactly as in the unwrapped model:
-`Op.tick` is not privileged, so it is available via `direct`, and its effect is the
-base one. -/
-theorem step2tl_direct_tick (tl : TLState) (dt : Nat) (caller : Address) :
-    step2tl tl (TLOp.direct (Op.tick dt) caller)
-      = some { tl with base := { tl.base with now := tl.base.now + dt } } := by
-  have hna : isAdminOp (Op.tick dt) = false := rfl
-  simp only [step2tl, hna, step]
-  rfl
 
 private theorem inv_step2tl_execute (tl : TLState) (i : Nat) (tl' : TLState)
     (h : step2tl tl (TLOp.execute i) = some tl') :

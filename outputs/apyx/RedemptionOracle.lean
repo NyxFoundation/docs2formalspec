@@ -148,25 +148,7 @@ theorem published_never_exceeds_par (s : State) (σ : List (Op × Address)) (h_c
   rw [cap_immutable_trace s σ, h_cap] at this
   exact this
 
-/-- The cap binds only from above, and a hostile push is clamped rather than rejected: pushing an
-    absurd number publishes exactly `cap`, no revert. -/
-theorem push_above_cap_is_clamped (s : State) (c : Address) (a : Nat)
-    (h_up : s.paused = false) (h_hi : s.cap ≤ a) :
-    ∃ s', step s (Op.pushRound a) c = some s' ∧ published s' = s.cap := by
-  refine ⟨{ s with collateralAnswer := a }, by simp [step, h_up], ?_⟩
-  simp only [published]
-  exact Nat.min_eq_right h_hi
-
 /-! ## …and the other half: there is no floor -/
-
-/-- **Below the cap the published price is exactly what was pushed** — the pipeline dampens
-    nothing. -/
-theorem published_tracks_the_push_below_cap (s : State) (c : Address) (a : Nat)
-    (h_up : s.paused = false) (h_lo : a ≤ s.cap) :
-    ∃ s', step s (Op.pushRound a) c = some s' ∧ published s' = a := by
-  refine ⟨{ s with collateralAnswer := a }, by simp [step, h_up], ?_⟩
-  simp only [published]
-  exact Nat.min_eq_left h_lo
 
 /-- **`redemption_has_no_floor` survives contact with the deployment.** One push of `0` publishes
     `0`; there is no lower clamp anywhere in the pipeline, and no minimum move size. So of the two
@@ -176,14 +158,5 @@ theorem published_has_no_floor (s : State) (c : Address) (h_up : s.paused = fals
     ∃ s', step s (Op.pushRound 0) c = some s' ∧ published s' = 0 := by
   refine ⟨{ s with collateralAnswer := 0 }, by simp [step, h_up], ?_⟩
   simp [published]
-
-/-- Pausing the collateral oracle freezes the published price rather than zeroing it: the last
-    round stands. Worth stating because a paused *price* and a paused *protocol* are different
-    things, and only the former is what role 21 buys here. -/
-theorem pause_freezes_rather_than_clears (s : State) (c : Address) (a : Nat) (s' : State)
-    (h_paused : s.paused = true) (h : step s (Op.pushRound a) c = some s') :
-    False := by
-  simp only [step, h_paused] at h
-  exact absurd h (by simp)
 
 end RedemptionOracle

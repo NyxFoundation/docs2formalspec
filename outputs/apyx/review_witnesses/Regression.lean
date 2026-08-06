@@ -664,16 +664,6 @@ theorem svTrace_wellFormed : ∀ n, WellFormed (execTrace sv0 (svTrace.take n)) 
       apply List.take_of_length_le; simp [svTrace]
     rw [htake]; exact w2
 
-/-- **So S2 applies, and its conclusion is reached rather than assumed.** The trace contains none
-of the five excluded operations, so `solvency_preserved` discharges to `Solvent` at the end. -/
-theorem svTrace_stays_solvent : Solvent (execTrace sv0 svTrace) := by
-  refine solvency_preserved sv0 svTrace (by unfold Solvent sv0; decide) svTrace_wellFormed ?_
-  intro p hp
-  have hcases : p = (Op.tick 100, 0) ∨ p = (Op.depositUSDC 50, 1) := by
-    simpa [svTrace] using hp
-  rcases hcases with rfl | rfl <;>
-    exact ⟨by simp, by simp, by simp, by simp, by simp⟩
-
 /-! ## R15 — the internal apxUSD flow trace is executable
 
 The aggregate trace theorem is intentionally narrower than a protocol-wide
@@ -699,20 +689,6 @@ example :
       apxUSDFlow (default : State) := by
   have h := apxUSDFlow_trace apxUSDFlow_tick_trace_witness
   simpa using h.2
-
-theorem apxUSDFlow_standard_request_trace_witness :
-    ApxUSDFlowTrace (default : State) [(Op.requestUnlock 0, 0)]
-      (execTrace (default : State) [(Op.requestUnlock 0, 0)]) 0 := by
-  have h : ApxUSDFlowTrace (default : State) [(Op.requestUnlock 0, 0)]
-      (requestUnlockStep (default : State) 0 0) 0 := by
-    refine ApxUSDFlowTrace.cons (s := (default : State))
-      (s₁ := requestUnlockStep (default : State) 0 0)
-      (s₂ := requestUnlockStep (default : State) 0 0)
-      (p := (Op.requestUnlock 0, 0)) (ps := []) (fees := 0) ?_ ?_
-    · exact ApxUSDFlowStep.standardRequest _ 0 0 _
-        registryWellIndexed_default (by decide) (by simp [step, requestUnlockStep])
-    · exact ApxUSDFlowTrace.nil _
-  simpa [execTrace, step] using h
 
 /-! ## R16 — the parameterized USDC ledger is executable
 

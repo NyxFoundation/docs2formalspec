@@ -726,9 +726,6 @@ def BalancesUnderSupply (s : State) : Prop := ∀ a, s.apxUSDBal a ≤ s.totalSu
 /-- The price half, isolated. -/
 def PriceUnderPar (s : State) : Prop := s.redemptionValue ≤ ray
 
-theorem wellFormed_iff (s : State) :
-    WellFormed s ↔ BalancesUnderSupply s ∧ PriceUnderPar s := Iff.rfl
-
 /-- The price bound survives any step that is not one of its two writers. -/
 theorem priceUnderPar_step (s : State) (op : Op) (caller : Address) (s' : State)
     (h_step : step s op caller = some s') (h : PriceUnderPar s)
@@ -1127,18 +1124,6 @@ theorem caller_value_depositUSDC (s : State) (amount : Nat) (caller : Address) (
   rw [hx, hy, hu]
   omega
 
-/-- `depositUSDC` never moves the exchange rate, so the fixed-rate and live readings of
-`callerValue` coincide: the deposit case carries the full, unqualified live-rate result. -/
-theorem caller_value_depositUSDC_live (s : State) (amount : Nat) (caller : Address) (s' : State)
-    (h_step : step s (Op.depositUSDC amount) caller = some s') :
-    callerValue s' caller = callerValue s caller := by
-  obtain ⟨-, -, -, -, hs'⟩ := inv_depositUSDC s amount caller s' h_step
-  have hr : computeExchangeRate s' = computeExchangeRate s := by
-    rw [hs']; simp [emitEvent, mintApxUSD, computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount]
-  show valueAt (computeExchangeRate s') s' caller = callerValue s caller
-  rw [hr]
-  exact caller_value_depositUSDC s amount caller s' h_step
-
 /-- `lockApxUSD`: at the fixed pre-step rate, the caller's `callerValue` cannot rise beyond
 the `amount` it locked — floor-rounding the newly minted shares (`lockShares`) cannot
 manufacture redeemable value beyond what was paid in. The live-rate reading may still be
@@ -1179,18 +1164,6 @@ theorem caller_value_redeemApxUSD (s : State) (amount : Nat) (caller : Address) 
   rw [hx, hy, hu]
   have hb := redemptionValue_div_ray_le amount s.redemptionValue h_rv
   omega
-
-/-- `redeemApxUSD` never moves the exchange rate: the fixed-rate result above is also the
-full, unqualified live-rate result. -/
-theorem caller_value_redeemApxUSD_live (s : State) (amount : Nat) (caller : Address) (s' : State)
-    (h_step : step s (Op.redeemApxUSD amount) caller = some s') (h_rv : s.redemptionValue ≤ ray) :
-    callerValue s' caller ≤ callerValue s caller := by
-  obtain ⟨-, -, -, -, _, hs'⟩ := inv_redeemApxUSD s amount caller s' h_step
-  have hr : computeExchangeRate s' = computeExchangeRate s := by
-    rw [hs']; simp [emitEvent, burnApxUSD, computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount]
-  show valueAt (computeExchangeRate s') s' caller ≤ callerValue s caller
-  rw [hr]
-  exact caller_value_redeemApxUSD s amount caller s' h_step h_rv
 
 /-- `withdraw`: the withdrawn `assets` leave the caller's `apyUSDBal` (via `pullVestedYield`
 then `burnApyUSD`) and land in a cooldown *unlock request*, not directly in `apxUSDBal`/
