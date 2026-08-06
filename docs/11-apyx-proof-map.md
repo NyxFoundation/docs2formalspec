@@ -352,7 +352,7 @@ A minimal shape is:
 ~~~lean
 def ProtocolInv (s : State) : Prop :=
   RegistryWellIndexed s ∧ Solvent s ∧ WellFormed s ∧
-  ApxUSDLedgerConsistent s
+  ApxUSDLedgerConsistent s ∧ ApyUSDLedgerConsistent s
 
 inductive ProtocolReach : State → Prop
   | initial : ProtocolReach (default : State)
@@ -390,13 +390,20 @@ successful action satisfies the required safety condition.
 The invariant should be factored into small lemmas. A single giant invariant theorem is difficult to review and tends to hide which accounting relationship actually carries the argument.
 
 In the current source, `ProtocolInv` combines `RegistryWellIndexed`, `Solvent`,
-`WellFormed`, and `ApxUSDLedgerConsistent`. `protocolInv_default` proves the
-base case, `protocolInv_stepResult_accepted` proves preservation at the
-accepted-result boundary, and `ProtocolReach` uses that same accepted
-`StepResult` relation. `protocolInv_reachable` is therefore the global theorem
+`WellFormed`, and both finite token ledger relations:
+`ApxUSDLedgerConsistent` and `ApyUSDLedgerConsistent`. The composite module
+imports the apyUSD ledger layer explicitly because that relation is defined in
+`HolderValue.lean`, while the apxUSD relation lives in `Ledger.lean`.
+`protocolInv_default` proves the base case,
+`protocolInv_step` preserves the invariant at the successful `step` boundary,
+and `protocolInv_stepResult_accepted` lifts the same proof to the accepted-result
+boundary. `ProtocolReach` uses that accepted `StepResult` relation, so
+`protocolInv_reachable` is the global theorem
 for the explicitly restricted, well-formed solvency-scoped relation. The
 restriction and the post-state `WellFormed` premise are part of the relation;
-they are not hidden assumptions.
+they are not hidden assumptions. Neither ledger identity is derived from
+`WellFormed` or `Solvent`; each is a separately initialized and trace-preserved
+relation over the current abstract state machine.
 
 ## 7. Build the economic property ladder
 

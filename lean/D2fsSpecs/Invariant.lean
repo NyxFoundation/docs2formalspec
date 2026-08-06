@@ -1,6 +1,7 @@
 import D2fsSpecs.Registry
 import D2fsSpecs.Safety
 import D2fsSpecs.Ledger
+import D2fsSpecs.HolderValue
 import D2fsSpecs.Transition
 
 /-!
@@ -13,7 +14,7 @@ supplies exactly that shape for the facts the development actually carries:
 
 ~~~text
 ProtocolInv s := RegistryWellIndexed s ∧ Solvent s ∧ WellFormed s ∧
-  ApxUSDLedgerConsistent s
+  ApxUSDLedgerConsistent s ∧ ApyUSDLedgerConsistent s
 ~~~
 
 **This is a conditional, global-design layer — not an unconditional deployed
@@ -26,11 +27,11 @@ current aggregate model, none of which this module repairs:
   re-mint obligation is tracked nowhere on the left-hand side. That is exactly
   why `solvency_step` must exclude `claimUnlock` and `flexibleClaimUnlock`, and
   why those exclusions reappear verbatim in `SolvencyScopedOp` below.
-* **The aggregate facts do not imply the finite ledger identity.** The ledger is
-  a bare `Address → Nat`, so `ApxUSDLedgerConsistent` is carried as a separate
-  conjunct and preserved by the writer program in `Ledger.lean`; it is not
-  derived from `WellFormed`/`Solvent`. The witness in that module records this
-  model expressiveness gap.
+* **The aggregate facts do not imply the finite ledger identities.** The token
+  ledgers are bare `Address → Nat` functions, so
+  `ApxUSDLedgerConsistent` and `ApyUSDLedgerConsistent` are carried as separate
+  conjuncts and preserved by their writer programs; neither is derived from
+  `WellFormed`/`Solvent`. Their witnesses record this model expressiveness gap.
 * **`WellFormed s'` is still an explicit transition assumption.**
   `protocolInv_step` takes the post-state's well-formedness as a hypothesis
   rather than proving it, and `ProtocolReach.next` carries the same hypothesis
@@ -57,10 +58,11 @@ namespace Apyx
 
 /-- The composite design invariant currently provable in one package: registry
 well-indexedness, aggregate solvency, per-address well-formedness, and the
-finite ledger identity. Conditional —
+finite apxUSD and apyUSD ledger identities. Conditional —
 see the module docstring for what each conjunct does and does not claim. -/
 def ProtocolInv (s : State) : Prop :=
-  RegistryWellIndexed s ∧ Solvent s ∧ WellFormed s ∧ ApxUSDLedgerConsistent s
+  RegistryWellIndexed s ∧ Solvent s ∧ WellFormed s ∧
+    ApxUSDLedgerConsistent s ∧ ApyUSDLedgerConsistent s
 
 /-- Exactly the five operation exclusions `solvency_step` requires, packaged as
 one predicate on the operation. `claimUnlock`/`flexibleClaimUnlock` re-mint
@@ -77,11 +79,11 @@ def SolvencyScopedOp (op : Op) : Prop :=
   (∀ amt r, op ≠ Op.withdrawReserve amt r)
 
 /-- Initialization: the empty `default` state satisfies the composite invariant.
-Everything is zero, so solvency and well-formedness are trivial; the registry
-part is `registryWellIndexed_default`. -/
+Everything is zero, so solvency, well-formedness, and both ledger identities are
+trivial; the registry part is `registryWellIndexed_default`. -/
 theorem protocolInv_default : ProtocolInv (default : State) := by
   refine ⟨registryWellIndexed_default, Nat.zero_le _, ?_,
-    apxUSDLedgerConsistent_default⟩
+    apxUSDLedgerConsistent_default, apyUSDLedgerConsistent_default⟩
   exact ⟨(fun _ => Nat.zero_le _), Nat.zero_le _⟩
 
 /-- Conditional preservation: a successful step preserves `ProtocolInv`, given
@@ -90,8 +92,8 @@ theorem protocolInv_default : ProtocolInv (default : State) := by
 unconditional (`registryWellIndexed_step`); the solvency conjunct is
 `solvency_step` under its documented exclusions; the well-formedness conjunct
 cannot be derived from the aggregate ledger and is therefore assumed, not
-proved; the finite ledger conjunct is supplied by
-`apxUSDLedgerConsistent_step`. -/
+proved; the two finite ledger conjuncts are supplied by
+`apxUSDLedgerConsistent_step` and `apyUSDLedgerConsistent_step`. -/
 theorem protocolInv_step (s : State) (op : Op) (caller : Address) (s' : State)
     (h : ProtocolInv s) (hstep : step s op caller = some s')
     (hscope : SolvencyScopedOp op) (hwf' : WellFormed s') :
@@ -100,7 +102,8 @@ theorem protocolInv_step (s : State) (op : Op) (caller : Address) (s' : State)
    solvency_step s op caller s' hstep h.2.1 h.2.2.1
      hscope.1 hscope.2.1 hscope.2.2.1 hscope.2.2.2.1 hscope.2.2.2.2,
    hwf',
-   apxUSDLedgerConsistent_step s s' op caller h.2.2.2 hstep⟩
+   apxUSDLedgerConsistent_step s s' op caller h.2.2.2.1 hstep,
+   apyUSDLedgerConsistent_step s s' op caller h.2.2.2.2 hstep⟩
 
 /-- The same composite preservation theorem stated over the explicit
 `StepResult` boundary. The event payload is carried through but does not enter
