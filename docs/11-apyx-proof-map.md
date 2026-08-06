@@ -198,11 +198,16 @@ request-to-claim trace is now composed as
 requests, waits, and claims, and carries `RegistryWellIndexed` through the
 induction. The live-value variant
 `standardUnlock_holderValue_trace_neutral` is intentionally narrower and
-excludes waits, because vesting can change the live rate. Operator-mediated
-claims for another holder remain a separate frame obligation. The combined
-fixed-rate inequality `unlockLedger_holderValueAt_trace_nonincreasing` now
+excludes waits, because vesting can change the live rate. The fixed-rate
+per-holder frames `requestUnlock_holderValueAt_fixedRate_frame`,
+`flexibleRequestUnlock_holderValueAt_fixedRate_frame`,
+`claimUnlock_holderValueAt_fixedRate_frame`, and
+`flexibleClaim_holderValueAt_fixedRate_frame` make operator-mediated actions
+explicit rather than silently restricting every caller to the tracked holder.
+The combined fixed-rate inequality `unlockLedger_holderValueAt_trace_nonincreasing` now
 adds flexible requests and claims: requests are neutral, while flexible
-claims are non-increasing by the explicit fee. Its witness
+claims are non-increasing by the explicit fee. Its arbitrary-caller form is
+`unlockLedger_holderValueAt_trace_nonincreasing_any_callers`. Its witness
 `unlockLedger_holderValueAt_trace_witness` exercises a nonzero post-cooldown
 fee rather than merely a zero-amount or reverted claim.
 
@@ -361,10 +366,11 @@ and their position ledger now have local request and claim boundary facts in
 `Apyx.lean` and `HolderValue.lean`, including the fee-bearing flexible claim.
 The mixed-operation full-trace liability ledger remains open. The standard
 unlock request-to-claim sublanguage is closed at a fixed rate by
-`standardUnlock_holderValueAt_trace_neutral`; the remaining work is to compose
-that ledger with vault exits and live-rate changes without silently treating
-price movement as transfer conservation; the flexible channel is now included
-in `unlockLedger_holderValueAt_trace_nonincreasing`.
+`standardUnlock_holderValueAt_trace_neutral`; the arbitrary-caller fixed-rate
+form is `unlockLedger_holderValueAt_trace_nonincreasing_any_callers`. The
+remaining work is to compose that ledger with vault exits and live-rate changes
+without silently treating price movement as transfer conservation; the
+flexible channel is now included in both fixed-rate forms.
 `redemptionValue_frame`, `redemption_price_writers`, and
 `admin_alone_moves_redemption_price` for price writers; `reserve_outflow_only_via_redemption`
 and the buffer theorems for non-depletion boundaries; and
@@ -631,9 +637,11 @@ request-to-claim trace now has an inductive fixed-rate theorem,
 `standardUnlock_holderValueAt_trace_neutral`, over the standard request/claim
 language with explicit waits. It starts from `RegistryWellIndexed`, preserves
 that invariant over successful prefixes, and skips reverted calls with the
-model's `execTrace` semantics. It deliberately excludes operator-mediated
-claims for another holder. The standard-plus-flexible fixed-rate trace is now
-covered by `unlockLedger_holderValueAt_trace_nonincreasing`. The mixed trace
+model's `execTrace` semantics. The fixed-rate frame lemmas and
+`unlockLedger_holderValueAt_trace_nonincreasing_any_callers` also cover
+operator-mediated claims for another holder. The standard-plus-flexible
+fixed-rate trace is now covered by `unlockLedger_holderValueAt_trace_nonincreasing`.
+The mixed trace
 that also includes vault exits still needs a ledger composition theorem and a
 live-rate treatment. Flexible claims use the corresponding fee law
 `flexibleClaim_holderValueAt_fee`; treating

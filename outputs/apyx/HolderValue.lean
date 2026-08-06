@@ -383,6 +383,43 @@ theorem stdPositions_updateStandardUnlock (s : State) (id : Nat) (owner : Addres
   intro j hj hne
   simp [stdAmt, updateStandardUnlock, hreq, hne]
 
+/-- Updating a standard position owned by someone other than `a` does not
+change `a`'s finite standard-position total. -/
+theorem stdPositions_updateStandardUnlock_of_ne (s : State) (id : Nat) (owner : Address)
+    (addAmount : Nat) (a : Address)
+    (howner : owner ≠ a)
+    (hreq : ∃ oldAmount oldEnd, s.unlockRequests id = some (owner, oldAmount, oldEnd)) :
+    stdPositions (updateStandardUnlock s id owner addAmount) a = stdPositions s a := by
+  obtain ⟨oldAmount, oldEnd, hentry⟩ := hreq
+  unfold stdPositions
+  have hnext : (updateStandardUnlock s id owner addAmount).nextUnlockId = s.nextUnlockId := by
+    simp [updateStandardUnlock, hentry]
+  rw [hnext]
+  congr 1
+  apply List.map_congr_left
+  intro i hi
+  by_cases hne : i = id
+  · subst i
+    simp [stdAmt, updateStandardUnlock, hentry, howner]
+  · simp [stdAmt, updateStandardUnlock, hentry, hne]
+
+/-- A standard top-up changes no flexible registry entry, so it leaves the
+flexible-position sum unchanged. -/
+theorem flexPositions_updateStandardUnlock (s : State) (id : Nat) (owner : Address)
+    (addAmount : Nat) (a : Address)
+    (hreq : ∃ oldOwner oldAmount oldEnd, s.unlockRequests id =
+      some (oldOwner, oldAmount, oldEnd)) :
+    flexPositions (updateStandardUnlock s id owner addAmount) a = flexPositions s a := by
+  obtain ⟨oldOwner, oldAmount, oldEnd, hentry⟩ := hreq
+  unfold flexPositions
+  have hnext : (updateStandardUnlock s id owner addAmount).nextUnlockId = s.nextUnlockId := by
+    simp [updateStandardUnlock, hentry]
+  rw [hnext]
+  congr 1
+  apply List.map_congr_left
+  intro i hi
+  simp [flexAmt, updateStandardUnlock, hentry]
+
 /-- A successful standard request is value-neutral for the caller on both
     model branches: opening a fresh position and topping up the existing one.
     `RegistryBounded` is required because the finite position ledger ranges
@@ -618,6 +655,87 @@ theorem requestUnlock_holderValueAt_fixedRate (R : Nat) (s : State) (amount : Na
     · exact h_create
   · exact h_create
 
+/-- A request by another holder is a frame for `a`'s fixed-rate value. This
+is the per-holder fact that removes the need to restrict a trace to one
+caller; the new standard position belongs to `caller`, not to `a`. -/
+theorem requestUnlock_holderValueAt_fixedRate_frame (R : Nat) (s : State) (amount : Nat)
+    (caller : Address) (s' : State) (a : Address)
+    (h_step : step s (Op.requestUnlock amount) caller = some s')
+    (h_registry : RegistryBounded s) :
+    holderValueAt R s' a = holderValueAt R s a := by
+  by_cases hsame : caller = a
+  · subst caller
+    exact requestUnlock_holderValueAt_fixedRate R s amount a s' h_step h_registry
+  · obtain ⟨-, -, hpost⟩ := requestUnlockStep_effect s amount caller s' h_step
+    subst s'
+    have hsymm : a ≠ caller := Ne.symm hsame
+    have h_unalloc_flex : s.flexibleUnlockRequests s.nextUnlockId = none :=
+      flex_unallocated_at_counter s h_registry
+    have h_create :
+        holderValueAt R (createStandardUnlock (burnApxUSD s caller amount) caller amount) a =
+          holderValueAt R s a := by
+      unfold holderValueAt valueAt
+      have hbal :
+          (createStandardUnlock (burnApxUSD s caller amount) caller amount).apxUSDBal a =
+            s.apxUSDBal a := by simp [createStandardUnlock, burnApxUSD, hsymm]
+      have hstd :
+          stdPositions (createStandardUnlock (burnApxUSD s caller amount) caller amount) a =
+            stdPositions s a := by
+        rw [stdPositions_createStandardUnlock]
+        have hburn : stdPositions (burnApxUSD s caller amount) a = stdPositions s a := by rfl
+        rw [hburn, if_neg hsame]
+        simp
+      have hflex :
+          flexPositions (createStandardUnlock (burnApxUSD s caller amount) caller amount) a =
+            flexPositions s a := by
+        rw [flexPositions_createStandardUnlock (burnApxUSD s caller amount) caller amount a
+          h_unalloc_flex]
+        rfl
+      have hshares :
+          (createStandardUnlock (burnApxUSD s caller amount) caller amount).apyUSDBal a =
+            s.apyUSDBal a := by simp [createStandardUnlock, burnApxUSD]
+      have husdc :
+          (createStandardUnlock (burnApxUSD s caller amount) caller amount).usdcBal a =
+            s.usdcBal a := by simp [createStandardUnlock, burnApxUSD]
+      rw [hbal, hstd, hflex, hshares, husdc]
+    unfold requestUnlockStep
+    split
+    · rename_i id hptr
+      split
+      · rename_i recorded oldAmount oldEnd hentry
+        by_cases ho : recorded = caller
+        · subst recorded
+          rw [if_pos rfl]
+          have hentry' : s.unlockRequests id = some (caller, oldAmount, oldEnd) := by
+            simpa [burnApxUSD] using hentry
+          have hstd :
+              stdPositions (updateStandardUnlock (burnApxUSD s caller amount) id caller amount) a =
+                stdPositions s a := by
+            rw [stdPositions_updateStandardUnlock_of_ne (burnApxUSD s caller amount) id caller
+              amount a hsame ⟨oldAmount, oldEnd, hentry'⟩]
+            rfl
+          have hflex :
+              flexPositions (updateStandardUnlock (burnApxUSD s caller amount) id caller amount) a =
+                flexPositions s a := by
+            rw [flexPositions_updateStandardUnlock (burnApxUSD s caller amount) id caller amount a
+              ⟨caller, oldAmount, oldEnd, hentry'⟩]
+            rfl
+          have hbal :
+              (updateStandardUnlock (burnApxUSD s caller amount) id caller amount).apxUSDBal a =
+                s.apxUSDBal a := by simp [updateStandardUnlock, burnApxUSD, hentry', hsymm]
+          have hshares :
+              (updateStandardUnlock (burnApxUSD s caller amount) id caller amount).apyUSDBal a =
+                s.apyUSDBal a := by simp [updateStandardUnlock, burnApxUSD, hentry']
+          have husdc :
+              (updateStandardUnlock (burnApxUSD s caller amount) id caller amount).usdcBal a =
+                s.usdcBal a := by simp [updateStandardUnlock, burnApxUSD, hentry']
+          unfold holderValueAt valueAt
+          rw [hbal, hstd, hflex, hshares, husdc]
+        · rw [if_neg ho]
+          exact h_create
+      · exact h_create
+    · exact h_create
+
 /-- A flexible request is neutral at a fixed rate: the burned apxUSD is added
 to the caller's flexible position total. Unlike a standard request there is no
 top-up branch, so only the shared fresh-id registry frame is needed. -/
@@ -660,6 +778,46 @@ theorem flexibleRequestUnlock_holderValueAt_fixedRate (R : Nat) (s : State) (amo
   rw [hbal, hstd, hflex, hshares, husdc]
   omega
 
+/-- A flexible request by another holder is a frame for `a`'s fixed-rate
+value. The fresh flexible position belongs only to `caller`. -/
+theorem flexibleRequestUnlock_holderValueAt_fixedRate_frame (R : Nat) (s : State)
+    (amount : Nat) (caller : Address) (s' : State) (a : Address)
+    (h_step : step s (Op.flexibleRequestUnlock amount) caller = some s')
+    (h_registry : RegistryWellIndexed s) (hsame : caller ≠ a) :
+    holderValueAt R s' a = holderValueAt R s a := by
+  obtain ⟨-, -, hpost⟩ := flexibleRequestUnlockStep_effect s amount caller s' h_step
+  subst s'
+  have hsymm : a ≠ caller := Ne.symm hsame
+  have hstd_unalloc :
+      (burnApxUSD s caller amount).unlockRequests
+          (burnApxUSD s caller amount).nextUnlockId = none := by
+    simpa [burnApxUSD] using std_unallocated_at_counter s h_registry.1
+  have hbal :
+      (createFlexibleUnlock (burnApxUSD s caller amount) caller amount).apxUSDBal a =
+        s.apxUSDBal a := by
+    simp [createFlexibleUnlock, burnApxUSD, hsymm]
+  have hstd : stdPositions
+      (createFlexibleUnlock (burnApxUSD s caller amount) caller amount) a =
+        stdPositions s a := by
+    rw [stdPositions_createFlexibleUnlock (burnApxUSD s caller amount) caller amount a
+      hstd_unalloc]
+    rfl
+  have hflex : flexPositions
+      (createFlexibleUnlock (burnApxUSD s caller amount) caller amount) a =
+        flexPositions s a := by
+    rw [flexPositions_createFlexibleUnlock]
+    have hburn : flexPositions (burnApxUSD s caller amount) a = flexPositions s a := by rfl
+    rw [hburn, if_neg hsame]
+    simp
+  have hshares :
+      (createFlexibleUnlock (burnApxUSD s caller amount) caller amount).apyUSDBal a =
+        s.apyUSDBal a := by simp [createFlexibleUnlock, burnApxUSD]
+  have husdc :
+      (createFlexibleUnlock (burnApxUSD s caller amount) caller amount).usdcBal a =
+        s.usdcBal a := by simp [createFlexibleUnlock, burnApxUSD]
+  unfold holderValueAt valueAt
+  rw [hbal, hstd, hflex, hshares, husdc]
+
 /-- Retiring an in-range standard position removes exactly its recorded amount
 from the owner's finite standard-position sum. Other positions, including any
 additional positions for the same owner, remain accounted for. -/
@@ -678,6 +836,22 @@ theorem stdPositions_retireStandardUnlock (s : State) (id : Nat) (owner : Addres
   have hsum := sum_range_replace s.nextUnlockId id amount
     (stdAmt s owner) (stdAmt r owner) hid hat hother
   exact hsum.symm
+
+theorem stdPositions_retireStandardUnlock_of_ne (s : State) (id : Nat) (owner : Address)
+    (amount cooldownEnd : Nat) (a : Address) (howner : owner ≠ a)
+    (hreq : s.unlockRequests id = some (owner, amount, cooldownEnd)) :
+    stdPositions (retireStandardUnlock s id owner) a = stdPositions s a := by
+  unfold stdPositions
+  have hnext : (retireStandardUnlock s id owner).nextUnlockId = s.nextUnlockId := by
+    simp [retireStandardUnlock, burnUnlockNFT]
+  rw [hnext]
+  congr 1
+  apply List.map_congr_left
+  intro i hi
+  by_cases hne : i = id
+  · subst i
+    simp [stdAmt, retireStandardUnlock, burnUnlockNFT, hreq, howner]
+  · simp [stdAmt, retireStandardUnlock, burnUnlockNFT, hne]
 
 /-- **A vault withdrawal's payout is measured.** The receiver's standard-position sum rises by
 exactly the `assets` withdrawn.
@@ -977,6 +1151,105 @@ theorem claimUnlock_holderValueAt_neutral (s : State) (id : Nat)
   unfold holderValueAt valueAt
   rw [hbalance, hshares, husdc, hflex]
   omega
+
+/-- A standard claim by a different owner is a frame for `a`'s fixed-rate value.
+The claim retires and mints only the recorded owner's position; the operator is
+irrelevant to the holder ledger. -/
+theorem claimUnlock_holderValueAt_fixedRate_frame (R : Nat) (s : State) (id : Nat)
+    (owner : Address) (amount cooldownEnd : Nat) (caller : Address) (s' : State)
+    (a : Address)
+    (hreq : s.unlockRequests id = some (owner, amount, cooldownEnd))
+    (h_step : step s (Op.claimUnlock id) caller = some s')
+    (howner : owner ≠ a) :
+    holderValueAt R s' a = holderValueAt R s a := by
+  obtain ⟨recordedOwner, recordedAmount, recordedCooldown, hentry, _, _, _, hpost⟩ :=
+    claimUnlockStep_effect s id caller s' h_step
+  rw [hreq] at hentry
+  simp only [Option.some.injEq, Prod.mk.injEq] at hentry
+  obtain ⟨rfl, rfl, rfl⟩ := hentry
+  subst s'
+  have hsymm : a ≠ owner := Ne.symm howner
+  have hstd : stdPositions (mintApxUSD (retireStandardUnlock s id owner) owner amount) a =
+      stdPositions s a := by
+    change stdPositions (retireStandardUnlock s id owner) a = stdPositions s a
+    exact stdPositions_retireStandardUnlock_of_ne s id owner amount cooldownEnd a howner hreq
+  have hbalance : (mintApxUSD (retireStandardUnlock s id owner) owner amount).apxUSDBal a =
+      s.apxUSDBal a := by
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT, hsymm]
+  have hshares : (mintApxUSD (retireStandardUnlock s id owner) owner amount).apyUSDBal a =
+      s.apyUSDBal a := by
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
+  have husdc : (mintApxUSD (retireStandardUnlock s id owner) owner amount).usdcBal a =
+      s.usdcBal a := by
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
+  have hflex : flexPositions (mintApxUSD (retireStandardUnlock s id owner) owner amount) a =
+      flexPositions s a := by
+    change flexPositions (retireStandardUnlock s id owner) a = flexPositions s a
+    rfl
+  unfold holderValueAt valueAt
+  rw [hbalance, hstd, hshares, husdc, hflex]
+
+theorem flexPositions_retireFlexibleUnlock_of_ne (s : State) (id : Nat) (owner : Address)
+    (amount requestTime cooldownEnd : Nat) (a : Address) (howner : owner ≠ a)
+    (hreq : s.flexibleUnlockRequests id =
+      some (owner, amount, requestTime, cooldownEnd)) :
+    flexPositions (retireFlexibleUnlock s id) a = flexPositions s a := by
+  unfold flexPositions
+  have hnext : (retireFlexibleUnlock s id).nextUnlockId = s.nextUnlockId := by
+    simp [retireFlexibleUnlock, burnUnlockNFT]
+  rw [hnext]
+  congr 1
+  apply List.map_congr_left
+  intro i hi
+  by_cases hne : i = id
+  · subst i
+    simp [flexAmt, retireFlexibleUnlock, burnUnlockNFT, hreq, howner]
+  · simp [flexAmt, retireFlexibleUnlock, burnUnlockNFT, hne]
+
+/-- A flexible claim by a different owner is a frame for `a`'s fixed-rate
+value. The early-exit fee is charged to the recorded owner, so it does not
+alter another holder's ledger. -/
+theorem flexibleClaim_holderValueAt_fixedRate_frame (R : Nat) (s : State) (id : Nat)
+    (owner : Address) (amount requestTime cooldownEnd : Nat) (caller : Address) (s' : State)
+    (a : Address)
+    (hreq : s.flexibleUnlockRequests id =
+      some (owner, amount, requestTime, cooldownEnd))
+    (h_step : step s (Op.flexibleClaimUnlock id) caller = some s')
+    (howner : owner ≠ a) :
+    holderValueAt R s' a = holderValueAt R s a := by
+  obtain ⟨recordedOwner, recordedAmount, recordedRequestTime, recordedCooldownEnd,
+    hentry, _, _, _, hpost⟩ := flexibleClaimStep_effect s id caller s' h_step
+  rw [hreq] at hentry
+  simp only [Option.some.injEq, Prod.mk.injEq] at hentry
+  obtain ⟨rfl, rfl, rfl, rfl⟩ := hentry
+  subst s'
+  let fee := amount * flexibleUnlockFee requestTime s.now / 10000
+  have hsymm : a ≠ owner := Ne.symm howner
+  have hflex : flexPositions
+      (mintApxUSD (retireFlexibleUnlock s id) owner (amount - fee)) a =
+      flexPositions s a := by
+    change flexPositions (retireFlexibleUnlock s id) a = flexPositions s a
+    exact flexPositions_retireFlexibleUnlock_of_ne s id owner amount requestTime cooldownEnd a
+      howner hreq
+  have hbalance :
+      (mintApxUSD (retireFlexibleUnlock s id) owner (amount - fee)).apxUSDBal a =
+        s.apxUSDBal a := by
+    simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT, fee, hsymm]
+  have hshares :
+      (mintApxUSD (retireFlexibleUnlock s id) owner (amount - fee)).apyUSDBal a =
+        s.apyUSDBal a := by
+    simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT]
+  have husdc :
+      (mintApxUSD (retireFlexibleUnlock s id) owner (amount - fee)).usdcBal a =
+        s.usdcBal a := by
+    simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT]
+  have hstd : stdPositions
+      (mintApxUSD (retireFlexibleUnlock s id) owner (amount - fee)) a =
+      stdPositions s a := by
+    change stdPositions (retireFlexibleUnlock s id) a = stdPositions s a
+    rfl
+  unfold holderValueAt valueAt
+  rw [hbalance, hshares, husdc, hstd, hflex]
 
 /-- Retiring an in-range flexible position removes exactly its recorded amount
 from the owner's finite flexible-position sum. -/
@@ -1635,6 +1908,14 @@ private theorem tick_holderValueAt_frame (R : Nat) (s : State) (dt : Nat)
   cases Option.some.inj h_step
   rfl
 
+private theorem tick_holderValueAt_frame_any (R : Nat) (s : State) (dt : Nat)
+    (caller : Address) (s' : State) (a : Address)
+    (h_step : step s (Op.tick dt) caller = some s') :
+    holderValueAt R s' a = holderValueAt R s a := by
+  simp only [step] at h_step
+  cases Option.some.inj h_step
+  rfl
+
 private theorem standardUnlock_operator_frame (s : State) (op : Op) (caller : Address)
     (s' : State) (h_op : StandardUnlockOp op)
     (h_step : step s op caller = some s') :
@@ -1758,6 +2039,48 @@ private theorem standardUnlockTimed_operator_frame (s : State) (op : Op) (caller
   · simp only [step] at h_step
     cases Option.some.inj h_step
     rfl
+
+private theorem standardClaim_holderValueAt_fixedRate_any
+    (R : Nat) (s : State) (requestId : Nat) (caller : Address) (s' : State) (a : Address)
+    (h_step : step s (Op.claimUnlock requestId) caller = some s')
+    (h_registry : RegistryWellIndexed s) :
+    holderValueAt R s' a = holderValueAt R s a := by
+  obtain ⟨owner, amount, cooldownEnd, hreq, _, _, _, _⟩ :=
+    claimUnlockStep_effect s requestId caller s' h_step
+  have hid : requestId < s.nextUnlockId := by
+    by_cases hlt : requestId < s.nextUnlockId
+    · exact hlt
+    · have hnone := h_registry.1.1 requestId (by omega)
+      rw [hreq] at hnone
+      simp at hnone
+  by_cases howner : owner = a
+  · subst owner
+    exact claimUnlock_holderValueAt_neutral s requestId a amount cooldownEnd caller s'
+      hid hreq h_step R
+  · exact claimUnlock_holderValueAt_fixedRate_frame R s requestId owner amount cooldownEnd caller s'
+      a hreq h_step howner
+
+private theorem flexibleClaim_holderValueAt_nonincreasing_any
+    (R : Nat) (s : State) (requestId : Nat) (caller : Address) (s' : State) (a : Address)
+    (h_step : step s (Op.flexibleClaimUnlock requestId) caller = some s')
+    (h_registry : RegistryWellIndexed s) :
+    holderValueAt R s' a ≤ holderValueAt R s a := by
+  obtain ⟨owner, amount, requestTime, cooldownEnd, hreq, _, _, _, _⟩ :=
+    flexibleClaimStep_effect s requestId caller s' h_step
+  have hid : requestId < s.nextUnlockId := by
+    by_cases hlt : requestId < s.nextUnlockId
+    · exact hlt
+    · have hnone := h_registry.1.2 requestId (by omega)
+      rw [hreq] at hnone
+      simp at hnone
+  by_cases howner : owner = a
+  · subst owner
+    have hfee := flexibleClaim_holderValueAt_fee s requestId a amount requestTime cooldownEnd caller s'
+      hid hreq h_step R
+    omega
+  · have hframe := flexibleClaim_holderValueAt_fixedRate_frame R s requestId owner amount
+      requestTime cooldownEnd caller s' a hreq h_step howner
+    omega
 
 /-- At a fixed pricing rate, a timed trace consisting of the holder's standard
 requests, standard claims, and waits is neutral. This is the honest
@@ -1951,6 +2274,56 @@ theorem unlockLedger_holderValueAt_trace_nonincreasing
           intro hbad
           exact h_not_operator (hbad.trans hframe)
         exact Nat.le_trans (ih s1 h_registry1 htail_own htail_ops h_operator1) h_step_bound
+
+/-- The same fixed-rate ledger bound with arbitrary callers. A caller may be
+the tracked holder, another holder, or the registry operator: the per-owner
+frame lemmas above decide which case applies. This is the trace-level form
+used for protocol-level safety statements; restricting every caller to `a`
+is only needed by the older compatibility theorem above. -/
+theorem unlockLedger_holderValueAt_trace_nonincreasing_any_callers
+    (R : Nat) (s : State) (σ : List (Op × Address)) (a : Address)
+    (h_registry : RegistryWellIndexed s)
+    (h_ops : ∀ p ∈ σ, UnlockLedgerTimedOp p.1) :
+    holderValueAt R (execTrace s σ) a ≤ holderValueAt R s a := by
+  induction σ generalizing s with
+  | nil => exact Nat.le_refl _
+  | cons p σ ih =>
+    obtain ⟨op, caller⟩ := p
+    have hop : UnlockLedgerTimedOp op := h_ops (op, caller) List.mem_cons_self
+    have htail_ops : ∀ q ∈ σ, UnlockLedgerTimedOp q.1 :=
+      fun q hq => h_ops q (List.mem_cons_of_mem _ hq)
+    simp only [execTrace]
+    cases hstep : step s op caller with
+    | none =>
+        exact ih s h_registry htail_ops
+    | some s1 =>
+        have h_step_bound : holderValueAt R s1 a ≤ holderValueAt R s a := by
+          rcases hop with h_standard | ⟨amount, rfl⟩ | ⟨requestId, rfl⟩
+          · rcases h_standard with h_standard | ⟨dt, rfl⟩
+            · rcases h_standard with ⟨amount, rfl⟩ | ⟨requestId, rfl⟩
+              · by_cases hsame : caller = a
+                · subst caller
+                  exact Nat.le_of_eq
+                    (requestUnlock_holderValueAt_fixedRate R s amount a s1 hstep h_registry.1)
+                · exact Nat.le_of_eq
+                    (requestUnlock_holderValueAt_fixedRate_frame R s amount caller s1 a hstep
+                      h_registry.1)
+              · exact Nat.le_of_eq
+                  (standardClaim_holderValueAt_fixedRate_any R s requestId caller s1 a hstep
+                    h_registry)
+            · exact Nat.le_of_eq (tick_holderValueAt_frame_any R s dt caller s1 a hstep)
+          · by_cases hsame : caller = a
+            · subst caller
+              exact Nat.le_of_eq
+                (flexibleRequestUnlock_holderValueAt_fixedRate R s amount a s1 hstep h_registry)
+            · exact Nat.le_of_eq
+                (flexibleRequestUnlock_holderValueAt_fixedRate_frame R s amount caller s1 a hstep
+                  h_registry hsame)
+          · exact flexibleClaim_holderValueAt_nonincreasing_any R s requestId caller s1 a hstep
+              h_registry
+        have h_registry1 : RegistryWellIndexed s1 :=
+          registryWellIndexed_step s op caller s1 h_registry hstep
+        exact Nat.le_trans (ih s1 h_registry1 htail_ops) h_step_bound
 
 /-- Non-vacuity witness for the fee-bearing branch: a 1000 apxUSD flexible
 request, cooldown wait, and claim leaves 999 apxUSD because the 10 bps
