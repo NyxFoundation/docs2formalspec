@@ -2014,13 +2014,22 @@ theorem apyUSDLedgerConsistent_finiteApyUSDValueAt_bound
   rw [← hsum]
   exact finiteApyUSDValueAt_le_redeemAssets_sum R s holders
 
+def apyUSDValueRoundingGapWitness : State :=
+  { (default : State) with
+      apyUSDBal := fun a => if a = 0 then 1 else if a = 1 then 1 else 0
+      totalSupply_apyUSD := 2 }
+
+theorem apyUSDValueRoundingGapWitness_consistent :
+    ApyUSDLedgerConsistent apyUSDValueRoundingGapWitness := by
+  refine ⟨[0, 1], by decide, ?_, ?_⟩
+  · intro a ha
+    by_cases h0 : a = 0 <;> by_cases h1 : a = 1 <;>
+      simp [apyUSDValueRoundingGapWitness, h0, h1] at ha ⊢
+  · decide
+
 theorem finiteApyUSDValueAt_rounding_gap :
-    let s : State :=
-      { (default : State) with
-          apyUSDBal := fun a => if a = 0 then 1 else if a = 1 then 1 else 0
-          totalSupply_apyUSD := 2 }
-    finiteApyUSDValueAt (ray / 2) s [0, 1] = 0 ∧
-      redeemAssets s.totalSupply_apyUSD (ray / 2) = 1 := by
+    finiteApyUSDValueAt (ray / 2) apyUSDValueRoundingGapWitness [0, 1] = 0 ∧
+      redeemAssets apyUSDValueRoundingGapWitness.totalSupply_apyUSD (ray / 2) = 1 := by
   decide
 
 /-- Splitting a share balance across a burn loses at most dust, never gains:

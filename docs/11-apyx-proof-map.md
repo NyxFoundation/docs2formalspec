@@ -177,7 +177,9 @@ floor-rounding layer is explicit: `finiteApyUSDValueAt` and
 `finiteApyUSDValueAt_le_redeemAssets_sum` give the aggregate upper bound,
 `apyUSDLedgerConsistent_finiteApyUSDValueAt_bound` connects it to the supply
 identity, and `finiteApyUSDValueAt_rounding_gap` shows why the bound is not an
-equality theorem.
+equality theorem. `apyUSDValueRoundingGapWitness_consistent` proves that this
+strict gap occurs in a state satisfying the finite ledger relation, not only
+in an invalid arbitrary state.
 
 ### 5.2 Registry consistency
 
