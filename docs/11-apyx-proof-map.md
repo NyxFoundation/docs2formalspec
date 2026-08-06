@@ -312,6 +312,18 @@ reachable state + precondition + fairness/time assumptions
 
 Do not infer liveness from a safety invariant. A system can remain safe while permanently refusing a valid withdrawal. Conversely, a progress argument does not show that the value released during progress is correct.
 
+The current Lean source keeps the two families separate. Capability and blast-
+radius claims live in `outputs/apyx/BlastRadius.lean`, including `admin_frame`,
+`admin_cannot_touch_balances`, `no_role_transfers_user_funds`,
+`no_role_burns_user_shares`, and their trace-level counterparts. Time- and
+progress-dependent examples live in `outputs/apyx/Apyx.lean` and
+`outputs/apyx/BlastRadius.lean`, including
+`redemption_cycle_closes_after_cooldown`,
+`flexible_fee_schedule_is_reachable`, and `timelock_wrapper_is_live`.
+These theorem names are deliberately not presented as unconditional deployed
+protocol guarantees: their source statements carry the relevant caller,
+state, trace, time, and funding assumptions.
+
 ## 10. Keep implementation fidelity at the hand-off boundary
 
 Implementation fidelity does not need to be part of the core Lean model.
