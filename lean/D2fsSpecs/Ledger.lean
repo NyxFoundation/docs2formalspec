@@ -65,9 +65,9 @@ function for the five simplest `step` branches:
 covers `depositUSDC`, `mintApxUSD`, `lockApxUSD`, `requestUnlock` and
 `flexibleRequestUnlock`, including the plumbing that discharges each burning
 branch's underflow guard into the burn-side bound. Everything else —
-`transferApxUSD`, the claim re-mints, `redeemApxUSD`, `executeRFQRedemption`,
-`poolRedeem`, and the frame proofs for the non-writing branches — remains
-open, so `ApxUSDLedgerConsistent` is still an *initialization-plus-fragment*
+the claim re-mints, `redeemApxUSD`, `executeRFQRedemption`, `poolRedeem`, and
+the frame proofs for the non-writing branches — remains open, so
+`ApxUSDLedgerConsistent` is still an *initialization-plus-fragment*
 invariant with a named gap, matching how `Invariant.lean` keeps
 `WellFormed s'` an explicit hypothesis instead of pretending to derive it.
 
@@ -191,8 +191,10 @@ the two primitive writers, applied in isolation:
   hypothesis must be discharged by the caller.
 
 Still uncovered, which is why no *universal* `step`-preservation theorem is
-stated: `transferApxUSD` (a two-address update needing a paired sum lemma),
-the claim re-mints, `executeRFQRedemption`, and `poolRedeem`. The five
+stated: the claim re-mints, `redeemApxUSD`, `executeRFQRedemption`, and
+`poolRedeem`. The primitive `transferApxUSD` is now covered by
+`apxUSDLedgerConsistent_transfer`, with an explicit distinct-address
+hypothesis because the current writer mishandles self-transfer. The five
 simplest `step` branches — the deposit-path mints and the three
 guard-protected single-burn paths, `requestUnlockStep` included — are now
 composed per branch in `apxUSDLedgerConsistent_basic_step` below (the
@@ -361,6 +363,143 @@ theorem apxUSDLedgerConsistent_burn (s : State) (fromAddr : Address) (amount : N
           holders = sumOver s.apxUSDBal holders :=
         sumOver_congr (fun b _ => by simp)
       rw [hcong]
+      omega
+
+/-! ## Primitive transfer slice
+
+`transferApxUSD` is a state writer used by the protocol model's transfer
+surface, but it is not currently one of the constructors of `Op`. It therefore
+gets its own theorem rather than being smuggled into the public-step theorem.
+The transfer preserves supply and moves one balance from `fromAddr` to
+`toAddr`; the proof below covers both an existing receiver and a fresh one.
+The balance bound is required because the writer uses truncated `Nat`
+subtraction. The distinct-address hypothesis is intentional: the current
+primitive checks `a = fromAddr` before `a = toAddr`, so a self-transfer is
+modelled as a burn rather than an ERC-20 no-op. That is a model defect to fix
+before claiming self-transfer semantics. -/
+
+private theorem sumOver_update_transfer_mem (f : Address → Nat)
+    (fromAddr toAddr : Address) (amount : Nat)
+    (hle : amount ≤ f fromAddr) (hne : fromAddr ≠ toAddr) :
+    ∀ {l : List Address}, l.Pairwise (· ≠ ·) → fromAddr ∈ l → toAddr ∈ l →
+      sumOver (fun a => if a = fromAddr then f a - amount
+        else if a = toAddr then f a + amount else f a) l = sumOver f l := by
+  intro l hnd hfrom hto
+  let fsub : Address → Nat := fun a => if a = fromAddr then f a - amount else f a
+  have hsub := sumOver_update_sub_mem f fromAddr amount hle hnd hfrom
+  have hadd := sumOver_update_add_mem fsub toAddr amount hnd hto
+  have hpoint : ∀ a ∈ l,
+      (if a = fromAddr then f a - amount
+        else if a = toAddr then f a + amount else f a) =
+      (if a = toAddr then fsub a + amount else fsub a) := by
+    intro a ha
+    by_cases haf : a = fromAddr
+    · subst a
+      simp [fsub, hne]
+    · by_cases hat : a = toAddr
+      · subst a
+        simp [fsub, Ne.symm hne]
+      · simp [fsub, haf, hat]
+  have hsum := sumOver_congr hpoint
+  rw [hsum]
+  exact hadd.trans hsub
+
+/-- Regression fact for the transfer model: because the `fromAddr` test comes
+first, a self-transfer subtracts the amount instead of being a no-op. -/
+theorem transferApxUSD_self_balance (s : State) (a : Address) (amount : Nat) :
+    (transferApxUSD s a a amount).apxUSDBal a = s.apxUSDBal a - amount := by
+  simp [transferApxUSD]
+
+/-- **Primitive transfer preserves the finite ledger identity.** The pre-state
+must satisfy `amount ≤ s.apxUSDBal fromAddr`, because `transferApxUSD` uses
+truncated subtraction, and the addresses must be distinct. The latter exposes
+a model defect: the current primitive's ordered condition makes self-transfer
+burn the amount instead of leaving balances unchanged. The theorem is
+deliberately about the primitive writer: the current `Op` type has no public
+transfer constructor. -/
+theorem apxUSDLedgerConsistent_transfer (s : State) (fromAddr toAddr : Address)
+    (amount : Nat) (hne : fromAddr ≠ toAddr)
+    (hle : amount ≤ s.apxUSDBal fromAddr)
+    (h : ApxUSDLedgerConsistent s) :
+    ApxUSDLedgerConsistent (transferApxUSD s fromAddr toAddr amount) := by
+  obtain ⟨holders, hnd, hcov, hsum⟩ := h
+  by_cases hzero : amount = 0
+  · subst amount
+    refine ⟨holders, hnd, ?_, ?_⟩
+    · intro a ha
+      exact hcov a (by simpa [transferApxUSD] using ha)
+    · simpa [transferApxUSD] using hsum
+  by_cases hto : toAddr ∈ holders
+  · by_cases hself : fromAddr = toAddr
+    · exact False.elim (hne hself)
+    · have hfrom : fromAddr ∈ holders := by
+        by_cases hm : fromAddr ∈ holders
+        · exact hm
+        · have hz : s.apxUSDBal fromAddr = 0 := by
+            by_cases hz : s.apxUSDBal fromAddr = 0
+            · exact hz
+            · exact False.elim (hm (hcov fromAddr hz))
+          omega
+      refine ⟨holders, hnd, ?_, ?_⟩
+      · intro a ha
+        by_cases haf : a = fromAddr
+        · subst a
+          refine hcov fromAddr (fun hz => ha ?_)
+          simp [transferApxUSD, hz]
+        · by_cases hat : a = toAddr
+          · subst a
+            exact hto
+          · exact hcov a (by simpa [transferApxUSD, haf, hat] using ha)
+      · show sumOver (fun a => if a = fromAddr then s.apxUSDBal a - amount
+            else if a = toAddr then s.apxUSDBal a + amount else s.apxUSDBal a) holders =
+          s.totalSupply_apxUSD
+        exact (sumOver_update_transfer_mem s.apxUSDBal fromAddr toAddr amount hle
+          hne hnd hfrom hto).trans hsum
+  · have htoZero : s.apxUSDBal toAddr = 0 := by
+      by_cases hz : s.apxUSDBal toAddr = 0
+      · exact hz
+      · exact False.elim (hto (hcov toAddr hz))
+    have hfrom : fromAddr ∈ holders := by
+      by_cases hm : fromAddr ∈ holders
+      · exact hm
+      · have hz : s.apxUSDBal fromAddr = 0 := by
+          by_cases hz : s.apxUSDBal fromAddr = 0
+          · exact hz
+          · exact False.elim (hm (hcov fromAddr hz))
+        omega
+    refine ⟨toAddr :: holders, ?_, ?_, ?_⟩
+    · refine List.Pairwise.cons ?_ hnd
+      intro b hb heq
+      subst b
+      exact hto hb
+    · intro a ha
+      by_cases hat : a = toAddr
+      · exact List.mem_cons.mpr (Or.inl hat)
+      · by_cases haf : a = fromAddr
+        · subst a
+          exact List.mem_cons.mpr (Or.inr (hfrom))
+        · exact List.mem_cons.mpr (Or.inr (hcov a
+            (by simpa [transferApxUSD, haf, hat] using ha)))
+    · show sumOver (fun a => if a = fromAddr then s.apxUSDBal a - amount
+          else if a = toAddr then s.apxUSDBal a + amount else s.apxUSDBal a)
+          (toAddr :: holders) = s.totalSupply_apxUSD
+      have htail : sumOver (fun a => if a = fromAddr then s.apxUSDBal a - amount
+          else if a = toAddr then s.apxUSDBal a + amount else s.apxUSDBal a) holders =
+          sumOver (fun a => if a = fromAddr then s.apxUSDBal a - amount else s.apxUSDBal a)
+            holders := by
+        apply sumOver_congr
+        intro b hb
+        have hbt : b ≠ toAddr := by
+          intro hbeq
+          apply hto
+          simpa [hbeq] using hb
+        by_cases hbf : b = fromAddr
+        · simp [hbf]
+        · simp [hbf, hbt]
+      have hsub := sumOver_update_sub_mem s.apxUSDBal fromAddr amount hle hnd hfrom
+      simp only [sumOver_cons]
+      rw [htail]
+      simp [Ne.symm hne, htoZero]
       omega
 
 /-! ## Scoped public-step slice: `apxUSDLedgerConsistent_basic_step`
