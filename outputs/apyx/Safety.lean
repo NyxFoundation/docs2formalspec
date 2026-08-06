@@ -1495,6 +1495,30 @@ theorem requestUnlock_backs_claim_by_burn (s : State) (amount : Nat) (caller : A
     rw [hs', requestUnlockStep_apxUSDBal]; simp [burnApxUSD]
   omega
 
+/-- Stronger registry form of `requestUnlock_backs_claim_by_burn`: the tracked
+position is either a top-up of the caller's existing position by exactly the
+burned `amount`, or a fresh position whose amount is exactly `amount`. -/
+theorem requestUnlock_backs_claim_by_burn_exact (s : State) (amount : Nat)
+    (caller : Address) (s' : State)
+    (h_step : step s (Op.requestUnlock amount) caller = some s') :
+    s.apxUSDBal caller = s'.apxUSDBal caller + amount ∧
+    ((∃ id oldAmount oldEnd,
+        s.unlockRequestId caller = some id ∧
+        s.unlockRequests id = some (caller, oldAmount, oldEnd) ∧
+        s'.unlockRequestId caller = some id ∧
+        s'.unlockRequests id =
+          some (caller, oldAmount + amount, s.now + cooldownPeriod)) ∨
+      (s'.unlockRequestId caller = some s.nextUnlockId ∧
+        s'.unlockRequests s.nextUnlockId =
+          some (caller, amount, s.now + cooldownPeriod))) := by
+  obtain ⟨-, hle, hs'⟩ := inv_requestUnlock s amount caller s' h_step
+  refine ⟨?_, ?_⟩
+  · rw [hs', requestUnlockStep_apxUSDBal]
+    simp [burnApxUSD]
+    omega
+  · rw [hs']
+    exact requestUnlockStep_exact_position s caller amount
+
 /-! ## S9 — trace-level no-free-money for the value-preserving operation fragment
 
 This lifts the single-step `caller_net_nonpositive` (S6) to arbitrary-length traces, for the

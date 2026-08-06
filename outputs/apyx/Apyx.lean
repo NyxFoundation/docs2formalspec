@@ -580,6 +580,44 @@ theorem requestUnlockStep_caller_position (s : State) (caller amount : Nat) :
   · exact ⟨(burnApxUSD s caller amount).nextUnlockId, amount,
       by simp [createStandardUnlock], by simp [createStandardUnlock, burnApxUSD]⟩
 
+/-- The amount recorded by a successful standard request is explicit: a fresh
+request records exactly the burned `amount`, while a top-up records the old
+position amount plus `amount`. The disjunction is the model-level distinction
+between those two registry transitions. -/
+theorem requestUnlockStep_exact_position (s : State) (caller amount : Nat) :
+    (∃ id oldAmount oldEnd,
+      s.unlockRequestId caller = some id ∧
+      s.unlockRequests id = some (caller, oldAmount, oldEnd) ∧
+      (requestUnlockStep s caller amount).unlockRequestId caller = some id ∧
+      (requestUnlockStep s caller amount).unlockRequests id =
+        some (caller, oldAmount + amount, s.now + cooldownPeriod)) ∨
+    ((requestUnlockStep s caller amount).unlockRequestId caller = some s.nextUnlockId ∧
+      (requestUnlockStep s caller amount).unlockRequests s.nextUnlockId =
+        some (caller, amount, s.now + cooldownPeriod)) := by
+  unfold requestUnlockStep
+  split
+  · rename_i id hId
+    split
+    · rename_i owner oldAmount oldEnd hReq
+      by_cases howner : owner = caller
+      · left
+        subst owner
+        have hId' : s.unlockRequestId caller = some id := by
+          simpa [burnApxUSD] using hId
+        have hReq' : s.unlockRequests id = some (caller, oldAmount, oldEnd) := by
+          simpa [burnApxUSD] using hReq
+        refine ⟨id, oldAmount, oldEnd, ?_, ?_, ?_, ?_⟩
+        · exact hId'
+        · exact hReq'
+        · simp [updateStandardUnlock, burnApxUSD, hId', hReq']
+        · simp [updateStandardUnlock, burnApxUSD, hReq']
+      · right
+        simp [createStandardUnlock, burnApxUSD, howner]
+    · right
+      simp [createStandardUnlock, burnApxUSD]
+  · right
+    simp [createStandardUnlock, burnApxUSD]
+
 /-- When the caller has no pending standard position, `requestUnlockStep` takes the
 create branch and coincides exactly with the fresh-position `createStandardUnlock` path —
 letting the pre-existing "fresh registry allocation at the counter" proofs go through

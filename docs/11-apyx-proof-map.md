@@ -551,6 +551,13 @@ This focus is especially useful for:
 - frame conditions and blast radius;
 - passive-holder protection.
 
+The standard redemption request is one concrete instance of this pattern:
+`requestUnlock_backs_claim_by_burn_exact` proves the caller's exact balance
+delta and splits the registry postcondition into the fresh-position and
+top-up cases. The weaker existential theorem
+`requestUnlock_backs_claim_by_burn` remains as a compatibility projection,
+but the proof-map claim now points to the exact theorem.
+
 The global layer is where the protocol-level claims belong:
 
 - solvency;
