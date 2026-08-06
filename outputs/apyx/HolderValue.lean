@@ -796,6 +796,183 @@ theorem outstandingApxUSD_of_projections_eq {s t : State}
   rw [hsupply, standardUnlockTotal_of_projections_eq hnext hstandard,
     flexibleUnlockTotal_of_projections_eq hnext hflexible]
 
+/-! ## Unlock-token amount consistency
+
+`RegistryWellIndexed` relates owners and ids, but it intentionally does not
+relate a pending registry amount to the amount carried by the corresponding
+unlock token. The latter is a separate accounting identity: without it,
+`outstandingApxUSD` can count one face amount while a claim mints another.
+This predicate closes that model-local gap without pretending that the fee
+wallet or the USDC supply is already represented in `State`. -/
+
+def UnlockTokenLedgerConsistent (s : State) : Prop :=
+  ∀ id, id < s.nextUnlockId →
+    match s.unlockRequests id, s.flexibleUnlockRequests id with
+    | some (owner, amount, _), none =>
+        s.unlockTokenOwner id = some owner ∧ s.unlockTokenAmount id = amount
+    | none, some (owner, amount, _, _) =>
+        s.unlockTokenOwner id = some owner ∧ s.unlockTokenAmount id = amount
+    | none, none =>
+        s.unlockTokenOwner id = none ∧ s.unlockTokenAmount id = 0
+    | some _, some _ => False
+
+theorem unlockTokenLedgerConsistent_default :
+    UnlockTokenLedgerConsistent (default : State) := by
+  unfold UnlockTokenLedgerConsistent
+  intro id hid
+  simp [default] at hid
+
+theorem unlockTokenLedgerConsistent_createStandardUnlock
+    (s : State) (owner : Address) (amount : Nat)
+    (hregistry : RegistryWellIndexed s)
+    (h : UnlockTokenLedgerConsistent s) :
+    UnlockTokenLedgerConsistent (createStandardUnlock s owner amount) := by
+  intro id hid
+  have hid_le : id ≤ s.nextUnlockId := by
+    simp [createStandardUnlock] at hid
+    omega
+  rcases Nat.lt_or_eq_of_le hid_le with hid_old | rfl
+  · have hne : id ≠ s.nextUnlockId := by omega
+    simpa [createStandardUnlock, hne] using h id hid_old
+  · have hflex : s.flexibleUnlockRequests s.nextUnlockId = none :=
+      hregistry.1.2 s.nextUnlockId (Nat.le_refl _)
+    simp [createStandardUnlock, hflex]
+
+theorem unlockTokenLedgerConsistent_createFlexibleUnlock
+    (s : State) (owner : Address) (amount : Nat)
+    (hregistry : RegistryWellIndexed s)
+    (h : UnlockTokenLedgerConsistent s) :
+    UnlockTokenLedgerConsistent (createFlexibleUnlock s owner amount) := by
+  intro id hid
+  have hid_le : id ≤ s.nextUnlockId := by
+    simp [createFlexibleUnlock] at hid
+    omega
+  rcases Nat.lt_or_eq_of_le hid_le with hid_old | rfl
+  · have hne : id ≠ s.nextUnlockId := by omega
+    simpa [createFlexibleUnlock, hne] using h id hid_old
+  · have hstd : s.unlockRequests s.nextUnlockId = none :=
+      hregistry.1.1 s.nextUnlockId (Nat.le_refl _)
+    simp [createFlexibleUnlock, hstd]
+
+theorem unlockTokenLedgerConsistent_updateStandardUnlock
+    (s : State) (id : Nat) (owner : Address) (oldAmount oldEnd addAmount : Nat)
+    (hreq : s.unlockRequests id = some (owner, oldAmount, oldEnd))
+    (h : UnlockTokenLedgerConsistent s) :
+    UnlockTokenLedgerConsistent (updateStandardUnlock s id owner addAmount) := by
+  intro i hi
+  have hnext : (updateStandardUnlock s id owner addAmount).nextUnlockId = s.nextUnlockId := by
+    simp [updateStandardUnlock, hreq]
+  have hi' : i < s.nextUnlockId := by
+    rw [hnext] at hi
+    exact hi
+  have hpre := h i hi'
+  by_cases heq : i = id
+  · subst i
+    cases hflex : s.flexibleUnlockRequests id with
+    | none =>
+        have htoken : s.unlockTokenOwner id = some owner ∧
+            s.unlockTokenAmount id = oldAmount := by
+          simpa [hreq, hflex] using hpre
+        simp [updateStandardUnlock, hreq, hflex, htoken.1]
+    | some entry =>
+        simp [hreq, hflex] at hpre
+  · simpa [updateStandardUnlock, hreq, heq] using hpre
+
+theorem unlockTokenLedgerConsistent_retireStandardUnlock
+    (s : State) (id : Nat) (owner : Address) (amount cooldownEnd : Nat)
+    (hreq : s.unlockRequests id = some (owner, amount, cooldownEnd))
+    (h : UnlockTokenLedgerConsistent s) :
+    UnlockTokenLedgerConsistent (retireStandardUnlock s id owner) := by
+  intro i hi
+  have hpre := h i hi
+  by_cases heq : i = id
+  · subst i
+    cases hflex : s.flexibleUnlockRequests id with
+    | none =>
+        simp [retireStandardUnlock, burnUnlockNFT, hflex]
+    | some entry =>
+        simp [hreq, hflex] at hpre
+  · simpa [retireStandardUnlock, burnUnlockNFT, heq] using hpre
+
+theorem unlockTokenLedgerConsistent_retireFlexibleUnlock
+    (s : State) (id : Nat)
+    (hreq : s.flexibleUnlockRequests id = some (owner, amount, requestTime, cooldownEnd))
+    (h : UnlockTokenLedgerConsistent s) :
+    UnlockTokenLedgerConsistent (retireFlexibleUnlock s id) := by
+  intro i hi
+  have hpre := h i hi
+  by_cases heq : i = id
+  · subst i
+    cases hstd : s.unlockRequests id with
+    | none =>
+        simp [retireFlexibleUnlock, burnUnlockNFT, hstd]
+    | some entry =>
+        simp [hstd, hreq] at hpre
+  · simpa [retireFlexibleUnlock, burnUnlockNFT, heq] using hpre
+
+/-! ## The missing USDC ledger, stated without inventing a State field
+
+The model has `usdcBal` and `usdcReserve`, but no finite holder support and no
+USDC total-supply field. The following relation is therefore parameterized by
+an externally supplied holder list and total supply. It is an accounting
+interface, not a reachable-state invariant of the current `State`. The two
+arithmetic lemmas below show exactly what a `depositUSDC` debit and a reserve
+payout must preserve once the missing support and total-supply facts are
+provided. -/
+
+def UsdcLedgerConsistent (s : State) (holders : List Address) (totalSupply : Nat) : Prop :=
+  holders.Pairwise (· ≠ ·) ∧
+  (∀ a, s.usdcBal a ≠ 0 → a ∈ holders) ∧
+  sumOver s.usdcBal holders + s.usdcReserve = totalSupply
+
+theorem usdcLedgerConsistent_default :
+    UsdcLedgerConsistent (default : State) [] 0 := by
+  simp [UsdcLedgerConsistent, default, sumOver]
+
+theorem usdcLedgerConsistent_debit_to_reserve
+    (s s' : State) (holders : List Address) (totalSupply : Nat)
+    (hledger : UsdcLedgerConsistent s holders totalSupply)
+    (caller : Address) (amount : Nat)
+    (hmem : caller ∈ holders) (hle : amount ≤ s.usdcBal caller)
+    (hbal : s'.usdcBal = fun a => if a = caller then s.usdcBal a - amount else s.usdcBal a)
+    (hreserve : s'.usdcReserve = s.usdcReserve + amount) :
+    UsdcLedgerConsistent s' holders totalSupply := by
+  obtain ⟨hnd, hcov, hsum⟩ := hledger
+  refine ⟨hnd, ?_, ?_⟩
+  · intro a ha
+    rw [hbal] at ha
+    by_cases hac : a = caller
+    · simpa [hac] using hmem
+    · apply hcov a
+      intro hzero
+      apply ha
+      simp [hac, hzero]
+  · rw [hbal, hreserve]
+    have hdelta := sumOver_update_sub_mem s.usdcBal caller amount hle hnd hmem
+    omega
+
+theorem usdcLedgerConsistent_reserve_payout
+    (s s' : State) (holders : List Address) (totalSupply : Nat)
+    (hledger : UsdcLedgerConsistent s holders totalSupply)
+    (receiver : Address) (amount : Nat)
+    (hmem : receiver ∈ holders) (hle : amount ≤ s.usdcReserve)
+    (hbal : s'.usdcBal = fun a => if a = receiver then s.usdcBal a + amount else s.usdcBal a)
+    (hreserve : s'.usdcReserve = s.usdcReserve - amount) :
+    UsdcLedgerConsistent s' holders totalSupply := by
+  obtain ⟨hnd, hcov, hsum⟩ := hledger
+  refine ⟨hnd, ?_, ?_⟩
+  · intro a ha
+    rw [hbal] at ha
+    by_cases hac : a = receiver
+    · simpa [hac] using hmem
+    · apply hcov a
+      intro hzero
+      apply ha
+      simp [hac, hzero]
+  · rw [hbal, hreserve]
+    have hdelta := sumOver_update_add_mem s.usdcBal receiver amount hnd hmem
+    omega
+
 /-- Pulling the live vest adds exactly the newly realized amount to custody;
 the circulating and pending obligation ledger is framed. -/
 theorem apxUSDFlow_pullVestedYield (s : State) :

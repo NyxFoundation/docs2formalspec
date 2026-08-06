@@ -713,4 +713,28 @@ theorem apxUSDFlow_standard_request_trace_witness :
     · exact ApxUSDFlowTrace.nil _
   simpa [execTrace, step] using h
 
+/-! ## R16 — the parameterized USDC ledger is executable
+
+The USDC relation is intentionally parameterized because the current model
+does not contain a total-supply field. This witness supplies a finite holder
+support and checks the debit-to-reserve arithmetic boundary. -/
+
+def usdcLedger0 : State :=
+  { (default : State) with
+      usdcBal := fun a => if a = 1 then 100 else 0 }
+
+def usdcLedgerDebit : State :=
+  { usdcLedger0 with
+      usdcBal := fun a => if a = 1 then 50 else 0
+      usdcReserve := 50 }
+
+example : UsdcLedgerConsistent usdcLedger0 [1] 100 := by
+  simp [UsdcLedgerConsistent, usdcLedger0, default, sumOver]
+
+example : UsdcLedgerConsistent usdcLedgerDebit [1] 100 := by
+  refine usdcLedgerConsistent_debit_to_reserve usdcLedger0 usdcLedgerDebit [1] 100
+    (by simp [UsdcLedgerConsistent, usdcLedger0, default, sumOver]) 1 50 (by simp) (by simp [usdcLedger0]) ?_ rfl
+  funext a
+  by_cases h : a = 1 <;> simp [usdcLedger0, usdcLedgerDebit, h]
+
 end Apyx

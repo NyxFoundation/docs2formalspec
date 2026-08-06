@@ -216,6 +216,24 @@ protocol-wide asset-conservation theorem: the current state has neither a fee
 wallet balance nor explicit unlock-token custody, so adding them to
 `ProtocolInv` would be an unsupported model claim.
 
+The receipt amount is now tied to that liability ledger by
+`UnlockTokenLedgerConsistent`. It states, for every allocated id, that the
+standard or flexible registry entry, `unlockTokenOwner`, and
+`unlockTokenAmount` describe the same owner and face amount, or that an empty
+slot has no receipt amount. `unlockTokenLedgerConsistent_default` and the
+create/update/retire lemmas prove the lifecycle preservation boundary. This
+relation is kept separate from `ProtocolInv` until its public-step coverage
+is composed with every request and claim branch.
+
+The missing USDC side is made explicit without adding an unsupported field to
+`State`: `UsdcLedgerConsistent s holders totalSupply` takes the finite holder
+support and total USDC supply as external accounting parameters. Its default
+witness and `usdcLedgerConsistent_debit_to_reserve` /
+`usdcLedgerConsistent_reserve_payout` lemmas show the exact arithmetic needed
+for deposits and reserve payouts. These are interface lemmas, not yet a
+reachable-state USDC invariant; the holder support, total supply, fee wallet,
+and decimal scaling still have to come from the deployment/SPECA model.
+
 The next internal boundary is `apxUSDFlow`: vault custody plus
 `outstandingApxUSD`. Projection lemmas
 `standardUnlockTotal_of_projections_eq`,
