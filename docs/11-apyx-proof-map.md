@@ -149,6 +149,15 @@ transfer layer covers both cases: `apxUSDLedgerConsistent_transfer` handles
 distinct addresses under the balance bound, while `transferApxUSD_self` and
 `apxUSDLedgerConsistent_transfer_self` make self-transfer an explicit no-op.
 
+The analogous apyUSD boundary is `ApyUSDLedgerConsistent` in
+`outputs/apyx/HolderValue.lean`. Its default instance is proved by
+`apyUSDLedgerConsistent_default`; `finitePoolValueAt`, `finitePoolRateDelta`,
+and `finitePoolValueAt_rateDelta` provide the finite aggregate needed to sum
+holder-level rate revaluations. No step-preservation theorem is claimed yet:
+making this relation an inductive protocol invariant would be a deliberate
+state/spec strengthening, not a consequence of the current arbitrary balance
+functions.
+
 ### 5.2 Registry consistency
 
 For pending requests, positions, or claims, specify:
@@ -244,6 +253,10 @@ bound from signed rate revaluation, and
 `holderValue_rateAware_trace_rateAdjusted` sums that revaluation over a whole
 trace. This is the current model's honest bridge toward a pool-level ledger;
 it does not yet claim that the revaluation sum is protocol-wide conservation.
+The optional finite-support boundary is `ApyUSDLedgerConsistent`;
+`finitePoolValueAt_rateDelta` shows how the holder-level accounting aggregates
+over an explicit list, without asserting that the current state representation
+already covers the whole pool.
 
 ### 5.3 Clock consistency
 

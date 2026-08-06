@@ -1,5 +1,6 @@
 import D2fsSpecs.Safety
 import D2fsSpecs.Registry
+import D2fsSpecs.Ledger
 
 /-!
 # A complete, signed, per-holder value ledger (`docs/06` §7.3 E3)
@@ -34,6 +35,26 @@ design (§8.1: aggregate ledger, no per-position collateral).
 -/
 
 namespace Apyx
+
+/-! ## Optional finite apyUSD accounting boundary
+
+The core `State` stores apyUSD balances as an arbitrary address function, so
+the holder-value theorems above do not silently pretend that
+`totalSupply_apyUSD` is the sum of all balances. The predicate below is the
+explicit finite-support relation needed before a pool-wide apyUSD appreciation
+theorem can be stated. -/
+
+def ApyUSDLedgerConsistent (s : State) : Prop :=
+  ∃ holders : List Address,
+    holders.Pairwise (· ≠ ·) ∧
+    (∀ a, s.apyUSDBal a ≠ 0 → a ∈ holders) ∧
+    sumOver s.apyUSDBal holders = s.totalSupply_apyUSD
+
+theorem apyUSDLedgerConsistent_default :
+    ApyUSDLedgerConsistent (default : State) := by
+  refine ⟨[], List.Pairwise.nil, ?_, rfl⟩
+  intro a hne
+  exact absurd rfl hne
 
 /-! ## The positions the old measure dropped -/
 
@@ -580,6 +601,26 @@ theorem holderValueAt_rateDelta (s : State) (a : Address) (R₁ R₂ : Nat) :
       holderRateDelta s a R₁ R₂ := by
   unfold holderValueAt holderRateDelta valueAt
   omega
+
+/-! A finite list makes the holder-level rate accounting aggregable without
+claiming that the current unbounded `State` already has such a pool ledger. -/
+
+def finitePoolValueAt (R : Nat) (s : State) (holders : List Address) : Int :=
+  (holders.map (fun a => (holderValueAt R s a : Int))).sum
+
+def finitePoolRateDelta (s : State) (holders : List Address) (R₁ R₂ : Nat) : Int :=
+  (holders.map (fun a => holderRateDelta s a R₁ R₂)).sum
+
+theorem finitePoolValueAt_rateDelta (s : State) (holders : List Address)
+    (R₁ R₂ : Nat) :
+    finitePoolValueAt R₂ s holders - finitePoolValueAt R₁ s holders =
+      finitePoolRateDelta s holders R₁ R₂ := by
+  induction holders with
+  | nil => rfl
+  | cons a holders ih =>
+      simp only [finitePoolValueAt, finitePoolRateDelta, List.map_cons, List.sum_cons] at ih ⊢
+      have ha := holderValueAt_rateDelta s a R₁ R₂
+      omega
 
 /-- A standard request is neutral at any externally chosen pricing rate. This
 is the fixed-rate form used by timed traces: advancing the clock may change
