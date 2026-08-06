@@ -709,10 +709,17 @@ The price bound `redemptionValue ≤ ray` is **derivable**: `Apyx.lean`'s `redem
 shows only `updateRedemptionValue` and `catastrophicBackstop` write the field, and the latter is
 already excluded, so excluding the former lets the bound propagate from the initial state.
 
-The balance bound `∀ a, apxUSDBal a ≤ totalSupply_apxUSD` is **not** derivable, and this is a
-limit of the abstraction rather than a missing proof: with `apxUSDBal` a free function over an
-unbounded address type there is no `Σ` relating it to the supply, so a burn lowers the supply
-without any invariant keeping other holders' balances underneath it (§6.2).
+The balance bound `∀ a, apxUSDBal a ≤ totalSupply_apxUSD` is **not derivable from the
+aggregate predicates this module carries** (`WellFormed`/`Solvent` — the witness
+`wellFormed_solvent_not_imply_ledgerConsistent` in `Ledger.lean` pins this): with `apxUSDBal`
+a free function over an unbounded address type there is no `Σ` in *this* module relating it to
+the supply, so a burn lowers the supply without any invariant here keeping other holders'
+balances underneath it (§6.2). The finite-support identity `ApxUSDLedgerConsistent`
+(`Ledger.lean`), added after this passage was first written, *does* supply the missing `Σ`: it
+is preserved by every `Op` and implies this bound (`apxUSDLedgerConsistent_balance_le`), which
+is how `Invariant.lean`'s ops-only layer (`ProtocolReachOps`) discharges the `WellFormed`
+assumption entirely. The trace theorems in this module keep the assumed-`WellFormed` form
+because they predate that layer and remain valid as stated.
 
 `solvency_preserved_price_derived` below therefore **trades** one assumption for another rather
 than assuming strictly less: it needs the price bound only at the initial state, but excludes one

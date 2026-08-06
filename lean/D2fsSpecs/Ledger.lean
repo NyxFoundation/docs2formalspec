@@ -1166,4 +1166,32 @@ theorem wellFormed_solvent_not_imply_ledgerConsistent :
   fun h => ledgerGapWitness_not_ledgerConsistent
     (h ledgerGapWitness ledgerGapWitness_wellFormed ledgerGapWitness_solvent)
 
+/-! ## The implication that *does* hold: the ledger identity bounds every balance
+
+`wellFormed_solvent_not_imply_ledgerConsistent` above shows the aggregate
+predicates cannot recover the finite identity. The converse direction is
+strictly easier and *does* hold: if a duplicate-free holder list covers the
+support and sums to the supply, then no single address can exceed the supply —
+each summand of a `Nat` sum is at most the sum. This discharges the
+per-address half of `WellFormed` for any state carrying
+`ApxUSDLedgerConsistent`, which is exactly what lets `Invariant.lean` stop
+*assuming* post-state well-formedness (the stale claim that this bound is "not
+derivable" predates this module; it was true of `WellFormed`/`Solvent` alone
+and remains true for them, per the witness above). -/
+
+/-- The finite ledger identity implies the per-address balance bound: every
+address's balance is at most the total supply. Zero balances are bounded
+trivially; a nonzero balance belongs to the covering holder list, and one
+member of a `Nat` sum is at most the sum, which equals the supply. -/
+theorem apxUSDLedgerConsistent_balance_le (s : State)
+    (h : ApxUSDLedgerConsistent s) :
+    ∀ a, s.apxUSDBal a ≤ s.totalSupply_apxUSD := by
+  obtain ⟨holders, _hnd, hcov, hsum⟩ := h
+  intro a
+  by_cases hz : s.apxUSDBal a = 0
+  · rw [hz]; exact Nat.zero_le _
+  · have hmem := hcov a hz
+    have hle := sumOver_mem_le s.apxUSDBal hmem
+    omega
+
 end Apyx
