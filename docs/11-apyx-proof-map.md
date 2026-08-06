@@ -150,6 +150,21 @@ The model should distinguish:
 
 At minimum, prove monotonicity of time and the relationship between timestamps and permission checks.
 
+For the current Apyx model, these obligations are stated directly over the
+successful `step` relation in `lean/D2fsSpecs/Apyx.lean`:
+
+- `now_moves_only_by_tick`: every successful non-`tick` operation preserves
+  `State.now`;
+- `tick_advances_now_exactly`: a successful `Op.tick dt` produces
+  `now' = now + dt`;
+- `now_nondecreasing`: every successful operation is monotone in `now`.
+
+These are relational lemmas rather than a state-only `ClockConsistent`
+predicate. That is intentional: the clock is a property of a transition
+history, and the state field alone does not say how time was reached. The
+remaining time obligations are the deadline-specific permission lemmas and
+the trace theorems that use these three facts.
+
 ### 5.4 Numeric-domain consistency
 
 Choose the arithmetic domain for every quantity:
