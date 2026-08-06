@@ -715,7 +715,7 @@ Three `Nat` facts carry the two vault cases. Floor division is superadditive
 same rate, is at least what the position receives. The zero-share guard is load-bearing:
 without it `withdrawShares` returns 0 at a zero rate and the covering fact is false. -/
 
-private theorem div_add_div_le (x y d : Nat) : x / d + y / d ≤ (x + y) / d := by
+theorem div_add_div_le (x y d : Nat) : x / d + y / d ≤ (x + y) / d := by
   rcases Nat.eq_zero_or_pos d with h | h
   · subst h; simp
   · rw [Nat.le_div_iff_mul_le h, Nat.add_mul]
@@ -723,7 +723,7 @@ private theorem div_add_div_le (x y d : Nat) : x / d + y / d ≤ (x + y) / d := 
 
 /-- Splitting a share balance across a burn loses at most dust, never gains:
 the two pieces, each floor-priced, never exceed the whole floor-priced. -/
-private theorem redeemAssets_superadd (b c R : Nat) (h : c ≤ b) :
+theorem redeemAssets_superadd (b c R : Nat) (h : c ≤ b) :
     redeemAssets (b - c) R + redeemAssets c R ≤ redeemAssets b R := by
   unfold redeemAssets
   have hsplit := div_add_div_le ((b - c) * R) (c * R) ray
@@ -732,7 +732,7 @@ private theorem redeemAssets_superadd (b c R : Nat) (h : c ≤ b) :
 /-- The ceil-rounded share cost of a withdrawal, floor-priced back at the same rate,
 covers the withdrawn assets. Needs the cost to be nonzero — at `R = 0` the cost is 0
 and covers nothing, which is exactly the state the step's zero-share guard refuses. -/
-private theorem withdrawShares_covers (assets R : Nat)
+theorem withdrawShares_covers (assets R : Nat)
     (hW : withdrawShares assets R ≠ 0) :
     assets ≤ redeemAssets (withdrawShares assets R) R := by
   rcases Nat.eq_zero_or_pos R with hR | hR
@@ -749,7 +749,7 @@ private theorem withdrawShares_covers (assets R : Nat)
 /-- The composed fact the `withdraw` case needs: after burning the ceil-rounded share cost,
 the remaining share value plus the withdrawn `assets` never exceeds the original share
 value — at the one rate everything in the step is priced at. -/
-private theorem redeemAssets_sub_withdraw_le (b assets R : Nat)
+theorem redeemAssets_sub_withdraw_le (b assets R : Nat)
     (hle : withdrawShares assets R ≤ b)
     (hguard : ¬(0 < assets ∧ withdrawShares assets R = 0)) :
     redeemAssets (b - withdrawShares assets R) R + assets ≤ redeemAssets b R := by

@@ -6,6 +6,15 @@ namespace Apyx
 abbrev Address := Nat
 
 def ray : Nat := 10^27
+
+/-- The fixed-point scale is a positive natural number, so cancellation by
+`ray` is sound in the model's Nat arithmetic. -/
+theorem ray_pos : 0 < ray := Nat.pow_pos (by decide)
+
+/-- Scaling a whole-number amount by `ray` and dividing by the same scale is
+exact; this is the basic fixed-point bridge used by the price formulas. -/
+theorem mul_ray_div_ray (n : Nat) : n * ray / ray = n :=
+  Nat.mul_div_cancel n ray_pos
 def day : Nat := 86400
 def cooldownPeriod : Nat := 20 * day
 def minFlexibleClaim : Nat := 3 * day

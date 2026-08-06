@@ -176,6 +176,13 @@ Choose the arithmetic domain for every quantity:
 
 Rounding is part of the protocol behavior. A real-valued theorem does not automatically prove a fixed-point implementation.
 
+The current Lean model makes this boundary explicit: `ray_pos` and
+`mul_ray_div_ray` state the fixed-point scale and its exact cancellation in
+Nat arithmetic. `div_add_div_le`, `redeemAssets_superadd`,
+`withdrawShares_covers`, and `redeemAssets_sub_withdraw_le` state the floor and
+ceil rounding facts used by the vault holder-value proofs. No real-number
+approximation is used, so there is no hidden real-to-Nat bridge to trust.
+
 ## 6. Define reachability and prove an inductive invariant
 
 A safety theorem should apply to reachable states, not just to arbitrary states that happen to satisfy an invariant.
