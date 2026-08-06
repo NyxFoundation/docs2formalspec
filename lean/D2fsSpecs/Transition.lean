@@ -13,89 +13,192 @@ inductive StepResult
   | accepted (state : State) (events : List Event)
 ~~~
 
-**That exact shape cannot be represented faithfully without a model change.** The
-current model's transition function is `step : State → Op → Address → Option State`:
+This module defines that exact shape as a **transparent wrapper** over the
+existing `step : State → Op → Address → Option State`. No protocol semantics are
+touched, duplicated, or re-derived; the wrapper is definitionally a re-packaging
+of `step`'s result, and the round-trip lemmas below make that exact. Because the
+underlying model exposes less than the proof-map shape asks for, the two extra
+payloads are populated *honestly* rather than faithfully:
 
-* A rejected call returns `none`. The model does not record *why* it was rejected —
-  the guard that failed is not reified anywhere — so there is no `RevertReason` to
-  put in the `reverted` constructor. Inventing one here (e.g. re-running the guards
-  in a parallel decision procedure) would create a second, unverified copy of the
-  transition semantics whose agreement with `step` would itself need proof, and any
-  divergence would silently misattribute revert causes.
-* An accepted call returns only the successor state. Events are embedded in the
-  state (`State.eventLog`), and not every accepting branch of `step` appends to it,
-  so a per-step `List Event` delta is not derivable as a *specified* artifact of the
-  transition — it would be reverse-engineered from state diffs, not modeled.
-
-This module therefore defines only the **sound subset** of the proof-map shape: a
-`StepResult` that distinguishes `reverted` from `accepted`, defined *on top of* the
-existing `step` (no protocol semantics are touched), together with the equivalence
-lemmas that make the wrapper transparent and the theorem that a reverted result
-carries no successor state.
+* **Revert reasons.** A rejected call returns `none`; the model does not record
+  *which* guard failed. Reifying reasons here (e.g. by re-running the guards in a
+  parallel decision procedure) would create a second, unverified copy of the
+  transition semantics whose agreement with `step` would itself need proof, and
+  any divergence would silently misattribute revert causes. `RevertReason`
+  therefore has the single constructor `modelUnknown`, and every reverted result
+  carries it (`RevertReason.eq_modelUnknown`). **No theorem in this development
+  can distinguish** "rejected because paused" from "rejected because of
+  insufficient balance" until `step` itself returns the failed guard (e.g.
+  `Except RevertReason State`).
+* **Events.** `step` folds emitted events into the cumulative `State.eventLog`
+  (newest first, via `emitEvent`) instead of returning them as an output. The
+  wrapper's `accepted` payload is `eventDelta pre post`: the prefix of the
+  successor's log that extends beyond the pre-state's log *by length*. This is a
+  **syntactic diff of the cumulative log, not a modeled artifact of the
+  transition** — it is exactly the emitted events whenever the accepting branch
+  only prepends to the log (which every current branch does), but that adequacy
+  is *not proved here* and **no event-fidelity claim is made**. The theorems
+  below establish only (a) the state round-trip, (b) that the payload is
+  literally `eventDelta`, and (c) model-free list facts about `eventDelta`
+  (`eventDelta_self`, `eventDelta_emit`, `eventDelta_append_drop`).
 
 **Honest-boundary caveats, stated once and meant literally.**
 
-* `StepResult.reverted` carries **no reason**. Exact revert reasons require a model
-  change: `step` would have to return the failed guard (e.g.
-  `Except RevertReason State`), and each `none` branch would need to be re-derived
-  from the specification. Until then, no theorem in this development can distinguish
-  "rejected because paused" from "rejected because of insufficient balance".
-* `StepResult.accepted` carries **no event list**. Per-step event deltas require a
-  model change in which `step` returns the emitted events as an output rather than
-  folding some of them into `State.eventLog`.
-* Consequently this wrapper is **not implementation fidelity**: it cannot express
-  the proof-map transition contract's clause "reverted result … has an allowed
+* This wrapper is **not implementation fidelity**: it cannot express the
+  proof-map transition contract's clause "reverted result … has an allowed
   reason", nor functional-correctness claims about emitted events. Those remain
-  visible assurance gaps (proof-map §14), to be closed by a future model change,
-  not by this file.
+  visible assurance gaps (proof-map §14), to be closed by a future model change
+  (`step` returning `Except RevertReason (State × List Event)`), not by this
+  file.
 * The proof-map clause "a reverted result preserves state" is representable here
   only as *absence*: in this model a rejected call produces no post-state at all
   (`step … = none`), so there is no intermediate state whose equality with the
-  pre-state could even be stated. A partial-state-then-revert behavior of an
-  implementation is out of scope, exactly as already noted for `RegistryReach` in
-  `Registry.lean`.
+  pre-state could even be stated (`stepResult_reverted_no_state`). A
+  partial-state-then-revert behavior of an implementation is out of scope,
+  exactly as already noted for `RegistryReach` in `Registry.lean`.
 
 Status (proof-map §11): every theorem below is **model-local** — definitional
-unfolding of the wrapper, plus two bridges into `Registry.lean`'s reachable-scope
-results.
+unfolding of the wrapper plus elementary list arithmetic, and two bridges into
+`Registry.lean`'s reachable-scope results.
 -/
 
 namespace Apyx
 
-/-- Explicit transition outcome. The sound subset of the proof-map §4 shape:
-`reverted` carries no reason and `accepted` carries no event list, because the
-underlying `step` models neither (see the module docstring). -/
+/-- An emitted event, matching the entries of `State.eventLog`: an event name
+together with its (already ABI-flattened) numeric arguments. -/
+abbrev Event : Type := String × List Nat
+
+/-- Why a call reverted. **Honest about the current model**: `step` returns only
+`Option State`, so the failed guard is not observable and the only representable
+reason is `modelUnknown`. Distinguishable reasons require a model change (see the
+module docstring). -/
+inductive RevertReason
+  /-- The model rejected the call (`step … = none`) but does not expose which
+  guard failed. -/
+  | modelUnknown
+
+/-- The current model admits no other reason: this quotes, as a theorem, the fact
+that the wrapper never claims to know *why* a call reverted. -/
+theorem RevertReason.eq_modelUnknown : ∀ r : RevertReason, r = .modelUnknown
+  | .modelUnknown => rfl
+
+/-- Explicit transition outcome, in the proof-map §4 shape. The payloads are
+honest rather than faithful: `reason` is always `modelUnknown`, and `events` is
+the cumulative-log prefix diff `eventDelta` (see the module docstring). -/
 inductive StepResult
-  | reverted
-  | accepted (s' : State)
+  | reverted (reason : RevertReason)
+  | accepted (state : State) (events : List Event)
 
 /-- The successor state a result carries: `none` for a revert. By construction a
 `reverted` result *cannot* carry a state — this projection makes that structural
 fact quotable as an equation. -/
 def StepResult.state? : StepResult → Option State
-  | .reverted => none
-  | .accepted s' => some s'
+  | .reverted _ => none
+  | .accepted s' _ => some s'
+
+/-- The events a result carries: `[]` for a revert, the `accepted` payload
+otherwise. -/
+def StepResult.events : StepResult → List Event
+  | .reverted _ => []
+  | .accepted _ es => es
+
+/-- The event delta between a pre-state and its successor, read off the
+cumulative `State.eventLog`: the newest-first prefix of the successor's log that
+extends beyond the pre-state's log **by length**. This is a syntactic diff, not a
+modeled output of `step` — it coincides with the emitted events whenever the
+accepting branch only prepends to the log, but no such fidelity is claimed or
+proved here (see the module docstring). -/
+def eventDelta (pre post : State) : List Event :=
+  post.eventLog.take (post.eventLog.length - pre.eventLog.length)
+
+/-- A step that leaves the log alone has an empty delta (model-free list fact). -/
+theorem eventDelta_of_eventLog_eq (pre post : State)
+    (h : post.eventLog = pre.eventLog) : eventDelta pre post = [] := by
+  unfold eventDelta
+  rw [h, Nat.sub_self]
+  rfl
+
+/-- Degenerate case of `eventDelta_of_eventLog_eq`: the delta from a state to
+itself is empty. -/
+theorem eventDelta_self (s : State) : eventDelta s s = [] :=
+  eventDelta_of_eventLog_eq s s rfl
+
+/-- A step that emits exactly one event — i.e. whose successor log is one
+`emitEvent`-style cons on the pre-state log — has exactly that singleton delta
+(model-free list fact). -/
+theorem eventDelta_emit (pre post : State) (name : String) (args : List Nat)
+    (h : post.eventLog = (name, args) :: pre.eventLog) :
+    eventDelta pre post = [(name, args)] := by
+  unfold eventDelta
+  have hlen : pre.eventLog.length + 1 - pre.eventLog.length = 1 := by omega
+  rw [h, List.length_cons, hlen]
+  rfl
+
+/-- The delta is a prefix of the successor's cumulative log: appending the
+untaken suffix recovers the whole log (model-free list fact). -/
+theorem eventDelta_append_drop (pre post : State) :
+    eventDelta pre post
+        ++ post.eventLog.drop (post.eventLog.length - pre.eventLog.length)
+      = post.eventLog :=
+  List.take_append_drop _ _
 
 /-- The public transition, presented with an explicit outcome. Defined by pattern
-matching on the existing `step`; it introduces no new semantics, and the lemmas
-below make the round trip exact. -/
+matching on the existing `step`; it introduces no new semantics — rejections are
+tagged with the honest `modelUnknown` reason and acceptances carry the
+`eventDelta` prefix diff — and the lemmas below make the state round trip exact. -/
 def stepResult (s : State) (op : Op) (caller : Address) : StepResult :=
   match step s op caller with
-  | none => .reverted
-  | some s' => .accepted s'
+  | none => .reverted .modelUnknown
+  | some s' => .accepted s' (eventDelta s s')
 
-/-- Equivalence, `none` direction: the wrapper reverts exactly when `step` rejects. -/
-theorem stepResult_reverted_iff (s : State) (op : Op) (caller : Address) :
-    stepResult s op caller = .reverted ↔ step s op caller = none := by
+/-- Equivalence, `none` direction: the wrapper reverts (with any reason — there
+is only one) exactly when `step` rejects. -/
+theorem stepResult_reverted_iff (s : State) (op : Op) (caller : Address)
+    (r : RevertReason) :
+    stepResult s op caller = .reverted r ↔ step s op caller = none := by
+  cases r
   unfold stepResult
   cases h : step s op caller <;> simp
 
-/-- Equivalence, `some` direction: the wrapper accepts with successor `s'` exactly
-when `step` succeeds with `s'`. -/
-theorem stepResult_accepted_iff (s : State) (op : Op) (caller : Address) (s' : State) :
-    stepResult s op caller = .accepted s' ↔ step s op caller = some s' := by
+/-- Equivalence, `some` direction: the wrapper accepts with successor `s'` and
+events `es` exactly when `step` succeeds with `s'` and `es` is the cumulative-log
+prefix diff. Note the second conjunct is *definitional bookkeeping*, not event
+fidelity — see `eventDelta`. -/
+theorem stepResult_accepted_iff (s : State) (op : Op) (caller : Address)
+    (s' : State) (es : List Event) :
+    stepResult s op caller = .accepted s' es ↔
+      step s op caller = some s' ∧ es = eventDelta s s' := by
   unfold stepResult
-  cases h : step s op caller <;> simp
+  cases h : step s op caller with
+  | none => simp
+  | some a =>
+    constructor
+    · intro hacc
+      injection hacc with h1 h2
+      subst h1
+      exact ⟨rfl, h2.symm⟩
+    · intro hboth
+      cases hboth with
+      | intro hs he =>
+        injection hs with h1
+        subst h1
+        subst he
+        rfl
+
+/-- State-projection form of `stepResult_accepted_iff`: the wrapper accepts with
+successor `s'` (for *some* event payload) exactly when `step` succeeds with `s'`. -/
+theorem stepResult_accepted_state_iff (s : State) (op : Op) (caller : Address)
+    (s' : State) :
+    (∃ es, stepResult s op caller = .accepted s' es) ↔
+      step s op caller = some s' := by
+  constructor
+  · intro hex
+    cases hex with
+    | intro es hacc =>
+      exact ((stepResult_accepted_iff s op caller s' es).mp hacc).1
+  · intro hstep
+    exact ⟨eventDelta s s',
+      (stepResult_accepted_iff s op caller s' (eventDelta s s')).mpr ⟨hstep, rfl⟩⟩
 
 /-- Round trip: projecting the successor state out of the wrapper recovers `step`
 exactly. This is the sense in which `stepResult` adds no semantics. -/
@@ -104,44 +207,66 @@ theorem stepResult_state? (s : State) (op : Op) (caller : Address) :
   unfold stepResult
   cases h : step s op caller <;> rfl
 
-/-- Totality of the case split: every call either reverts or accepts with some
-successor state. -/
+/-- Totality of the case split: every call either reverts (necessarily with the
+model-unknown reason) or accepts with some successor state and event payload. -/
 theorem stepResult_total (s : State) (op : Op) (caller : Address) :
-    stepResult s op caller = .reverted ∨ ∃ s', stepResult s op caller = .accepted s' := by
+    stepResult s op caller = .reverted .modelUnknown ∨
+      ∃ s' es, stepResult s op caller = .accepted s' es := by
   unfold stepResult
-  cases h : step s op caller <;> simp
+  cases h : step s op caller with
+  | none => exact Or.inl rfl
+  | some a => exact Or.inr ⟨a, eventDelta s a, rfl⟩
 
 /-- **A reverted result carries no successor state**, projection form: the
 `state?` of a reverted call is `none`. -/
 theorem stepResult_reverted_no_state (s : State) (op : Op) (caller : Address)
-    (h : stepResult s op caller = .reverted) :
+    (r : RevertReason) (h : stepResult s op caller = .reverted r) :
     (stepResult s op caller).state? = none := by
-  simp [h, StepResult.state?]
+  rw [h]
+  rfl
+
+/-- A reverted result carries no events, projection form: the `events` of a
+reverted call are `[]`. -/
+theorem stepResult_reverted_no_events (s : State) (op : Op) (caller : Address)
+    (r : RevertReason) (h : stepResult s op caller = .reverted r) :
+    (stepResult s op caller).events = [] := by
+  rw [h]
+  rfl
 
 /-- **A reverted result carries no successor state**, constructor form: a call
-that reverted did not accept, for any candidate successor. -/
+that reverted did not accept, for any candidate successor and event payload. -/
 theorem stepResult_not_accepted_of_reverted (s : State) (op : Op) (caller : Address)
-    (h : stepResult s op caller = .reverted) (s' : State) :
-    stepResult s op caller ≠ .accepted s' := by
+    (r : RevertReason) (h : stepResult s op caller = .reverted r)
+    (s' : State) (es : List Event) :
+    stepResult s op caller ≠ .accepted s' es := by
   rw [h]
   exact fun hcontra => StepResult.noConfusion hcontra
+
+/-- The event payload of an accepted result is *literally* the cumulative-log
+prefix diff — bookkeeping, not event fidelity (see `eventDelta`). -/
+theorem stepResult_accepted_events (s : State) (op : Op) (caller : Address)
+    (s' : State) (es : List Event)
+    (h : stepResult s op caller = .accepted s' es) :
+    es = eventDelta s s' :=
+  ((stepResult_accepted_iff s op caller s' es).mp h).2
 
 /-- Bridge into `Registry.lean`: an *accepted* transition preserves the registry
 invariants. Pure repackaging of `registryWellIndexed_step` through the wrapper —
 registry-scoped, exactly as caveated there. -/
 theorem registryWellIndexed_stepResult_accepted (s : State) (op : Op) (caller : Address)
-    (s' : State) (h : RegistryWellIndexed s)
-    (hacc : stepResult s op caller = .accepted s') :
+    (s' : State) (es : List Event) (h : RegistryWellIndexed s)
+    (hacc : stepResult s op caller = .accepted s' es) :
     RegistryWellIndexed s' :=
   registryWellIndexed_step s op caller s' h
-    ((stepResult_accepted_iff s op caller s').mp hacc)
+    ((stepResult_accepted_iff s op caller s' es).mp hacc).1
 
 /-- Bridge into `Registry.lean`'s reachability: registry-scoped reachability
 advances along *accepted* results and only along them — the wrapper makes the
 proof-map's "Reach is built from successful transitions" reading literal. -/
 theorem registryReach_stepResult_accepted {s s' : State} {op : Op} {caller : Address}
-    (h : RegistryReach s) (hacc : stepResult s op caller = .accepted s') :
+    {es : List Event} (h : RegistryReach s)
+    (hacc : stepResult s op caller = .accepted s' es) :
     RegistryReach s' :=
-  RegistryReach.next h ((stepResult_accepted_iff s op caller s').mp hacc)
+  RegistryReach.next h ((stepResult_accepted_iff s op caller s' es).mp hacc).1
 
 end Apyx
