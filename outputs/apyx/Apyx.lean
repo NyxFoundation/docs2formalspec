@@ -1472,6 +1472,42 @@ private theorem step_redeem_some (s : State) (shares : Nat) (receiver caller : A
         · exact absurd h (by simp)
         · exact ⟨by simp_all, by omega, by omega, (Option.some.inj h).symm⟩
 
+/-- Public transition inversion for a successful vault withdrawal. The exact
+post-state is exposed so accounting modules can reason about custody and the
+new pending position without duplicating the dispatcher split. -/
+theorem withdrawStep_effect (s : State) (assets : Nat) (receiver caller : Address)
+    (s' : State) (h : step s (Op.withdraw assets receiver) caller = some s') :
+    s.globalPause = false ∧
+    withdrawShares assets (computeExchangeRate (pullVestedYield s))
+      ≤ (pullVestedYield s).apyUSDBal caller ∧
+    assets ≤ (pullVestedYield s).vaultApxUSDBal ∧
+    s' = emitEvent (updateExchangeRate (createStandardUnlock
+          { burnApyUSD (pullVestedYield s) caller
+              (withdrawShares assets (computeExchangeRate (pullVestedYield s))) with
+            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller
+              (withdrawShares assets (computeExchangeRate (pullVestedYield s)))).vaultApxUSDBal - assets }
+          receiver assets)) "Withdraw"
+      [caller, receiver, caller, assets,
+        withdrawShares assets (computeExchangeRate (pullVestedYield s))] := by
+  exact step_withdraw_some s assets receiver caller s' h
+
+/-- Public transition inversion for a successful share-denominated vault
+redeem. -/
+theorem redeemStep_effect (s : State) (shares : Nat) (receiver caller : Address)
+    (s' : State) (h : step s (Op.redeem shares receiver) caller = some s') :
+    s.globalPause = false ∧
+    shares ≤ (pullVestedYield s).apyUSDBal caller ∧
+    redeemAssets shares (computeExchangeRate (pullVestedYield s))
+      ≤ (pullVestedYield s).vaultApxUSDBal ∧
+    s' = emitEvent (updateExchangeRate (createStandardUnlock
+          { burnApyUSD (pullVestedYield s) caller shares with
+            vaultApxUSDBal := (burnApyUSD (pullVestedYield s) caller shares).vaultApxUSDBal
+              - redeemAssets shares (computeExchangeRate (pullVestedYield s)) }
+          receiver (redeemAssets shares (computeExchangeRate (pullVestedYield s))))) "Withdraw"
+      [caller, receiver, caller,
+        redeemAssets shares (computeExchangeRate (pullVestedYield s)), shares] := by
+  exact step_redeem_some s shares receiver caller s' h
+
 private theorem step_depositUSDC_some (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.depositUSDC amount) caller = some s') :
     s.globalPause = false ∧ s.whitelist caller = true ∧ s.denylist caller = false ∧

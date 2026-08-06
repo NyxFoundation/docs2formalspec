@@ -763,6 +763,39 @@ def pendingApxUSD (s : State) : Nat :=
 def outstandingApxUSD (s : State) : Nat :=
   s.totalSupply_apxUSD + pendingApxUSD s
 
+/-- A flow measure for the modeled apxUSD subsystem: circulating supply,
+pending unlock face amounts, and apxUSD currently held in vault custody. This
+is an internal custody-flow boundary, not a reserve-solvency claim. Vested but
+not yet pulled yield is intentionally outside this measure; its realization is
+an external inflow into custody and must be handled by a separate live-assets
+theorem. -/
+def apxUSDFlow (s : State) : Nat :=
+  s.vaultApxUSDBal + outstandingApxUSD s
+
+theorem standardUnlockTotal_of_projections_eq {s t : State}
+    (hnext : s.nextUnlockId = t.nextUnlockId)
+    (hrequests : s.unlockRequests = t.unlockRequests) :
+    standardUnlockTotal s = standardUnlockTotal t := by
+  unfold standardUnlockTotal
+  rw [hnext, hrequests]
+
+theorem flexibleUnlockTotal_of_projections_eq {s t : State}
+    (hnext : s.nextUnlockId = t.nextUnlockId)
+    (hrequests : s.flexibleUnlockRequests = t.flexibleUnlockRequests) :
+    flexibleUnlockTotal s = flexibleUnlockTotal t := by
+  unfold flexibleUnlockTotal
+  rw [hnext, hrequests]
+
+theorem outstandingApxUSD_of_projections_eq {s t : State}
+    (hsupply : s.totalSupply_apxUSD = t.totalSupply_apxUSD)
+    (hnext : s.nextUnlockId = t.nextUnlockId)
+    (hstandard : s.unlockRequests = t.unlockRequests)
+    (hflexible : s.flexibleUnlockRequests = t.flexibleUnlockRequests) :
+    outstandingApxUSD s = outstandingApxUSD t := by
+  unfold outstandingApxUSD pendingApxUSD
+  rw [hsupply, standardUnlockTotal_of_projections_eq hnext hstandard,
+    flexibleUnlockTotal_of_projections_eq hnext hflexible]
+
 theorem standardUnlockTotal_createStandardUnlock (s : State) (owner : Address)
     (amount : Nat) :
     standardUnlockTotal (createStandardUnlock s owner amount) =
@@ -927,6 +960,18 @@ theorem flexibleUnlockTotal_createStandardUnlock (s : State) (owner : Address)
     simp [createStandardUnlock]
   rw [hsame]
   simp [createStandardUnlock, h_unalloc]
+
+theorem outstandingApxUSD_createStandardUnlock (s : State) (owner : Address)
+    (amount : Nat) (hregistry : RegistryWellIndexed s) :
+    outstandingApxUSD (createStandardUnlock s owner amount) =
+      outstandingApxUSD s + amount := by
+  have hb : RegistryBounded s := hregistry.1
+  have hflex := flexibleUnlockTotal_createStandardUnlock s owner amount
+    (hb.2 _ (Nat.le_refl _))
+  unfold outstandingApxUSD pendingApxUSD
+  rw [standardUnlockTotal_createStandardUnlock, hflex]
+  simp [createStandardUnlock]
+  omega
 
 /-! ### Request-level obligation conservation
 
@@ -1164,6 +1209,160 @@ theorem outstandingApxUSD_flexibleClaimUnlock (s : State) (id : Nat)
   rw [hsupply, hstdmint, hflexmint, hstd]
   dsimp [fee] at hfee hflex ⊢
   omega
+
+/-- Standard requests only move value between circulating supply and the
+pending registry, so the internal apxUSD flow is unchanged. -/
+theorem apxUSDFlow_requestUnlockStep (s : State) (caller amount : Nat)
+    (hregistry : RegistryWellIndexed s)
+    (hsupply : amount ≤ s.totalSupply_apxUSD) :
+    apxUSDFlow (requestUnlockStep s caller amount) = apxUSDFlow s := by
+  have hassets : (requestUnlockStep s caller amount).vaultApxUSDBal =
+      s.vaultApxUSDBal := requestUnlockStep_vaultApxUSDBal s caller amount
+  unfold apxUSDFlow
+  rw [hassets, outstandingApxUSD_requestUnlockStep s caller amount hregistry hsupply]
+
+/-- The public standard-request boundary is the same flow identity. -/
+theorem apxUSDFlow_requestUnlock (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (hregistry : RegistryWellIndexed s)
+    (hsupply : amount ≤ s.totalSupply_apxUSD)
+    (h_step : step s (Op.requestUnlock amount) caller = some s') :
+    apxUSDFlow s' = apxUSDFlow s := by
+  obtain ⟨-, -, hpost⟩ := requestUnlockStep_effect s amount caller s' h_step
+  subst s'
+  exact apxUSDFlow_requestUnlockStep s caller amount hregistry hsupply
+
+/-- Flexible requests have the same internal flow identity. -/
+theorem apxUSDFlow_flexibleRequestUnlock (s : State) (caller amount : Nat)
+    (hregistry : RegistryWellIndexed s)
+    (hsupply : amount ≤ s.totalSupply_apxUSD) :
+    apxUSDFlow (createFlexibleUnlock (burnApxUSD s caller amount) caller amount) =
+      apxUSDFlow s := by
+  have hassets : (createFlexibleUnlock (burnApxUSD s caller amount)
+      caller amount).vaultApxUSDBal = s.vaultApxUSDBal := by rfl
+  unfold apxUSDFlow
+  rw [hassets, outstandingApxUSD_flexibleRequestUnlock s caller amount hregistry hsupply]
+
+/-- Standard settlement transfers a pending face amount into circulating
+apxUSD without changing the internal flow. -/
+theorem apxUSDFlow_claimUnlock (s : State) (id : Nat)
+    (owner : Address) (amount cooldownEnd : Nat) (caller : Address) (s' : State)
+    (hid : id < s.nextUnlockId)
+    (hreq : s.unlockRequests id = some (owner, amount, cooldownEnd))
+    (h_step : step s (Op.claimUnlock id) caller = some s') :
+    apxUSDFlow s' = apxUSDFlow s := by
+  obtain ⟨recordedOwner, recordedAmount, recordedCooldown, hentry, _, _, _, hpost⟩ :=
+    claimUnlockStep_effect s id caller s' h_step
+  rw [hreq] at hentry
+  simp only [Option.some.injEq, Prod.mk.injEq] at hentry
+  obtain ⟨rfl, rfl, rfl⟩ := hentry
+  subst s'
+  have hassets : (mintApxUSD (retireStandardUnlock s id owner) owner amount).vaultApxUSDBal =
+      s.vaultApxUSDBal := by rfl
+  have hout := outstandingApxUSD_claimUnlock s id owner amount cooldownEnd caller
+    (mintApxUSD (retireStandardUnlock s id owner) owner amount) hid hreq h_step
+  unfold apxUSDFlow
+  rw [hassets]
+  omega
+
+/-- Flexible settlement exposes the fee as the only decrease in the internal
+flow, because the current model has no fee-wallet custody field. -/
+theorem apxUSDFlow_flexibleClaimUnlock (s : State) (id : Nat)
+    (owner : Address) (amount requestTime cooldownEnd : Nat) (caller : Address) (s' : State)
+    (hid : id < s.nextUnlockId)
+    (hreq : s.flexibleUnlockRequests id =
+      some (owner, amount, requestTime, cooldownEnd))
+    (h_step : step s (Op.flexibleClaimUnlock id) caller = some s') :
+    apxUSDFlow s' + amount * flexibleUnlockFee requestTime s.now / 10000 =
+      apxUSDFlow s := by
+  obtain ⟨recordedOwner, recordedAmount, recordedRequestTime, recordedCooldownEnd,
+    hentry, _, _, _, hpost⟩ := flexibleClaimStep_effect s id caller s' h_step
+  rw [hreq] at hentry
+  simp only [Option.some.injEq, Prod.mk.injEq] at hentry
+  obtain ⟨rfl, rfl, rfl, rfl⟩ := hentry
+  subst s'
+  have hassets : (mintApxUSD (retireFlexibleUnlock s id) owner
+      (amount - amount * flexibleUnlockFee requestTime s.now / 10000)).vaultApxUSDBal =
+      s.vaultApxUSDBal := by rfl
+  have hout := outstandingApxUSD_flexibleClaimUnlock s id owner amount requestTime
+    cooldownEnd caller
+    (mintApxUSD (retireFlexibleUnlock s id) owner
+      (amount - amount * flexibleUnlockFee requestTime s.now / 10000)) hid hreq h_step
+  unfold apxUSDFlow
+  rw [hassets]
+  omega
+
+/-- Generic vault-exit flow identity at the state where the live vest has
+already been pulled. The custody debit and the newly created standard claim
+cancel exactly; the caller's share burn is an apyUSD operation and does not
+alter this apxUSD flow. -/
+theorem apxUSDFlow_vaultWithdrawPost (p : State) (assets shares : Nat)
+    (receiver caller : Address) (name : String) (evArgs : List Nat)
+    (hregistry : RegistryWellIndexed p)
+    (hassets : assets ≤ p.vaultApxUSDBal) :
+    apxUSDFlow (emitEvent (updateExchangeRate (createStandardUnlock
+      { burnApyUSD p caller shares with
+          vaultApxUSDBal := (burnApyUSD p caller shares).vaultApxUSDBal - assets }
+      receiver assets)) name evArgs) = apxUSDFlow p := by
+  let u : State := { burnApyUSD p caller shares with
+      vaultApxUSDBal := (burnApyUSD p caller shares).vaultApxUSDBal - assets }
+  have hu : RegistryWellIndexed u := by
+    dsimp [u]
+    exact registryWellIndexed_of_frame p _ ⟨rfl, rfl, rfl, rfl, rfl⟩ hregistry
+  have hbase : outstandingApxUSD u = outstandingApxUSD p := by rfl
+  have hcreated : outstandingApxUSD (createStandardUnlock u receiver assets) =
+      outstandingApxUSD p + assets := by
+    rw [outstandingApxUSD_createStandardUnlock u receiver assets hu, hbase]
+  have hvault : (emitEvent (updateExchangeRate (createStandardUnlock u receiver assets))
+      name evArgs).vaultApxUSDBal = p.vaultApxUSDBal - assets := by
+    simp [u, emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  have hout : outstandingApxUSD
+      (emitEvent (updateExchangeRate (createStandardUnlock u receiver assets)) name evArgs) =
+      outstandingApxUSD p + assets := by
+    have hframe : outstandingApxUSD
+        (emitEvent (updateExchangeRate (createStandardUnlock u receiver assets)) name evArgs) =
+        outstandingApxUSD (createStandardUnlock u receiver assets) := by
+      apply outstandingApxUSD_of_projections_eq
+      · simp [emitEvent, updateExchangeRate]
+      · simp [emitEvent, updateExchangeRate]
+      · simp [emitEvent, updateExchangeRate]
+      · simp [emitEvent, updateExchangeRate]
+    rw [hframe]
+    exact hcreated
+  unfold apxUSDFlow
+  rw [hvault, hout]
+  omega
+
+/-- A successful `withdraw` preserves the custody flow measured immediately
+after the step's mandatory vest pull. The difference between that state and
+the pre-state is the separately modeled vested-yield inflow. -/
+theorem apxUSDFlow_withdraw (s : State) (assets : Nat)
+    (receiver caller : Address) (s' : State)
+    (hregistry : RegistryWellIndexed s)
+    (h_step : step s (Op.withdraw assets receiver) caller = some s') :
+    apxUSDFlow s' = apxUSDFlow (pullVestedYield s) := by
+  obtain ⟨-, -, hassets, hpost⟩ := withdrawStep_effect s assets receiver caller s' h_step
+  subst s'
+  exact apxUSDFlow_vaultWithdrawPost (pullVestedYield s) assets
+    (withdrawShares assets (computeExchangeRate (pullVestedYield s)))
+    receiver caller "Withdraw"
+    [caller, receiver, caller, assets,
+      withdrawShares assets (computeExchangeRate (pullVestedYield s))]
+    (registryWellIndexed_pullVestedYield s hregistry) hassets
+
+/-- The share-denominated `redeem` has the same custody-flow boundary. -/
+theorem apxUSDFlow_redeem (s : State) (shares : Nat)
+    (receiver caller : Address) (s' : State)
+    (hregistry : RegistryWellIndexed s)
+    (h_step : step s (Op.redeem shares receiver) caller = some s') :
+    apxUSDFlow s' = apxUSDFlow (pullVestedYield s) := by
+  obtain ⟨-, -, hassets, hpost⟩ := redeemStep_effect s shares receiver caller s' h_step
+  subst s'
+  exact apxUSDFlow_vaultWithdrawPost (pullVestedYield s)
+    (redeemAssets shares (computeExchangeRate (pullVestedYield s))) shares
+    receiver caller "Withdraw"
+    [caller, receiver, caller,
+      redeemAssets shares (computeExchangeRate (pullVestedYield s)), shares]
+    (registryWellIndexed_pullVestedYield s hregistry) hassets
 
 /-- The top-up branch changes one existing standard record in place. This is
 the sum-level counterpart of `updateStandardUnlock_unlockRequests_eq`: once

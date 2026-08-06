@@ -216,6 +216,23 @@ protocol-wide asset-conservation theorem: the current state has neither a fee
 wallet balance nor explicit unlock-token custody, so adding them to
 `ProtocolInv` would be an unsupported model claim.
 
+The next internal boundary is `apxUSDFlow`: vault custody plus
+`outstandingApxUSD`. Projection lemmas
+`standardUnlockTotal_of_projections_eq`,
+`flexibleUnlockTotal_of_projections_eq`, and
+`outstandingApxUSD_of_projections_eq` keep event emission and rate publication
+from obscuring that accounting. `outstandingApxUSD_createStandardUnlock` and
+`apxUSDFlow_vaultWithdrawPost` prove the generic vault-exit cancellation;
+`apxUSDFlow_withdraw` and `apxUSDFlow_redeem` expose it at the public step
+boundary. The request and claim flow forms are
+`apxUSDFlow_requestUnlockStep`, `apxUSDFlow_requestUnlock`,
+`apxUSDFlow_flexibleRequestUnlock`, `apxUSDFlow_claimUnlock`, and
+`apxUSDFlow_flexibleClaimUnlock`. These exit theorems are stated against
+`apxUSDFlow (pullVestedYield s)`, not blindly against the pre-state: the live
+vest pull is an external custody inflow and remains a separate accounting
+boundary. `withdrawStep_effect` and `redeemStep_effect` in `Apyx.lean` are the
+public inversion interfaces used to make that distinction explicit.
+
 ### 5.2 Registry consistency
 
 For pending requests, positions, or claims, specify:
