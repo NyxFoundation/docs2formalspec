@@ -545,14 +545,20 @@ operations alone, `protocolInv_reachableOps` is its global theorem, and
 Second, `SolventOutstanding` upgrades the solvency measure to
 `outstandingApxUSD` — circulating supply plus pending unlock face amounts — so
 the request → wait → claim settlement cycle is *inside* the preserved scope:
-requests and standard claims are neutral, flexible claims shed exactly the
-published fee (`solventOutstanding_step`). The measure strictly dominates the
-old one (`solventOutstanding_implies_solvent`). Its exclusion list trades the
+requests and standard claims are neutral, and flexible claims decrease the
+obligation by exactly the modeled fee, which Nat flooring can make zero for
+dust (`solventOutstanding_step`). The measure dominates the old one, so the
+new predicate implies `Solvent` (`solventOutstanding_implies_solvent`). Its
+exclusion list trades the
 two claims in for the two vault exits, whose pending positions are funded by
 vault custody that neither side of the inequality measures; that channel stays
 at the `apxUSDFlow` boundary. `ProtocolInvOutstanding` and
 `ProtocolReachOutstanding` lift this to a reachability theorem
-(`protocolInvOutstanding_reachable`) with operation-side conditions only.
+(`protocolInvOutstanding_reachable`) with operation-side conditions only. The
+relation is anchored at the empty `default` state, and no in-scope operation
+can seed a positive USDC balance from it, so funded settlement scenarios are
+covered by the step theorem applied to a funded state, not exhibited as a
+nonzero trace from `default`.
 
 Receipt consistency is now composed without changing the meaning of
 `ProtocolInv`: `ProtocolInvWithReceiptLedger` adds

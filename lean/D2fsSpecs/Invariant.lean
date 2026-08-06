@@ -348,9 +348,15 @@ aggregate does not track. `SolventOutstanding` closes exactly that hole by
 charging the pending face amounts (`outstandingApxUSD = supply + pending`)
 against the same backing. Under this measure a request is neutral (burn in,
 pending out), a standard claim is neutral (pending in, mint out), and a
-flexible claim strictly shrinks the obligation by the published fee — so the
-whole request → wait → claim settlement cycle sits *inside* the preserved
-scope, which the plain `Solvent` relation could never chain across.
+flexible claim decreases the obligation by exactly the modeled fee — which
+Nat flooring can make zero for dust amounts, so "non-increasing", not
+"strictly decreasing", is the claim. The whole request → wait → claim
+settlement cycle therefore sits *inside* the preserved scope, which the plain
+`Solvent` relation could never chain across. Preservation is a step/trace
+fact; note that the reachability relation below is anchored at the empty
+`default` state, whose scope admits no operation that seeds a positive USDC
+balance — funded scenarios enter through the step theorem applied to a funded
+state, not through a nonzero trace from `default`.
 
 The trade is the vault exit channel: `Op.withdraw`/`Op.redeem` create pending
 positions against apxUSD that was burned out of the supply at lock time and
@@ -592,8 +598,11 @@ theorem protocolInvOutstanding_step
 
 /-- Reachability for the pending-aware regime: operation restrictions only —
 the vault-exit/stress/backstop/reserve exclusions plus the at-most-par price
-discipline. The unlock request → wait → claim settlement cycle is inside this
-relation, which the `Solvent`-based `ProtocolReach` cannot express. -/
+discipline. Requests and claims are in scope for this relation's steps, which
+the `Solvent`-based `ProtocolReach` cannot express. Anchored at the empty
+`default`: no in-scope operation seeds a positive USDC balance from it, so a
+funded settlement trace is not exhibitable from this base — the preservation
+content lives in `solventOutstanding_step` applied to funded states. -/
 inductive ProtocolReachOutstanding : State → Prop
   | initial : ProtocolReachOutstanding (default : State)
   | next {s s' : State} {op : Op} {caller : Address} :
