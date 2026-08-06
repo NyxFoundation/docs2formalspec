@@ -1390,6 +1390,111 @@ theorem apxUSDFlow_redeem (s : State) (shares : Nat)
       redeemAssets shares (computeExchangeRate (pullVestedYield s)), shares]
     (registryWellIndexed_pullVestedYield s hregistry) hassets
 
+/-! ## Internal apxUSD flow traces
+
+The next trace layer deliberately has a narrow alphabet. It covers the two
+unlock channels and time passing, but not vault exits: a vault exit first
+pulls live vesting yield, so its pre-state delta is an external inflow rather
+than a conservation-free internal transfer. Flexible-claim fees are recorded
+in a separate accumulator because the current `State` has no fee-wallet
+balance. This is therefore an internal obligation-flow theorem, not a
+protocol-wide asset-conservation theorem. -/
+
+def apxUSDFlowStepFee (s : State) (p : Op × Address) : Nat :=
+  match p.1 with
+  | Op.flexibleClaimUnlock id =>
+      match s.flexibleUnlockRequests id with
+      | some (_, amount, requestTime, _) =>
+          amount * flexibleUnlockFee requestTime s.now / 10000
+      | none => 0
+  | _ => 0
+
+inductive ApxUSDFlowStep : State → (Op × Address) → State → Prop where
+  | standardRequest (s : State) (amount : Nat) (caller : Address) (s' : State)
+      (hregistry : RegistryWellIndexed s)
+      (hsupply : amount ≤ s.totalSupply_apxUSD)
+      (hstep : step s (Op.requestUnlock amount) caller = some s') :
+      ApxUSDFlowStep s (Op.requestUnlock amount, caller) s'
+  | flexibleRequest (s : State) (amount : Nat) (caller : Address) (s' : State)
+      (hregistry : RegistryWellIndexed s)
+      (hsupply : amount ≤ s.totalSupply_apxUSD)
+      (hstep : step s (Op.flexibleRequestUnlock amount) caller = some s') :
+      ApxUSDFlowStep s (Op.flexibleRequestUnlock amount, caller) s'
+  | standardClaim (s : State) (id : Nat) (owner : Address) (amount cooldownEnd : Nat)
+      (caller : Address) (s' : State)
+      (hid : id < s.nextUnlockId)
+      (hreq : s.unlockRequests id = some (owner, amount, cooldownEnd))
+      (hstep : step s (Op.claimUnlock id) caller = some s') :
+      ApxUSDFlowStep s (Op.claimUnlock id, caller) s'
+  | flexibleClaim (s : State) (id : Nat) (owner : Address)
+      (amount requestTime cooldownEnd : Nat) (caller : Address) (s' : State)
+      (hid : id < s.nextUnlockId)
+      (hreq : s.flexibleUnlockRequests id =
+        some (owner, amount, requestTime, cooldownEnd))
+      (hstep : step s (Op.flexibleClaimUnlock id) caller = some s') :
+      ApxUSDFlowStep s (Op.flexibleClaimUnlock id, caller) s'
+  | tick (s : State) (dt : Nat) (caller : Address) :
+      ApxUSDFlowStep s (Op.tick dt, caller) {s with now := s.now + dt}
+
+inductive ApxUSDFlowTrace : State → List (Op × Address) → State → Nat → Prop where
+  | nil (s : State) : ApxUSDFlowTrace s [] s 0
+  | cons {s s₁ s₂ : State} {p : Op × Address} {ps : List (Op × Address)}
+      {fees : Nat}
+      (hstep : ApxUSDFlowStep s p s₁)
+      (htail : ApxUSDFlowTrace s₁ ps s₂ fees) :
+      ApxUSDFlowTrace s (p :: ps) s₂ (apxUSDFlowStepFee s p + fees)
+
+theorem apxUSDFlow_step (h : ApxUSDFlowStep s p s') :
+    apxUSDFlow s' + apxUSDFlowStepFee s p = apxUSDFlow s := by
+  cases h with
+  | standardRequest amount caller s' hregistry hsupply hstep =>
+      have hflow := apxUSDFlow_requestUnlock s amount caller s'
+        hregistry hsupply hstep
+      simpa [apxUSDFlowStepFee] using hflow
+  | flexibleRequest amount caller s' hregistry hsupply hstep =>
+      have hflow := apxUSDFlow_flexibleRequestUnlock s caller amount
+        hregistry hsupply
+      obtain ⟨-, -, hpost⟩ := flexibleRequestUnlockStep_effect s amount caller s' hstep
+      simpa [hpost, apxUSDFlowStepFee] using hflow
+  | standardClaim id owner amount cooldownEnd caller s' hid hreq hstep =>
+      have hflow := apxUSDFlow_claimUnlock s id owner amount cooldownEnd caller s'
+        hid hreq hstep
+      simpa [apxUSDFlowStepFee] using hflow
+  | flexibleClaim id owner amount requestTime cooldownEnd caller s' hid hreq hstep =>
+      have hflow := apxUSDFlow_flexibleClaimUnlock s id owner amount requestTime
+        cooldownEnd caller s' hid hreq hstep
+      simpa [apxUSDFlowStepFee, hreq] using hflow
+  | tick dt caller =>
+      simp [apxUSDFlowStepFee, apxUSDFlow, outstandingApxUSD,
+        pendingApxUSD, standardUnlockTotal, flexibleUnlockTotal]
+
+theorem execTrace_cons_of_apxUSDFlowStep
+    (hstep : ApxUSDFlowStep s p s') (ps : List (Op × Address)) :
+    execTrace s (p :: ps) = execTrace s' ps := by
+  cases hstep with
+  | standardRequest amount caller s' hregistry hsupply hstep =>
+      simp [execTrace, hstep]
+  | flexibleRequest amount caller s' hregistry hsupply hstep =>
+      simp [execTrace, hstep]
+  | standardClaim id owner amount cooldownEnd caller s' hid hreq hstep =>
+      simp [execTrace, hstep]
+  | flexibleClaim id owner amount requestTime cooldownEnd caller s' hid hreq hstep =>
+      simp [execTrace, hstep]
+  | tick dt caller =>
+      simp [execTrace, step]
+
+theorem apxUSDFlow_trace
+    (h : ApxUSDFlowTrace s σ s' fees) :
+    execTrace s σ = s' ∧ apxUSDFlow s' + fees = apxUSDFlow s := by
+  induction h with
+  | nil s => simp [execTrace]
+  | @cons s s₁ s₂ p ps fees hstep htail ih =>
+      have hlocal := apxUSDFlow_step hstep
+      have hexec := execTrace_cons_of_apxUSDFlowStep hstep ps
+      constructor
+      · rw [hexec, ih.1]
+      · omega
+
 /-- The top-up branch changes one existing standard record in place. This is
 the sum-level counterpart of `updateStandardUnlock_unlockRequests_eq`: once
 the target record is known to be the caller's record, the caller's finite

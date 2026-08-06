@@ -235,6 +235,17 @@ boundary. `apxUSDFlow_pullVestedYield` states that this inflow is exactly
 `withdrawStep_effect` and `redeemStep_effect` in `Apyx.lean` are the
 public inversion interfaces used to make that distinction explicit.
 
+The unlock-only aggregate trace is now explicit as well. `ApxUSDFlowStep`
+accepts successful standard/flexible requests (carrying registry and supply
+premises), successful claims (carrying an in-range recorded position), and
+`tick` as a pure frame.
+`ApxUSDFlowTrace` composes those steps; `apxUSDFlow_step` proves the local
+flow equation, and `apxUSDFlow_trace` lifts it to `execTrace`. Flexible-claim
+fees are accumulated separately by `apxUSDFlowStepFee`, because the current
+state has no fee-wallet balance. This closes an internal unlock-flow trace,
+not the mixed trace containing vault exits, live vesting inflows, or the
+unmodeled USDC and fee-wallet ledgers.
+
 ### 5.2 Registry consistency
 
 For pending requests, positions, or claims, specify:

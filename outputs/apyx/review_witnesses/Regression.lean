@@ -673,4 +673,44 @@ theorem svTrace_stays_solvent : Solvent (execTrace sv0 svTrace) := by
   rcases hcases with rfl | rfl <;>
     exact ⟨by simp, by simp, by simp, by simp, by simp⟩
 
+/-! ## R15 — the internal apxUSD flow trace is executable
+
+The aggregate trace theorem is intentionally narrower than a protocol-wide
+conservation claim. This witness exercises its typed trace boundary with a
+successful clock step, which must leave custody and pending obligations
+unchanged. -/
+
+theorem apxUSDFlow_tick_trace_witness :
+    ApxUSDFlowTrace (default : State) [(Op.tick 1, 0)]
+      (execTrace (default : State) [(Op.tick 1, 0)]) 0 := by
+  have h : ApxUSDFlowTrace (default : State) [(Op.tick 1, 0)]
+      ({(default : State) with now := (default : State).now + 1}) 0 := by
+    refine ApxUSDFlowTrace.cons (s := (default : State))
+      (s₁ := {(default : State) with now := (default : State).now + 1})
+      (s₂ := {(default : State) with now := (default : State).now + 1})
+      (p := (Op.tick 1, 0)) (ps := []) (fees := 0) ?_ ?_
+    · exact ApxUSDFlowStep.tick _ 1 0
+    · exact ApxUSDFlowTrace.nil _
+  simpa [execTrace, step, apxUSDFlowStepFee] using h
+
+example :
+    apxUSDFlow (execTrace (default : State) [(Op.tick 1, 0)]) =
+      apxUSDFlow (default : State) := by
+  have h := apxUSDFlow_trace apxUSDFlow_tick_trace_witness
+  simpa using h.2
+
+theorem apxUSDFlow_standard_request_trace_witness :
+    ApxUSDFlowTrace (default : State) [(Op.requestUnlock 0, 0)]
+      (execTrace (default : State) [(Op.requestUnlock 0, 0)]) 0 := by
+  have h : ApxUSDFlowTrace (default : State) [(Op.requestUnlock 0, 0)]
+      (requestUnlockStep (default : State) 0 0) 0 := by
+    refine ApxUSDFlowTrace.cons (s := (default : State))
+      (s₁ := requestUnlockStep (default : State) 0 0)
+      (s₂ := requestUnlockStep (default : State) 0 0)
+      (p := (Op.requestUnlock 0, 0)) (ps := []) (fees := 0) ?_ ?_
+    · exact ApxUSDFlowStep.standardRequest _ 0 0 _
+        registryWellIndexed_default (by decide) (by simp [step, requestUnlockStep])
+    · exact ApxUSDFlowTrace.nil _
+  simpa [execTrace, step] using h
+
 end Apyx
