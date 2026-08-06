@@ -66,9 +66,9 @@ function for the five simplest `step` branches:
 `apxUSDLedgerConsistent_basic_step` (see "Scoped public-step slice" below)
 covers `depositUSDC`, `mintApxUSD`, `lockApxUSD`, `requestUnlock` and
 `flexibleRequestUnlock`, including the plumbing that discharges each burning
-branch's underflow guard into the burn-side bound. A separate scoped theorem
-also covers `claimUnlock` and `flexibleClaimUnlock`. Everything else —
-`redeemApxUSD`, `executeRFQRedemption`, `poolRedeem`, and
+branch's underflow guard into the burn-side bound. Separate scoped theorems
+also cover `claimUnlock`, `flexibleClaimUnlock`, and `redeemApxUSD`. Everything
+else — `executeRFQRedemption`, `poolRedeem`, and
 the frame proofs for the non-writing branches — remains open, so
 `ApxUSDLedgerConsistent` is still an *initialization-plus-fragment*
 invariant with a named gap, matching how `Invariant.lean` keeps
@@ -79,8 +79,9 @@ Status (proof-map §11): `apxUSDLedgerConsistent_default` is model-local;
 `apxUSDLedgerConsistent_transfer` are model-local per-operation lemmas (not
 trace facts); `apxUSDLedgerConsistent_basic_step` and
 `apxUSDLedgerConsistent_claimUnlock_step` /
-`apxUSDLedgerConsistent_flexibleClaimUnlock_step` are model-local *scoped* step
-facts (not a trace invariant and not full `Op` coverage); `ledgerGapWitness_*` and
+`apxUSDLedgerConsistent_flexibleClaimUnlock_step` /
+`apxUSDLedgerConsistent_redeemApxUSD_step` are model-local *scoped* step facts
+(not a trace invariant and not full `Op` coverage); `ledgerGapWitness_*` and
 `wellFormed_solvent_not_imply_ledgerConsistent` are witness/regression facts,
 not universal theorems.
 -/
@@ -196,8 +197,8 @@ the two primitive writers, applied in isolation:
   hypothesis must be discharged by the caller.
 
 Still uncovered, which is why no *universal* `step`-preservation theorem is
-stated: `redeemApxUSD`, `executeRFQRedemption`, and `poolRedeem`. The primitive
-`transferApxUSD` is now covered by
+stated: `executeRFQRedemption` and `poolRedeem`. The primitive `transferApxUSD`
+is now covered by
 `apxUSDLedgerConsistent_transfer`, with an explicit distinct-address
 hypothesis because the current writer mishandles self-transfer. The five
 simplest `step` branches — the deposit-path mints and the three
@@ -527,8 +528,8 @@ nothing is assumed beyond `ApxUSDLedgerConsistent s` and `step … = some s'`.
 
 **Scoped, not universal — read this before citing the theorem.** The theorem
 takes an explicit disjunction naming its five operations rather than claiming
-all of `Op`. Both registry remint branches have separate theorems below;
-`redeemApxUSD`, `executeRFQRedemption`, `poolRedeem` (burns whose guards sit
+all of `Op`. Both registry remint branches and `redeemApxUSD` have separate
+theorems below; `executeRFQRedemption`, `poolRedeem` (burns whose guards sit
 behind price/reserve arithmetic), and the non-writing branches (`withdraw`,
 `redeem`, `tick`, pause/list/admin ops), which need per-branch frame lemmas
 instead. Extending the disjunction branch-by-branch — the `solvency_step`
@@ -778,6 +779,56 @@ theorem apxUSDLedgerConsistent_flexibleClaimUnlock_step
     apxUSDLedgerConsistent_of_projections_eq (by rfl) (by rfl) h
   exact apxUSDLedgerConsistent_mint _ owner
     (amount - amount * flexibleUnlockFee requestTime s.now / 10000) hret
+
+/-! ## Scoped redemption-burn slice
+
+`redeemApxUSD` has several guards (pause, deny-list, whitelist, market price,
+reserve and the post-burn buffer), but its apxUSD ledger effect is still just a
+guarded `burnApxUSD`. The local inversion below keeps those operational guards
+visible while exposing only the balance bound and the post-state shape needed
+by the ledger theorem. -/
+
+private theorem step_redeemApxUSD_ledgerProj (s : State) (amount : Nat)
+    (caller : Address) (s' : State)
+    (h : step s (Op.redeemApxUSD amount) caller = some s') :
+    amount ≤ s.apxUSDBal caller ∧
+    s' = emitEvent { burnApxUSD s caller amount with
+        usdcReserve := (burnApxUSD s caller amount).usdcReserve -
+          (amount * s.redemptionValue) / ray
+        usdcBal := fun a => if a = caller then
+          (burnApxUSD s caller amount).usdcBal a +
+            (amount * s.redemptionValue) / ray
+          else (burnApxUSD s caller amount).usdcBal a }
+      "Redeem" [caller, amount, (amount * s.redemptionValue) / ray] := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · split at h
+          · exact absurd h (by simp)
+          · split at h
+            · exact absurd h (by simp)
+            · split at h
+              · exact absurd h (by simp)
+              · exact ⟨by omega, (Option.some.inj h).symm⟩
+
+/-- A successful `redeemApxUSD` preserves the finite ledger identity. Its
+reserve payout and event emission are ledger frames; the burn bound comes from
+the branch guard and discharges the primitive burn theorem. -/
+theorem apxUSDLedgerConsistent_redeemApxUSD_step
+    (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : ApxUSDLedgerConsistent s)
+    (hstep : step s (Op.redeemApxUSD amount) caller = some s') :
+    ApxUSDLedgerConsistent s' := by
+  obtain ⟨hle, hpost⟩ := step_redeemApxUSD_ledgerProj s amount caller s' hstep
+  rw [hpost]
+  exact apxUSDLedgerConsistent_of_projections_eq (by simp [emitEvent]) (by simp [emitEvent])
+    (apxUSDLedgerConsistent_burn s caller amount hle h)
 
 /-! ## Model-gap / regression witness
 
