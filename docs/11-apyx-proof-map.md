@@ -290,6 +290,16 @@ External calls need explicit assumptions. For example:
 
 If a composition theorem assumes these facts, record them as assumptions rather than burying them in the proof.
 
+The present source boundary is explicit: the core state and transition are in
+`outputs/apyx/Apyx.lean`; registry links are proved in `Registry.lean`; the
+finite apxUSD ledger is in `Ledger.lean`; aggregate solvency and holder-value
+properties are in `Safety.lean` and `HolderValue.lean`; authority and RFQ
+blast-radius claims are in `BlastRadius.lean`; and `Invariant.lean` composes
+the registry, solvency, well-formedness, and ledger predicates. The current
+model has no Solidity external-call semantics or reentrancy transition, so
+those bullets are recorded as out-of-model assumptions rather than silently
+treated as proved.
+
 ## 9. Separate capability from liveness
 
 Capability properties and progress properties use different proof shapes.
