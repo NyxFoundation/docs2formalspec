@@ -55,13 +55,21 @@ counterexample. The two honest ways to obtain preservation are:
    `solvency_step`.
 
 Either is a substantial, separately-scoped change to protocol-semantics files
-this module must not touch. Until one is done, `ApxUSDLedgerConsistent` is an
-*initialization-only* invariant plus a named gap, matching how `Invariant.lean`
-keeps `WellFormed s'` an explicit hypothesis instead of pretending to derive it.
+this module must not touch. The **first slice of option 2 now exists** (see
+"First balance-writer slice" below): `apxUSDLedgerConsistent_mint` and
+`apxUSDLedgerConsistent_burn` prove exactly the support-inclusion / sum-delta
+facts for the two *primitive* single-address writers, applied in isolation.
+Everything else — `transferApxUSD`, the composite operations, and the plumbing
+that connects each `step` branch's underflow guard to the burn-side bound —
+remains open, so `ApxUSDLedgerConsistent` is still an *initialization-plus-
+fragment* invariant with a named gap, matching how `Invariant.lean` keeps
+`WellFormed s'` an explicit hypothesis instead of pretending to derive it.
 
 Status (proof-map §11): `apxUSDLedgerConsistent_default` is model-local;
-`ledgerGapWitness_*` and `wellFormed_solvent_not_imply_ledgerConsistent` are
-witness/regression facts, not universal theorems.
+`apxUSDLedgerConsistent_mint` / `apxUSDLedgerConsistent_burn` are model-local
+per-operation lemmas (not trace facts); `ledgerGapWitness_*` and
+`wellFormed_solvent_not_imply_ledgerConsistent` are witness/regression facts,
+not universal theorems.
 -/
 
 namespace Apyx
@@ -150,6 +158,201 @@ theorem apxUSDLedgerConsistent_default : ApxUSDLedgerConsistent (default : State
   refine ⟨[], List.Pairwise.nil, ?_, rfl⟩
   intro a hne
   exact absurd rfl hne
+
+/-! ## First balance-writer slice: `mintApxUSD` / `burnApxUSD` preservation
+
+These are the first two entries of the per-operation programme described in the
+module docstring (option 2): for the raw single-address balance writers
+`mintApxUSD` and `burnApxUSD` we prove that the sum over a covering holder set
+moves in lockstep with the recorded supply, and compose that into preservation
+of `ApxUSDLedgerConsistent`. The holder-list representation stays existential:
+a mint to an address *outside* the current holder set conses that address onto
+the list (the fresh cover), while a burn always retains the pre-state list —
+the cover clause only demands that non-zero balances be listed, so a holder
+burned to zero may harmlessly remain listed.
+
+**Scope — read this before citing these theorems.** This slice covers exactly
+the two primitive writers, applied in isolation:
+
+* `apxUSDLedgerConsistent_mint` — any mint from a consistent pre-state;
+* `apxUSDLedgerConsistent_burn` — a burn whose amount is at most the sender's
+  pre-state balance. The bound is not decoration: `burnApxUSD` uses truncated
+  `Nat` subtraction, so an over-burn destroys more supply than balance and the
+  identity genuinely breaks. Every burning `step` branch carries an underflow
+  guard of exactly this shape, but that guard is **not** imported here — the
+  hypothesis must be discharged by the caller.
+
+Still uncovered, which is why no universal `step`-preservation theorem is
+stated: `transferApxUSD` (a two-address update needing a paired sum lemma),
+`requestUnlockStep` (burn composed with registry writes), the claim re-mints,
+`executeRFQRedemption`, `poolRedeem`, the deposit-path mints, and the plumbing
+that each `step` branch's balance guard discharges the burn-side bound above.
+Those are future slices; composing them per branch of `step` (the
+`solvency_step` scoping discipline) is the remaining work.
+
+The `sumOver_*` helpers below are dependency-free `List` lemmas (the project
+carries no Mathlib): congruence on members, and the two single-address
+update/sum-delta facts for duplicate-free (`Pairwise (· ≠ ·)`) lists. -/
+
+/-- `sumOver` only reads `f` at members of the list: pointwise agreement on the
+list gives equal sums. -/
+theorem sumOver_congr {f g : Address → Nat} :
+    ∀ {l : List Address}, (∀ a ∈ l, f a = g a) → sumOver f l = sumOver g l := by
+  intro l
+  induction l with
+  | nil => intro _; rfl
+  | cons x xs ih =>
+    intro h
+    simp only [sumOver_cons]
+    rw [h x (List.mem_cons.mpr (Or.inl rfl)),
+      ih (fun a ha => h a (List.mem_cons.mpr (Or.inr ha)))]
+
+/-- Bumping a single **listed** address by `amount` adds exactly `amount` to
+the sum, provided the list is duplicate-free — `Pairwise (· ≠ ·)` is what makes
+the bumped address count once. This is the mint-side sum-delta lemma. -/
+theorem sumOver_update_add_mem (f : Address → Nat) (t : Address) (amount : Nat) :
+    ∀ {l : List Address}, l.Pairwise (· ≠ ·) → t ∈ l →
+      sumOver (fun a => if a = t then f a + amount else f a) l
+        = sumOver f l + amount := by
+  intro l
+  induction l with
+  | nil => intro _ ht; cases ht
+  | cons x xs ih =>
+    intro hpw ht
+    cases hpw with
+    | cons hx hxs =>
+      simp only [sumOver_cons]
+      cases List.mem_cons.mp ht with
+      | inl hxt =>
+        subst hxt
+        have htail : sumOver (fun a => if a = t then f a + amount else f a) xs
+            = sumOver f xs :=
+          sumOver_congr (fun b hb => if_neg (Ne.symm (hx b hb)))
+        rw [if_pos rfl, htail]
+        omega
+      | inr hmem =>
+        rw [if_neg (hx t hmem), ih hxs hmem]
+        omega
+
+/-- Deducting `amount ≤ f t` at a single **listed** address removes exactly
+`amount` from the sum (stated addition-side to stay in well-behaved `Nat`
+arithmetic), provided the list is duplicate-free. This is the burn-side
+sum-delta lemma; the bound is what keeps truncated subtraction honest. -/
+theorem sumOver_update_sub_mem (f : Address → Nat) (t : Address) (amount : Nat)
+    (hle : amount ≤ f t) :
+    ∀ {l : List Address}, l.Pairwise (· ≠ ·) → t ∈ l →
+      sumOver (fun a => if a = t then f a - amount else f a) l + amount
+        = sumOver f l := by
+  intro l
+  induction l with
+  | nil => intro _ ht; cases ht
+  | cons x xs ih =>
+    intro hpw ht
+    cases hpw with
+    | cons hx hxs =>
+      simp only [sumOver_cons]
+      cases List.mem_cons.mp ht with
+      | inl hxt =>
+        subst hxt
+        have htail : sumOver (fun a => if a = t then f a - amount else f a) xs
+            = sumOver f xs :=
+          sumOver_congr (fun b hb => if_neg (Ne.symm (hx b hb)))
+        rw [if_pos rfl, htail]
+        omega
+      | inr hmem =>
+        rw [if_neg (hx t hmem)]
+        have := ih hxs hmem
+        omega
+
+/-- **Mint preserves the ledger identity.** `mintApxUSD` adds `amount` to one
+address's balance and to the supply, so any covering holder set keeps covering
+and its sum tracks the supply: if the recipient is already listed the same list
+works (`sumOver_update_add_mem`); if not, the recipient's pre-balance is forced
+to `0` by the cover clause, and consing the recipient onto the list restores
+both the cover and the sum. First half of the first balance-writer slice. -/
+theorem apxUSDLedgerConsistent_mint (s : State) (to : Address) (amount : Nat)
+    (h : ApxUSDLedgerConsistent s) :
+    ApxUSDLedgerConsistent (mintApxUSD s to amount) := by
+  obtain ⟨holders, hnd, hcov, hsum⟩ := h
+  by_cases hmem : to ∈ holders
+  · refine ⟨holders, hnd, ?_, ?_⟩
+    · intro a ha
+      by_cases hat : a = to
+      · subst hat; exact hmem
+      · exact hcov a (by simpa [mintApxUSD, hat] using ha)
+    · show sumOver (fun a => if a = to then s.apxUSDBal a + amount else s.apxUSDBal a)
+          holders = s.totalSupply_apxUSD + amount
+      rw [sumOver_update_add_mem s.apxUSDBal to amount hnd hmem, hsum]
+  · -- minting to a fresh address: its pre-balance is 0 (it is off the cover),
+    -- and the new holder list is the recipient consed onto the old one
+    have hzero : s.apxUSDBal to = 0 := by
+      by_cases hz : s.apxUSDBal to = 0
+      · exact hz
+      · exact False.elim (hmem (hcov to hz))
+    refine ⟨to :: holders, ?_, ?_, ?_⟩
+    · refine List.Pairwise.cons ?_ hnd
+      intro b hb heq
+      subst heq
+      exact hmem hb
+    · intro a ha
+      by_cases hat : a = to
+      · exact List.mem_cons.mpr (Or.inl hat)
+      · exact List.mem_cons.mpr (Or.inr (hcov a (by simpa [mintApxUSD, hat] using ha)))
+    · show sumOver (fun a => if a = to then s.apxUSDBal a + amount else s.apxUSDBal a)
+          (to :: holders) = s.totalSupply_apxUSD + amount
+      have htail : sumOver (fun a => if a = to then s.apxUSDBal a + amount else s.apxUSDBal a)
+          holders = sumOver s.apxUSDBal holders :=
+        sumOver_congr (fun b hb => by
+          by_cases hbt : b = to
+          · subst b
+            exact False.elim (hmem hb)
+          · simp [hbt])
+      simp only [sumOver_cons]
+      simp [htail, hzero, hsum]
+      omega
+
+/-- **Guarded burn preserves the ledger identity.** `burnApxUSD` deducts
+`amount` from one address's balance and from the supply; with the underflow
+bound `amount ≤ s.apxUSDBal fromAddr` both deductions are exact, so the
+pre-state holder list is *retained*: the cover survives (a balance can only
+shrink, and only at `fromAddr`, which stays listed) and the sum tracks the
+supply via `sumOver_update_sub_mem`. When `fromAddr` is off the cover its
+balance is `0`, forcing `amount = 0` and a no-op burn. Without the bound the
+identity genuinely fails — truncated subtraction would zero the balance while
+the supply drops by the full `amount`. Every burning `step` branch carries a
+guard of exactly this shape; wiring those guards to this hypothesis is a
+future slice. Second half of the first balance-writer slice. -/
+theorem apxUSDLedgerConsistent_burn (s : State) (fromAddr : Address) (amount : Nat)
+    (hle : amount ≤ s.apxUSDBal fromAddr)
+    (h : ApxUSDLedgerConsistent s) :
+    ApxUSDLedgerConsistent (burnApxUSD s fromAddr amount) := by
+  obtain ⟨holders, hnd, hcov, hsum⟩ := h
+  refine ⟨holders, hnd, ?_, ?_⟩
+  · intro a ha
+    by_cases hat : a = fromAddr
+    · subst a
+      refine hcov fromAddr (fun hz => ha ?_)
+      simp [burnApxUSD, hz]
+    · exact hcov a (by simpa [burnApxUSD, hat] using ha)
+  · by_cases hmem : fromAddr ∈ holders
+    · show sumOver (fun a => if a = fromAddr then s.apxUSDBal a - amount else s.apxUSDBal a)
+          holders = s.totalSupply_apxUSD - amount
+      have hkey := sumOver_update_sub_mem s.apxUSDBal fromAddr amount hle hnd hmem
+      omega
+    · -- burner off the cover ⇒ zero balance ⇒ the guard forces a no-op burn
+      have hzero : s.apxUSDBal fromAddr = 0 := by
+        by_cases hz : s.apxUSDBal fromAddr = 0
+        · exact hz
+        · exact False.elim (hmem (hcov fromAddr hz))
+      have hamt : amount = 0 := by omega
+      subst hamt
+      show sumOver (fun a => if a = fromAddr then s.apxUSDBal a - 0 else s.apxUSDBal a)
+          holders = s.totalSupply_apxUSD - 0
+      have hcong : sumOver (fun a => if a = fromAddr then s.apxUSDBal a - 0 else s.apxUSDBal a)
+          holders = sumOver s.apxUSDBal holders :=
+        sumOver_congr (fun b _ => by simp)
+      rw [hcong]
+      omega
 
 /-! ## Model-gap / regression witness
 
