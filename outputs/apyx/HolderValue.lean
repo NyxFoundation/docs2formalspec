@@ -1313,6 +1313,33 @@ def UsdcLedgerEffect (s s' : State) (holders : List Address) : Prop :=
     s'.usdcReserve = s.usdcReserve - amount) ∨
   UsdcLedgerFrame s s'
 
+theorem usdcLedgerEffect_depositUSDC
+    (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (holders : List Address) (hmem : caller ∈ holders)
+    (hstep : step s (Op.depositUSDC amount) caller = some s') :
+    UsdcLedgerEffect s s' holders := by
+  obtain ⟨-, -, -, hle, hpost⟩ := depositUSDCStep_effect s amount caller s' hstep
+  left
+  refine ⟨caller, amount, hmem, hle, ?_, ?_⟩
+  · rw [hpost]
+    simp [emitEvent, mintApxUSD]
+  · rw [hpost]
+    simp [emitEvent, mintApxUSD]
+
+theorem usdcLedgerEffect_mintApxUSD
+    (s : State) (to : Address) (amount : Nat) (caller : Address) (s' : State)
+    (holders : List Address) (hmem : caller ∈ holders)
+    (hstep : step s (Op.mintApxUSD to amount) caller = some s') :
+    UsdcLedgerEffect s s' holders := by
+  obtain ⟨-, -, -, -, -, hle, hpost⟩ :=
+    mintApxUSDStep_effect s to amount caller s' hstep
+  left
+  refine ⟨caller, amount, hmem, hle, ?_, ?_⟩
+  · rw [hpost]
+    simp [emitEvent, mintApxUSD]
+  · rw [hpost]
+    simp [emitEvent, mintApxUSD]
+
 theorem usdcLedgerConsistent_effect
     (s s' : State) (holders : List Address) (totalSupply : Nat)
     (hledger : UsdcLedgerConsistent s holders totalSupply)

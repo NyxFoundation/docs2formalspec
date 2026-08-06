@@ -1590,6 +1590,34 @@ theorem requestUnlockStep_effect (s : State) (amount : Nat) (caller : Address) (
     s' = requestUnlockStep s caller amount := by
   exact step_requestUnlock_some s amount caller s' h
 
+/-- Public effect boundary for a successful USDC deposit. The post-state
+exposes the exact USDC debit and reserve credit so an external finite-ledger
+relation can be connected without unfolding the dispatcher again. -/
+theorem depositUSDCStep_effect (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.depositUSDC amount) caller = some s') :
+    s.globalPause = false ∧ s.whitelist caller = true ∧ s.denylist caller = false ∧
+    amount ≤ s.usdcBal caller ∧
+    s' = emitEvent (mintApxUSD { s with
+        usdcBal := fun a => if a = caller then s.usdcBal a - amount else s.usdcBal a
+        usdcReserve := s.usdcReserve + amount } caller amount)
+      "Deposit" [caller, caller, caller, amount, amount] := by
+  exact step_depositUSDC_some s amount caller s' h
+
+/-- Public effect boundary for the above-peg apxUSD mint. Only the caller's
+USDC balance and the reserve are part of this ledger boundary; the recipient
+of the apxUSD mint is irrelevant to the USDC support premise. -/
+theorem mintApxUSDStep_effect (s : State) (to : Address) (amount : Nat)
+    (caller : Address) (s' : State)
+    (h : step s (Op.mintApxUSD to amount) caller = some s') :
+    s.globalPause = false ∧ s.whitelist caller = true ∧
+    s.denylist caller = false ∧ s.denylist to = false ∧
+    ray < s.apxUSDMarketPrice ∧ amount ≤ s.usdcBal caller ∧
+    s' = emitEvent (mintApxUSD { s with
+        usdcBal := fun a => if a = caller then s.usdcBal a - amount else s.usdcBal a
+        usdcReserve := s.usdcReserve + amount } to amount)
+      "Deposit" [caller, to, to, amount, amount] := by
+  exact step_mintApxUSD_some s to amount caller s' h
+
 private theorem step_flexibleRequestUnlock_some (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.flexibleRequestUnlock amount) caller = some s') :
     s.globalPause = false ∧ amount ≤ s.apxUSDBal caller ∧

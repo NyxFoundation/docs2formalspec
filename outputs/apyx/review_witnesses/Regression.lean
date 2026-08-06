@@ -794,4 +794,23 @@ example : UsdcLedgerConsistent usdcLedgerDebit [1] 100 := by
   funext a
   by_cases h : a = 1 <;> simp [usdcLedger0, usdcLedgerDebit, h]
 
+/-! ## R20 — a public USDC deposit can enter the external effect boundary
+
+Unlike R19, this witness goes through the public dispatcher. The caller is
+included in the externally supplied finite support, while the operation's
+USDC debit and reserve credit are extracted by depositUSDCStep_effect. -/
+
+def usdcDepositStart : State :=
+  { usdcLedger0 with whitelist := fun a => a = 1 }
+
+def usdcDepositPost : State :=
+  execTrace usdcDepositStart [(Op.depositUSDC 50, 1)]
+
+example : UsdcLedgerConsistent usdcDepositPost [1] 100 := by
+  apply usdcLedgerConsistent_effect usdcDepositStart usdcDepositPost [1] 100
+    (by simp [UsdcLedgerConsistent, usdcDepositStart, usdcLedger0, default, sumOver])
+  exact usdcLedgerEffect_depositUSDC usdcDepositStart 50 1 usdcDepositPost [1]
+    (by simp) (by simp [usdcDepositPost, execTrace, step, usdcDepositStart,
+      usdcLedger0, default, emitEvent, mintApxUSD])
+
 end Apyx

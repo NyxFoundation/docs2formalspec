@@ -245,8 +245,11 @@ unaffected operations. `UsdcLedgerEffect` and
 `usdcLedgerConsistent_effect` compose those cases without pretending that the
 current dispatcher has supplied the missing finite support or total supply.
 These remain interface lemmas, not a reachable-state USDC invariant: tying a
-concrete `Op` to one of the effects, plus fee-wallet treatment and decimal
-scaling, still belongs to the deployment/SPECA model.
+concrete `Op` to one of the effects is now closed for `depositUSDC` and
+`mintApxUSD` by `depositUSDCStep_effect`, `mintApxUSDStep_effect`,
+`usdcLedgerEffect_depositUSDC`, and `usdcLedgerEffect_mintApxUSD`. The
+remaining redemption/RFQ/backstop mapping, fee-wallet treatment, and decimal
+scaling still belong to the deployment/SPECA model.
 
 The next internal boundary is `apxUSDFlow`: vault custody plus
 `outstandingApxUSD`. Projection lemmas
