@@ -1074,6 +1074,19 @@ theorem apxUSDLedgerConsistent_step
   apxUSDLedgerConsistent_covered_step s s' op caller
     (ledgerCoveredOp_all op) h hstep
 
+theorem apxUSDLedgerConsistent_trace (s : State) (σ : List (Op × Address))
+    (h : ApxUSDLedgerConsistent s) :
+    ApxUSDLedgerConsistent (execTrace s σ) := by
+  induction σ generalizing s with
+  | nil => exact h
+  | cons p σ ih =>
+      obtain ⟨op, caller⟩ := p
+      simp only [execTrace]
+      cases hstep : step s op caller with
+      | none => exact ih s h
+      | some s' =>
+          exact ih s' (apxUSDLedgerConsistent_step s s' op caller h hstep)
+
 /-! ## Model-gap / regression witness
 
 **Not a protocol exploit claim.** `ledgerGapWitness` is a state of the *abstract
