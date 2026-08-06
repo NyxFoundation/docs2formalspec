@@ -645,4 +645,14 @@ theorem registryWellIndexed_reachable (s : State) (h : RegistryReach s) :
   | initial => exact registryWellIndexed_default
   | next _ hstep ih => exact registryWellIndexed_step _ _ _ _ ih hstep
 
+/-- Bridge: on any `RegistryReach` state, the flexible registry has no entry at the
+allocation counter.  This composes `registryWellIndexed_reachable` with
+`flex_unallocated_at_counter` to discharge the `h_unalloc_flex` side condition of
+`HolderValue`'s counter-indexed lemmas — but only for registry-reachable states.
+It proves nothing about ledger consistency or holder-value safety themselves, and
+inherits every scope caveat of `RegistryReach` (registry-scoped, `default`-based). -/
+theorem flexibleUnlock_unallocated_reachable (s : State) (h : RegistryReach s) :
+    s.flexibleUnlockRequests s.nextUnlockId = none :=
+  flex_unallocated_at_counter s (registryWellIndexed_reachable s h).1
+
 end Apyx
