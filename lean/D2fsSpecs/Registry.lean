@@ -475,6 +475,74 @@ theorem registryWellIndexed_flexibleRequestUnlock_step (s : State) (amount : Nat
   exact registryWellIndexed_createFlexibleUnlock _ _ _
     (registryWellIndexed_burnApxUSD s caller amount h)
 
+/-- Registry preservation along the shared tail of the two ERC-4626 vault exits
+(`Op.withdraw` / `Op.redeem`): burn the caller's apyUSD, debit the vault, allocate a fresh
+standard unlock position for the receiver, republish the exchange rate, emit the event.
+The apyUSD burn and vault debit are pure registry frames; the allocation is the existing
+`createStandardUnlock` preservation; the rate republish and event emission are discharged
+per projection (`simp`) rather than by one whole-structure `rfl`, which sends the kernel
+into deep recursion on this 40-field state. -/
+theorem registryWellIndexed_vaultExitChain (s1 : State) (caller shares assets : Nat)
+    (receiver : Address) (name : String) (evArgs : List Nat)
+    (h : RegistryWellIndexed s1) :
+    RegistryWellIndexed (emitEvent (updateExchangeRate (createStandardUnlock
+      { burnApyUSD s1 caller shares with
+          vaultApxUSDBal := (burnApyUSD s1 caller shares).vaultApxUSDBal - assets }
+      receiver assets)) name evArgs) := by
+  have h2 : RegistryWellIndexed
+      ({ burnApyUSD s1 caller shares with
+          vaultApxUSDBal := (burnApyUSD s1 caller shares).vaultApxUSDBal - assets } : State) :=
+    registryWellIndexed_of_frame s1 _ ⟨rfl, rfl, rfl, rfl, rfl⟩ h
+  have h3 : RegistryWellIndexed (createStandardUnlock
+      { burnApyUSD s1 caller shares with
+          vaultApxUSDBal := (burnApyUSD s1 caller shares).vaultApxUSDBal - assets }
+      receiver assets) :=
+    registryWellIndexed_createStandardUnlock _ receiver assets h2
+  exact registryWellIndexed_of_frame _ _
+    ⟨by simp [emitEvent, updateExchangeRate], by simp [emitEvent, updateExchangeRate],
+     by simp [emitEvent, updateExchangeRate], by simp [emitEvent, updateExchangeRate],
+     by simp [emitEvent, updateExchangeRate]⟩ h3
+
+/-- A successful `Op.withdraw` preserves the registry invariants.
+
+**Model caveat (documented, not repaired here).** The exit allocates its receipt with
+`createStandardUnlock`, which *unconditionally overwrites* `unlockRequestId receiver`.
+If the receiver already had a live standard unlock position (from an earlier
+`requestUnlock`), that position's per-user pointer is lost: the old entry stays in
+`unlockRequests`/`unlockTokenOwner` and remains claimable by id through `claimUnlock`,
+but it can no longer be topped up (the `requestUnlockStep` coalescing path follows the
+pointer) and `requestUnlockStep_caller_position`'s "single tracked position" reading no
+longer covers it. `RegistryWellIndexed` survives because `OwnerPointerSound` constrains
+only ids a pointer *currently* references — the orphaned entry is simply out of the
+pointer's view. The theorem is stated over the model as-is. -/
+theorem registryWellIndexed_withdraw_step (s : State) (assets : Nat) (receiver caller : Address)
+    (s' : State) (h : RegistryWellIndexed s)
+    (hstep : step s (Op.withdraw assets receiver) caller = some s') :
+    RegistryWellIndexed s' := by
+  have h1 : RegistryWellIndexed (pullVestedYield s) := registryWellIndexed_pullVestedYield s h
+  simp only [step] at hstep
+  (repeat' split at hstep) <;>
+    first
+      | cases Option.some.inj hstep
+        exact registryWellIndexed_vaultExitChain (pullVestedYield s) caller _ assets
+          receiver _ _ h1
+      | exact absurd hstep (by simp)
+
+/-- A successful `Op.redeem` preserves the registry invariants. Same exit tail and same
+pointer-overwrite caveat as `registryWellIndexed_withdraw_step`. -/
+theorem registryWellIndexed_redeem_step (s : State) (shares : Nat) (receiver caller : Address)
+    (s' : State) (h : RegistryWellIndexed s)
+    (hstep : step s (Op.redeem shares receiver) caller = some s') :
+    RegistryWellIndexed s' := by
+  have h1 : RegistryWellIndexed (pullVestedYield s) := registryWellIndexed_pullVestedYield s h
+  simp only [step] at hstep
+  (repeat' split at hstep) <;>
+    first
+      | cases Option.some.inj hstep
+        exact registryWellIndexed_vaultExitChain (pullVestedYield s) caller shares _
+          receiver _ _ h1
+      | exact absurd hstep (by simp)
+
 /-- Operations outside the six registry-writing branches leave all registry projections alone.
 The two vault exit branches are intentionally excluded: they allocate a new standard position. -/
 def RegistryStaticOp (op : Op) : Prop :=
@@ -503,5 +571,29 @@ theorem registryWellIndexed_static_step (s : State) (op : Op) (caller : Address)
         | cases Option.some.inj hstep
           exact registryWellIndexed_of_frame _ _ ⟨rfl, rfl, rfl, rfl, rfl⟩ h
         | exact absurd hstep (by simp)
+
+/-- Capstone: **every** successful public transition preserves the registry invariants.
+The six registry-writing operations are dispatched to their dedicated preservation
+theorems; every other constructor is a registry frame via
+`registryWellIndexed_static_step`. -/
+theorem registryWellIndexed_step (s : State) (op : Op) (caller : Address) (s' : State)
+    (h : RegistryWellIndexed s) (hstep : step s op caller = some s') :
+    RegistryWellIndexed s' := by
+  cases op
+  case requestUnlock n =>
+    exact registryWellIndexed_requestUnlock_step s n caller s' h hstep
+  case claimUnlock n =>
+    exact registryWellIndexed_claimUnlock_step s n caller s' h hstep
+  case withdraw n r =>
+    exact registryWellIndexed_withdraw_step s n r caller s' h hstep
+  case redeem n r =>
+    exact registryWellIndexed_redeem_step s n r caller s' h hstep
+  case flexibleRequestUnlock n =>
+    exact registryWellIndexed_flexibleRequestUnlock_step s n caller s' h hstep
+  case flexibleClaimUnlock n =>
+    exact registryWellIndexed_flexibleClaimUnlock_step s n caller s' h hstep
+  all_goals
+    exact registryWellIndexed_static_step s _ caller s' h
+      (by simp [RegistryStaticOp]) hstep
 
 end Apyx
