@@ -67,7 +67,7 @@ function for the five simplest `step` branches:
 covers `depositUSDC`, `mintApxUSD`, `lockApxUSD`, `requestUnlock` and
 `flexibleRequestUnlock`, including the plumbing that discharges each burning
 branch's underflow guard into the burn-side bound. A separate scoped theorem
-also covers `claimUnlock`. Everything else — `flexibleClaimUnlock`,
+also covers `claimUnlock` and `flexibleClaimUnlock`. Everything else —
 `redeemApxUSD`, `executeRFQRedemption`, `poolRedeem`, and
 the frame proofs for the non-writing branches — remains open, so
 `ApxUSDLedgerConsistent` is still an *initialization-plus-fragment*
@@ -78,8 +78,9 @@ Status (proof-map §11): `apxUSDLedgerConsistent_default` is model-local;
 `apxUSDLedgerConsistent_mint` / `apxUSDLedgerConsistent_burn` /
 `apxUSDLedgerConsistent_transfer` are model-local per-operation lemmas (not
 trace facts); `apxUSDLedgerConsistent_basic_step` and
-`apxUSDLedgerConsistent_claimUnlock_step` are model-local *scoped* step facts
-(not a trace invariant and not full `Op` coverage); `ledgerGapWitness_*` and
+`apxUSDLedgerConsistent_claimUnlock_step` /
+`apxUSDLedgerConsistent_flexibleClaimUnlock_step` are model-local *scoped* step
+facts (not a trace invariant and not full `Op` coverage); `ledgerGapWitness_*` and
 `wellFormed_solvent_not_imply_ledgerConsistent` are witness/regression facts,
 not universal theorems.
 -/
@@ -195,8 +196,8 @@ the two primitive writers, applied in isolation:
   hypothesis must be discharged by the caller.
 
 Still uncovered, which is why no *universal* `step`-preservation theorem is
-stated: `flexibleClaimUnlock`, `redeemApxUSD`, `executeRFQRedemption`, and
-`poolRedeem`. The primitive `transferApxUSD` is now covered by
+stated: `redeemApxUSD`, `executeRFQRedemption`, and `poolRedeem`. The primitive
+`transferApxUSD` is now covered by
 `apxUSDLedgerConsistent_transfer`, with an explicit distinct-address
 hypothesis because the current writer mishandles self-transfer. The five
 simplest `step` branches — the deposit-path mints and the three
@@ -526,9 +527,7 @@ nothing is assumed beyond `ApxUSDLedgerConsistent s` and `step … = some s'`.
 
 **Scoped, not universal — read this before citing the theorem.** The theorem
 takes an explicit disjunction naming its five operations rather than claiming
-all of `Op`. `claimUnlock` has a separate theorem below; the remaining
-registry remint branch, `flexibleClaimUnlock`, is deliberately out of scope
-(its amount comes out of the registry),
+all of `Op`. Both registry remint branches have separate theorems below;
 `redeemApxUSD`, `executeRFQRedemption`, `poolRedeem` (burns whose guards sit
 behind price/reserve arithmetic), and the non-writing branches (`withdraw`,
 `redeem`, `tick`, pause/list/admin ops), which need per-branch frame lemmas
@@ -736,6 +735,49 @@ theorem apxUSDLedgerConsistent_claimUnlock_step (s : State) (id : Nat) (caller :
   have hret : ApxUSDLedgerConsistent (retireStandardUnlock s id owner) :=
     apxUSDLedgerConsistent_of_projections_eq (by rfl) (by rfl) h
   exact apxUSDLedgerConsistent_mint _ owner amount hret
+
+/-- Local inversion for the flexible claim branch. The mint amount is the
+post-fee amount computed by `flexibleUnlockFee`, exactly as in `step`. -/
+private theorem step_flexibleClaimUnlock_ledgerProj (s : State) (id : Nat)
+    (caller : Address) (s' : State)
+    (h : step s (Op.flexibleClaimUnlock id) caller = some s') :
+    ∃ owner amount requestTime cooldownEnd,
+      s.flexibleUnlockRequests id = some (owner, amount, requestTime, cooldownEnd) ∧
+      s.unlockTokenOwner id = some owner ∧
+      (caller = owner ∨ caller = s.unlockTokenOperator) ∧
+      requestTime + minFlexibleClaim ≤ s.now ∧
+      s' = mintApxUSD (retireFlexibleUnlock s id) owner
+        (amount - amount * flexibleUnlockFee requestTime s.now / 10000) := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i owner amount requestTime cooldownEnd heq
+    split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · split at h
+          · exact absurd h (by simp)
+          · exact ⟨owner, amount, requestTime, cooldownEnd, heq, by simp_all, by assumption,
+              by omega, (Option.some.inj h).symm⟩
+        · exact absurd h (by simp)
+
+/-- A successful flexible unlock claim preserves the finite ledger identity.
+The fee-adjusted amount is minted after the flexible registry entry is retired;
+both operations are handled by already-proved frame and mint lemmas. -/
+theorem apxUSDLedgerConsistent_flexibleClaimUnlock_step
+    (s : State) (id : Nat) (caller : Address) (s' : State)
+    (h : ApxUSDLedgerConsistent s)
+    (hstep : step s (Op.flexibleClaimUnlock id) caller = some s') :
+    ApxUSDLedgerConsistent s' := by
+  obtain ⟨owner, amount, requestTime, cooldownEnd, -, -, -, -, hpost⟩ :=
+    step_flexibleClaimUnlock_ledgerProj s id caller s' hstep
+  rw [hpost]
+  have hret : ApxUSDLedgerConsistent (retireFlexibleUnlock s id) :=
+    apxUSDLedgerConsistent_of_projections_eq (by rfl) (by rfl) h
+  exact apxUSDLedgerConsistent_mint _ owner
+    (amount - amount * flexibleUnlockFee requestTime s.now / 10000) hret
 
 /-! ## Model-gap / regression witness
 
