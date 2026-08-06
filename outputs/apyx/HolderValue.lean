@@ -2339,11 +2339,15 @@ def liveRateSequence (s : State) : List (Op × Address) → List Nat
   | p :: σ => holderValueExecutionRate s p.1 ::
       liveRateSequence (traceNextState s p) σ
 
-def RateAwareSideCondition (s : State) (a : Address) : List (Op × Address) → Prop
-  | [] => s.redemptionValue ≤ ray ∧ a ≠ s.unlockTokenOperator
+/-! The rate-aware composition needs the no-premium redemption bound at every
+prefix state. It does not need a separate operator exclusion: this trace is
+holder-signed, and the fixed-rate claim frames already cover the successful
+claim branches used here. -/
+def RateAwareSideCondition (s : State) : List (Op × Address) → Prop
+  | [] => s.redemptionValue ≤ ray
   | p :: σ =>
-      s.redemptionValue ≤ ray ∧ a ≠ s.unlockTokenOperator ∧
-        RateAwareSideCondition (traceNextState s p) a σ
+      s.redemptionValue ≤ ray ∧
+        RateAwareSideCondition (traceNextState s p) σ
 
 private theorem holderValueAt_executionRate_step
     (s : State) (op : Op) (caller : Address) (s' : State) (a : Address)
@@ -2404,7 +2408,7 @@ set_option maxRecDepth 10000 in
 theorem holderValueAt_rateAware_trace_bound
     (s : State) (σ : List (Op × Address)) (a : Address) (R₀ : Nat)
     (h_registry : RegistryWellIndexed s)
-    (h_safe : RateAwareSideCondition s a σ)
+    (h_safe : RateAwareSideCondition s σ)
     (h_own : ∀ p ∈ σ, p.2 = a)
     (h_ops : ∀ p ∈ σ, RateAwareHolderValueOp p.1)
     (h_nonempty : σ ≠ [])
@@ -2451,8 +2455,8 @@ theorem holderValueAt_rateAware_trace_bound
           have hhead := liveRateSequence_head_bound s (op, caller) (q :: σ) h_rates
           cases hstep : step s op caller with
           | none =>
-              have hsafe_tail : RateAwareSideCondition s a (q :: σ) := by
-                simpa [traceNextState, hstep] using h_safe.2.2
+              have hsafe_tail : RateAwareSideCondition s (q :: σ) := by
+                simpa [traceNextState, hstep] using h_safe.2
               have htail_pair' : List.Pairwise (fun r₁ r₂ => r₂ ≤ r₁)
                   (liveRateSequence s (q :: σ)) := by
                 simpa only [liveRateSequence, traceNextState, hstep] using htail_pair
@@ -2465,8 +2469,8 @@ theorem holderValueAt_rateAware_trace_bound
               simpa [execTrace, traceNextState, hstep] using
                 Nat.le_trans hbound hpostrate
           | some s1 =>
-              have hsafe_tail : RateAwareSideCondition s1 a (q :: σ) := by
-                simpa [traceNextState, hstep] using h_safe.2.2
+              have hsafe_tail : RateAwareSideCondition s1 (q :: σ) := by
+                simpa [traceNextState, hstep] using h_safe.2
               have h_registry1 : RegistryWellIndexed s1 :=
                 registryWellIndexed_step s op caller s1 h_registry hstep
               have htail_pair' : List.Pairwise (fun r₁ r₂ => r₂ ≤ r₁)
@@ -2491,7 +2495,7 @@ conservation. -/
 theorem holderValue_rateAware_trace_nonincreasing
     (s : State) (σ : List (Op × Address)) (a : Address) (R₀ : Nat)
     (h_registry : RegistryWellIndexed s)
-    (h_safe : RateAwareSideCondition s a σ)
+    (h_safe : RateAwareSideCondition s σ)
     (h_own : ∀ p ∈ σ, p.2 = a)
     (h_ops : ∀ p ∈ σ, RateAwareHolderValueOp p.1)
     (h_nonempty : σ ≠ [])

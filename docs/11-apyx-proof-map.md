@@ -222,8 +222,11 @@ The rate-aware definitions `RateAwareHolderValueOp`,
 make that argument stateable. `holderValueAt_rateAware_trace_bound` proves the
 fixed-to-live bound under a pairwise non-increasing execution-rate schedule;
 `holderValue_rateAware_trace_nonincreasing` adds the explicit first-rate
-condition needed to compare against the initial live value. This is a
-conditional vault-trace theorem, not a blanket closure of the live-rate gap.
+condition needed to compare against the initial live value. The side condition
+only carries the no-premium redemption bound through the trace; operator
+exclusion is not needed because the trace is holder-signed and the claim frames
+used by this theorem are already generic. This is a conditional vault-trace
+theorem, not a blanket closure of the live-rate gap.
 
 ### 5.3 Clock consistency
 
