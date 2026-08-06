@@ -172,7 +172,12 @@ before the universal theorem. Finally, `apyUSDLedgerGapWitness`,
 `apyUSDLedgerGapWitness_two_holders_exceed_supply`, and
 `apyUSDLedgerGapWitness_not_consistent` record the model boundary: arbitrary
 hand-written states can violate the relation even though the default trace
-invariant is preserved.
+invariant is preserved. For the pool's apyUSD-only conversion, the
+floor-rounding layer is explicit: `finiteApyUSDValueAt` and
+`finiteApyUSDValueAt_le_redeemAssets_sum` give the aggregate upper bound,
+`apyUSDLedgerConsistent_finiteApyUSDValueAt_bound` connects it to the supply
+identity, and `finiteApyUSDValueAt_rounding_gap` shows why the bound is not an
+equality theorem.
 
 ### 5.2 Registry consistency
 

@@ -961,6 +961,9 @@ def finitePoolValueAt (R : Nat) (s : State) (holders : List Address) : Int :=
 def finitePoolRateDelta (s : State) (holders : List Address) (R₁ R₂ : Nat) : Int :=
   (holders.map (fun a => holderRateDelta s a R₁ R₂)).sum
 
+def finiteApyUSDValueAt (R : Nat) (s : State) (holders : List Address) : Nat :=
+  (holders.map (fun a => redeemAssets (s.apyUSDBal a) R)).sum
+
 theorem finitePoolValueAt_rateDelta (s : State) (holders : List Address)
     (R₁ R₂ : Nat) :
     finitePoolValueAt R₂ s holders - finitePoolValueAt R₁ s holders =
@@ -1979,6 +1982,46 @@ theorem div_add_div_le (x y d : Nat) : x / d + y / d ≤ (x + y) / d := by
   · subst h; simp
   · rw [Nat.le_div_iff_mul_le h, Nat.add_mul]
     exact Nat.add_le_add (Nat.div_mul_le_self x d) (Nat.div_mul_le_self y d)
+
+theorem finiteApyUSDValueAt_le_redeemAssets_sum (R : Nat) (s : State)
+    (holders : List Address) :
+    finiteApyUSDValueAt R s holders ≤
+      redeemAssets (sumOver s.apyUSDBal holders) R := by
+  induction holders with
+  | nil => simp [finiteApyUSDValueAt, sumOver, redeemAssets]
+  | cons a holders ih =>
+      simp only [finiteApyUSDValueAt, List.map_cons, List.sum_cons, sumOver_cons]
+      calc
+        redeemAssets (s.apyUSDBal a) R +
+              (holders.map (fun b => redeemAssets (s.apyUSDBal b) R)).sum ≤
+            redeemAssets (s.apyUSDBal a) R +
+              redeemAssets (sumOver s.apyUSDBal holders) R :=
+          Nat.add_le_add_left ih _
+        _ ≤ redeemAssets (s.apyUSDBal a + sumOver s.apyUSDBal holders) R := by
+          unfold redeemAssets
+          simpa [Nat.add_mul] using
+            (div_add_div_le (s.apyUSDBal a * R)
+              (sumOver s.apyUSDBal holders * R) ray)
+
+theorem apyUSDLedgerConsistent_finiteApyUSDValueAt_bound
+    (R : Nat) (s : State) (h : ApyUSDLedgerConsistent s) :
+    ∃ holders : List Address,
+      holders.Pairwise (· ≠ ·) ∧
+      (∀ a, s.apyUSDBal a ≠ 0 → a ∈ holders) ∧
+      finiteApyUSDValueAt R s holders ≤ redeemAssets s.totalSupply_apyUSD R := by
+  obtain ⟨holders, hnd, hcov, hsum⟩ := h
+  refine ⟨holders, hnd, hcov, ?_⟩
+  rw [← hsum]
+  exact finiteApyUSDValueAt_le_redeemAssets_sum R s holders
+
+theorem finiteApyUSDValueAt_rounding_gap :
+    let s : State :=
+      { (default : State) with
+          apyUSDBal := fun a => if a = 0 then 1 else if a = 1 then 1 else 0
+          totalSupply_apyUSD := 2 }
+    finiteApyUSDValueAt (ray / 2) s [0, 1] = 0 ∧
+      redeemAssets s.totalSupply_apyUSD (ray / 2) = 1 := by
+  decide
 
 /-- Splitting a share balance across a burn loses at most dust, never gains:
 the two pieces, each floor-priced, never exceed the whole floor-priced. -/
