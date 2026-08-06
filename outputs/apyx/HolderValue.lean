@@ -56,6 +56,356 @@ theorem apyUSDLedgerConsistent_default :
   intro a hne
   exact absurd rfl hne
 
+/-! ## Primitive apyUSD writers
+
+The arbitrary address function is not, by itself, a reason to abandon the
+finite ledger relation. Once the relation supplies a finite support list, the
+two apyUSD writers can preserve it exactly. The underflow bound on burns is
+essential: without it, truncated `Nat` subtraction can reduce one balance by
+less than the amount removed from `totalSupply_apyUSD`. -/
+
+theorem apyUSDLedgerConsistent_mint (s : State) (to : Address) (amount : Nat)
+    (h : ApyUSDLedgerConsistent s) :
+    ApyUSDLedgerConsistent (mintApyUSD s to amount) := by
+  obtain ⟨holders, hnd, hcov, hsum⟩ := h
+  by_cases hmem : to ∈ holders
+  · refine ⟨holders, hnd, ?_, ?_⟩
+    · intro a ha
+      by_cases hat : a = to
+      · subst hat; exact hmem
+      · exact hcov a (by simpa [mintApyUSD, hat] using ha)
+    · show sumOver (fun a => if a = to then s.apyUSDBal a + amount else s.apyUSDBal a)
+          holders = s.totalSupply_apyUSD + amount
+      rw [sumOver_update_add_mem s.apyUSDBal to amount hnd hmem, hsum]
+  · have hzero : s.apyUSDBal to = 0 := by
+      by_cases hz : s.apyUSDBal to = 0
+      · exact hz
+      · exact False.elim (hmem (hcov to hz))
+    refine ⟨to :: holders, ?_, ?_, ?_⟩
+    · refine List.Pairwise.cons ?_ hnd
+      intro b hb heq
+      subst heq
+      exact hmem hb
+    · intro a ha
+      by_cases hat : a = to
+      · exact List.mem_cons.mpr (Or.inl hat)
+      · exact List.mem_cons.mpr (Or.inr (hcov a (by
+          simpa [mintApyUSD, hat] using ha)))
+    · show sumOver (fun a => if a = to then s.apyUSDBal a + amount else s.apyUSDBal a)
+          (to :: holders) = s.totalSupply_apyUSD + amount
+      have htail : sumOver (fun a => if a = to then s.apyUSDBal a + amount else s.apyUSDBal a)
+          holders = sumOver s.apyUSDBal holders :=
+        sumOver_congr (fun b hb => by
+          by_cases hbt : b = to
+          · subst b
+            exact False.elim (hmem hb)
+          · simp [hbt])
+      simp only [sumOver_cons]
+      simp [htail, hzero, hsum]
+      omega
+
+theorem apyUSDLedgerConsistent_burn (s : State) (fromAddr : Address) (amount : Nat)
+    (hle : amount ≤ s.apyUSDBal fromAddr)
+    (h : ApyUSDLedgerConsistent s) :
+    ApyUSDLedgerConsistent (burnApyUSD s fromAddr amount) := by
+  obtain ⟨holders, hnd, hcov, hsum⟩ := h
+  refine ⟨holders, hnd, ?_, ?_⟩
+  · intro a ha
+    by_cases hat : a = fromAddr
+    · subst a
+      refine hcov fromAddr (fun hz => ha ?_)
+      simp [burnApyUSD, hz]
+    · exact hcov a (by simpa [burnApyUSD, hat] using ha)
+  · by_cases hmem : fromAddr ∈ holders
+    · show sumOver (fun a => if a = fromAddr then s.apyUSDBal a - amount else s.apyUSDBal a)
+          holders = s.totalSupply_apyUSD - amount
+      have hkey := sumOver_update_sub_mem s.apyUSDBal fromAddr amount hle hnd hmem
+      omega
+    · have hzero : s.apyUSDBal fromAddr = 0 := by
+        by_cases hz : s.apyUSDBal fromAddr = 0
+        · exact hz
+        · exact False.elim (hmem (hcov fromAddr hz))
+      have hamt : amount = 0 := by omega
+      subst hamt
+      show sumOver (fun a => if a = fromAddr then s.apyUSDBal a - 0 else s.apyUSDBal a)
+          holders = s.totalSupply_apyUSD - 0
+      have hcong : sumOver (fun a => if a = fromAddr then s.apyUSDBal a - 0 else s.apyUSDBal a)
+          holders = sumOver s.apyUSDBal holders :=
+        sumOver_congr (fun b _ => by simp)
+      rw [hcong]
+      omega
+
+theorem apyUSDLedgerConsistent_of_projections_eq {s t : State}
+    (hbal : s.apyUSDBal = t.apyUSDBal)
+    (hsup : s.totalSupply_apyUSD = t.totalSupply_apyUSD)
+    (h : ApyUSDLedgerConsistent t) : ApyUSDLedgerConsistent s := by
+  obtain ⟨holders, hnd, hcov, hsum⟩ := h
+  refine ⟨holders, hnd, ?_, ?_⟩
+  · intro a ha
+    refine hcov a ?_
+    rw [← hbal]
+    exact ha
+  · rw [hbal, hsup]
+    exact hsum
+
+/-! ## Public-step projections
+
+Only three `Op` constructors write the apyUSD ledger projections: `lockApxUSD`
+mints apyUSD shares, while `withdraw` and `redeem` burn them. The successful
+branch lemmas below expose precisely those primitive writers and their
+underflow bounds. All other operations are handled as projection frames. -/
+
+private theorem pullVestedYield_apyUSDBal_local (s : State) :
+    (pullVestedYield s).apyUSDBal = s.apyUSDBal := by
+  unfold pullVestedYield
+  dsimp only
+  split <;> rfl
+
+private theorem step_lockApyUSD_ledgerProj (s : State) (amount : Nat) (caller : Address)
+    (s' : State) (h : step s (Op.lockApxUSD amount) caller = some s') :
+    ∃ shares, s'.apyUSDBal = (mintApyUSD s caller shares).apyUSDBal ∧
+      s'.totalSupply_apyUSD = (mintApyUSD s caller shares).totalSupply_apyUSD := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · cases Option.some.inj h
+        exact ⟨lockShares amount (computeExchangeRate s), by
+          simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD], by
+          simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]⟩
+
+private theorem step_withdrawApyUSD_ledgerProj (s : State) (assets : Nat)
+    (receiver caller : Address) (s' : State)
+    (h : step s (Op.withdraw assets receiver) caller = some s') :
+    ∃ shares, shares ≤ s.apyUSDBal caller ∧
+      s'.apyUSDBal = (burnApyUSD s caller shares).apyUSDBal ∧
+      s'.totalSupply_apyUSD = (burnApyUSD s caller shares).totalSupply_apyUSD := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · have hle : withdrawShares assets (computeExchangeRate (pullVestedYield s)) ≤
+              s.apyUSDBal caller := by
+            have hpull := pullVestedYield_apyUSDBal_local s
+            rw [← hpull]
+            omega
+          cases Option.some.inj h
+          refine ⟨withdrawShares assets (computeExchangeRate (pullVestedYield s)), hle, ?_, ?_⟩
+          · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+          · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+
+private theorem step_redeemApyUSD_ledgerProj (s : State) (shares : Nat)
+    (receiver caller : Address) (s' : State)
+    (h : step s (Op.redeem shares receiver) caller = some s') :
+    shares ≤ s.apyUSDBal caller ∧
+      s'.apyUSDBal = (burnApyUSD s caller shares).apyUSDBal ∧
+      s'.totalSupply_apyUSD = (burnApyUSD s caller shares).totalSupply_apyUSD := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · have hle : shares ≤ s.apyUSDBal caller := by
+            have hpull := pullVestedYield_apyUSDBal_local s
+            rw [← hpull]
+            omega
+          cases Option.some.inj h
+          refine ⟨hle, ?_, ?_⟩
+          · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+          · simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+
+theorem apyUSDLedgerConsistent_lock_step
+    (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : ApyUSDLedgerConsistent s)
+    (hstep : step s (Op.lockApxUSD amount) caller = some s') :
+    ApyUSDLedgerConsistent s' := by
+  obtain ⟨shares, hbal, hsup⟩ := step_lockApyUSD_ledgerProj s amount caller s' hstep
+  exact apyUSDLedgerConsistent_of_projections_eq hbal hsup
+    (apyUSDLedgerConsistent_mint s caller shares h)
+
+theorem apyUSDLedgerConsistent_withdraw_step
+    (s : State) (assets receiver caller : Address) (s' : State)
+    (h : ApyUSDLedgerConsistent s)
+    (hstep : step s (Op.withdraw assets receiver) caller = some s') :
+    ApyUSDLedgerConsistent s' := by
+  obtain ⟨shares, hle, hbal, hsup⟩ :=
+    step_withdrawApyUSD_ledgerProj s assets receiver caller s' hstep
+  exact apyUSDLedgerConsistent_of_projections_eq hbal hsup
+    (apyUSDLedgerConsistent_burn s caller shares hle h)
+
+theorem apyUSDLedgerConsistent_redeem_step
+    (s : State) (shares receiver caller : Address) (s' : State)
+    (h : ApyUSDLedgerConsistent s)
+    (hstep : step s (Op.redeem shares receiver) caller = some s') :
+    ApyUSDLedgerConsistent s' := by
+  obtain ⟨hle, hbal, hsup⟩ :=
+    step_redeemApyUSD_ledgerProj s shares receiver caller s' hstep
+  exact apyUSDLedgerConsistent_of_projections_eq hbal hsup
+    (apyUSDLedgerConsistent_burn s caller shares hle h)
+
+inductive ApyLedgerFrameOp : Op → Prop where
+  | depositUSDC (amount : Nat) : ApyLedgerFrameOp (Op.depositUSDC amount)
+  | mintApxUSD (to : Address) (amount : Nat) : ApyLedgerFrameOp (Op.mintApxUSD to amount)
+  | requestUnlock (amount : Nat) : ApyLedgerFrameOp (Op.requestUnlock amount)
+  | claimUnlock (id : Nat) : ApyLedgerFrameOp (Op.claimUnlock id)
+  | redeemApxUSD (amount : Nat) : ApyLedgerFrameOp (Op.redeemApxUSD amount)
+  | flexibleRequestUnlock (amount : Nat) :
+      ApyLedgerFrameOp (Op.flexibleRequestUnlock amount)
+  | flexibleClaimUnlock (id : Nat) : ApyLedgerFrameOp (Op.flexibleClaimUnlock id)
+  | pause : ApyLedgerFrameOp Op.pause
+  | unpause : ApyLedgerFrameOp Op.unpause
+  | addToWhitelist (addr : Address) : ApyLedgerFrameOp (Op.addToWhitelist addr)
+  | removeFromWhitelist (addr : Address) : ApyLedgerFrameOp (Op.removeFromWhitelist addr)
+  | addToDenylist (addr : Address) : ApyLedgerFrameOp (Op.addToDenylist addr)
+  | removeFromDenylist (addr : Address) : ApyLedgerFrameOp (Op.removeFromDenylist addr)
+  | setYieldRate (bps : Nat) : ApyLedgerFrameOp (Op.setYieldRate bps)
+  | creditYield (amount : Nat) : ApyLedgerFrameOp (Op.creditYield amount)
+  | voteBufferDeployment : ApyLedgerFrameOp Op.voteBufferDeployment
+  | submitRFQRequest (amount : Nat) : ApyLedgerFrameOp (Op.submitRFQRequest amount)
+  | executeRFQRedemption (user : Address) (amount : Nat) :
+      ApyLedgerFrameOp (Op.executeRFQRedemption user amount)
+  | updateRedemptionValue (newValue : Nat) :
+      ApyLedgerFrameOp (Op.updateRedemptionValue newValue)
+  | handleStressEvent (amount : Nat) : ApyLedgerFrameOp (Op.handleStressEvent amount)
+  | catastrophicBackstop : ApyLedgerFrameOp Op.catastrophicBackstop
+  | setVestPeriod (p : Nat) : ApyLedgerFrameOp (Op.setVestPeriod p)
+  | setApxUSDMarketPrice (price : Nat) : ApyLedgerFrameOp (Op.setApxUSDMarketPrice price)
+  | withdrawReserve (amount : Nat) (receiver : Address) :
+      ApyLedgerFrameOp (Op.withdrawReserve amount receiver)
+  | poolRedeem (amount : Nat) (receiver : Address) (minOut : Nat) :
+      ApyLedgerFrameOp (Op.poolRedeem amount receiver minOut)
+  | tick (dt : Nat) : ApyLedgerFrameOp (Op.tick dt)
+
+theorem apyUSDLedgerConsistent_frame_step
+    (s s' : State) (op : Op) (caller : Address) (hop : ApyLedgerFrameOp op)
+    (hstep : step s op caller = some s') :
+    s'.apyUSDBal = s.apyUSDBal ∧ s'.totalSupply_apyUSD = s.totalSupply_apyUSD := by
+  cases hop <;>
+    simp only [step] at hstep
+  all_goals
+    repeat' split at hstep
+    all_goals
+      cases hstep <;>
+        constructor <;>
+          simp [burnApxUSD, mintApxUSD, emitEvent, createFlexibleUnlock, retireStandardUnlock,
+            retireFlexibleUnlock, burnUnlockNFT]
+
+inductive ApyLedgerCoveredOp : Op → Prop where
+  | lock (amount : Nat) : ApyLedgerCoveredOp (Op.lockApxUSD amount)
+  | withdraw (assets : Nat) (receiver : Address) :
+      ApyLedgerCoveredOp (Op.withdraw assets receiver)
+  | redeem (shares : Nat) (receiver : Address) :
+      ApyLedgerCoveredOp (Op.redeem shares receiver)
+  | frame {op : Op} (h : ApyLedgerFrameOp op) : ApyLedgerCoveredOp op
+
+theorem apyLedgerCoveredOp_all (op : Op) : ApyLedgerCoveredOp op := by
+  cases op with
+  | depositUSDC amount => exact .frame (.depositUSDC amount)
+  | mintApxUSD to amount => exact .frame (.mintApxUSD to amount)
+  | lockApxUSD amount => exact .lock amount
+  | requestUnlock amount => exact .frame (.requestUnlock amount)
+  | claimUnlock id => exact .frame (.claimUnlock id)
+  | redeemApxUSD amount => exact .frame (.redeemApxUSD amount)
+  | withdraw assets receiver => exact .withdraw assets receiver
+  | redeem shares receiver => exact .redeem shares receiver
+  | flexibleRequestUnlock amount => exact .frame (.flexibleRequestUnlock amount)
+  | flexibleClaimUnlock id => exact .frame (.flexibleClaimUnlock id)
+  | pause => exact .frame .pause
+  | unpause => exact .frame .unpause
+  | addToWhitelist addr => exact .frame (.addToWhitelist addr)
+  | removeFromWhitelist addr => exact .frame (.removeFromWhitelist addr)
+  | addToDenylist addr => exact .frame (.addToDenylist addr)
+  | removeFromDenylist addr => exact .frame (.removeFromDenylist addr)
+  | setYieldRate bps => exact .frame (.setYieldRate bps)
+  | creditYield amount => exact .frame (.creditYield amount)
+  | voteBufferDeployment => exact .frame .voteBufferDeployment
+  | submitRFQRequest amount => exact .frame (.submitRFQRequest amount)
+  | executeRFQRedemption user amount => exact .frame (.executeRFQRedemption user amount)
+  | updateRedemptionValue newValue => exact .frame (.updateRedemptionValue newValue)
+  | handleStressEvent amount => exact .frame (.handleStressEvent amount)
+  | catastrophicBackstop => exact .frame .catastrophicBackstop
+  | setVestPeriod p => exact .frame (.setVestPeriod p)
+  | setApxUSDMarketPrice price => exact .frame (.setApxUSDMarketPrice price)
+  | withdrawReserve amount receiver => exact .frame (.withdrawReserve amount receiver)
+  | poolRedeem amount receiver minOut => exact .frame (.poolRedeem amount receiver minOut)
+  | tick dt => exact .frame (.tick dt)
+
+theorem apyUSDLedgerConsistent_covered_step
+    (s s' : State) (op : Op) (caller : Address)
+    (hop : ApyLedgerCoveredOp op) (h : ApyUSDLedgerConsistent s)
+    (hstep : step s op caller = some s') :
+    ApyUSDLedgerConsistent s' := by
+  cases hop with
+  | lock amount => exact apyUSDLedgerConsistent_lock_step s amount caller s' h hstep
+  | withdraw assets receiver =>
+      exact apyUSDLedgerConsistent_withdraw_step s assets receiver caller s' h hstep
+  | redeem shares receiver =>
+      exact apyUSDLedgerConsistent_redeem_step s shares receiver caller s' h hstep
+  | frame hframe =>
+      obtain ⟨hbal, hsup⟩ := apyUSDLedgerConsistent_frame_step s s' op caller hframe hstep
+      exact apyUSDLedgerConsistent_of_projections_eq hbal hsup h
+
+theorem apyUSDLedgerConsistent_step
+    (s s' : State) (op : Op) (caller : Address)
+    (h : ApyUSDLedgerConsistent s)
+    (hstep : step s op caller = some s') :
+    ApyUSDLedgerConsistent s' :=
+  apyUSDLedgerConsistent_covered_step s s' op caller
+    (apyLedgerCoveredOp_all op) h hstep
+
+theorem apyUSDLedgerConsistent_trace (s : State) (σ : List (Op × Address))
+    (h : ApyUSDLedgerConsistent s) :
+    ApyUSDLedgerConsistent (execTrace s σ) := by
+  induction σ generalizing s with
+  | nil => exact h
+  | cons p σ ih =>
+      obtain ⟨op, caller⟩ := p
+      simp only [execTrace]
+      cases hstep : step s op caller with
+      | none => exact ih s h
+      | some s' =>
+          exact ih s' (apyUSDLedgerConsistent_step s s' op caller h hstep)
+
+/-! An explicit model-gap witness is still useful after proving preservation:
+the predicate is a reachable-state invariant, not a restriction built into the
+`State` type. -/
+
+def apyUSDLedgerGapWitness : State :=
+  { (default : State) with
+      apyUSDBal := fun a => if a = 0 then 1 else if a = 1 then 1 else 0
+      totalSupply_apyUSD := 1 }
+
+theorem apyUSDLedgerGapWitness_two_holders_exceed_supply :
+    apyUSDLedgerGapWitness.apyUSDBal 0 + apyUSDLedgerGapWitness.apyUSDBal 1
+      > apyUSDLedgerGapWitness.totalSupply_apyUSD := by
+  decide
+
+theorem apyUSDLedgerGapWitness_not_consistent :
+    ¬ ApyUSDLedgerConsistent apyUSDLedgerGapWitness := by
+  intro h
+  obtain ⟨holders, hnd, hcov, hsum⟩ := h
+  have h0 : 0 ∈ holders := hcov 0 (by decide)
+  have h1 : 1 ∈ holders := hcov 1 (by decide)
+  have htwo := sumOver_two_mem_le apyUSDLedgerGapWitness.apyUSDBal
+    (by decide : (0 : Address) ≠ 1) h0 h1
+  rw [hsum] at htwo
+  have hgt :
+    apyUSDLedgerGapWitness.apyUSDBal 0 + apyUSDLedgerGapWitness.apyUSDBal 1
+      > apyUSDLedgerGapWitness.totalSupply_apyUSD := by decide
+  omega
+
 /-! ## The positions the old measure dropped -/
 
 /-- What id `i` contributes to `a`'s standard-position total: the amount if `a` owns the

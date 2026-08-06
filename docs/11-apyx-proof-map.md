@@ -151,12 +151,28 @@ distinct addresses under the balance bound, while `transferApxUSD_self` and
 
 The analogous apyUSD boundary is `ApyUSDLedgerConsistent` in
 `outputs/apyx/HolderValue.lean`. Its default instance is proved by
-`apyUSDLedgerConsistent_default`; `finitePoolValueAt`, `finitePoolRateDelta`,
-and `finitePoolValueAt_rateDelta` provide the finite aggregate needed to sum
-holder-level rate revaluations. No step-preservation theorem is claimed yet:
-making this relation an inductive protocol invariant would be a deliberate
-state/spec strengthening, not a consequence of the current arbitrary balance
-functions.
+`apyUSDLedgerConsistent_default`. The primitive writers are covered by
+`apyUSDLedgerConsistent_mint` and `apyUSDLedgerConsistent_burn`; the public
+step decomposition is made explicit by `ApyLedgerFrameOp`,
+`ApyLedgerCoveredOp`, and `apyLedgerCoveredOp_all`. The branch theorems
+`apyUSDLedgerConsistent_lock_step`,
+`apyUSDLedgerConsistent_withdraw_step`, and
+`apyUSDLedgerConsistent_redeem_step`, together with
+`apyUSDLedgerConsistent_frame_step`, compose into
+`apyUSDLedgerConsistent_step`; `apyUSDLedgerConsistent_trace` lifts it over
+revert-skip traces. The relation is therefore a proved reachable-state
+invariant from `default`, while arbitrary hand-written `State` values can
+still violate it because the state type itself has no finite-support field.
+`finitePoolValueAt`, `finitePoolRateDelta`, and
+`finitePoolValueAt_rateDelta` provide the finite aggregate needed to sum
+holder-level rate revaluations. `apyUSDLedgerConsistent_of_projections_eq`
+is the frame composition lemma, and
+`apyUSDLedgerConsistent_covered_step` keeps the operation coverage visible
+before the universal theorem. Finally, `apyUSDLedgerGapWitness`,
+`apyUSDLedgerGapWitness_two_holders_exceed_supply`, and
+`apyUSDLedgerGapWitness_not_consistent` record the model boundary: arbitrary
+hand-written states can violate the relation even though the default trace
+invariant is preserved.
 
 ### 5.2 Registry consistency
 
@@ -255,8 +271,10 @@ trace. This is the current model's honest bridge toward a pool-level ledger;
 it does not yet claim that the revaluation sum is protocol-wide conservation.
 The optional finite-support boundary is `ApyUSDLedgerConsistent`;
 `finitePoolValueAt_rateDelta` shows how the holder-level accounting aggregates
-over an explicit list, without asserting that the current state representation
-already covers the whole pool.
+over an explicit list. It is now preserved by every successful `Op` through
+`apyUSDLedgerConsistent_step` and by `execTrace` through
+`apyUSDLedgerConsistent_trace`; this still does not make every arbitrary value
+of the current state representation a valid pool ledger.
 
 ### 5.3 Clock consistency
 
