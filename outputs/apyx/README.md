@@ -6,7 +6,7 @@
 | **Contracts** (Ethereum mainnet, per the ingested documentation) | apxUSD [`0x98A8…4665`](https://etherscan.io/address/0x98A878b1Cd98131B271883B390f68D2c90674665) · apyUSD [`0x38EE…8a6A`](https://etherscan.io/address/0x38EEb52F0771140d10c4E9A9a72349A329Fe8a6A) · UnlockToken [`0x9377…BF4e6`](https://etherscan.io/address/0x93775E2dFa4e716c361A1f53F212c7AE031BF4e6) |
 | **Method** | RFC 2119 specification → Lean 4 state-machine model → machine-checked theorems |
 | **Result** | 0 `sorry`, kernel-verified (`lake build D2fsSpecs`, Lean 4.31.0). No internal *contradiction* was found in Apyx's specification. The analysis machine-proved concrete design weaknesses — a single-key (`ADMIN_ROLE`) reserve-drain and unbounded repricing path, and the absence of a redemption-price floor (§4.1, §5, §9.1) — and, in a self-review of this report's own model, found and fixed four defects in the **formalization** (§9.3). |
-| **Date** | 2026-07-07, revised 2026-07-30 (§9.3) |
+| **Date** | 2026-08-06 |
 | **Self-review** | This report has been reviewed against its own Lean source; findings and fixes are in [`code_review_lean.md`](code_review_lean.md) and §9.3. Regression tests: [`review_witnesses/`](review_witnesses/). Deployment reads that ground the fixes: [`deployment_ground_truth.md`](deployment_ground_truth.md). |
 
 ---
@@ -16,9 +16,9 @@
 Apyx's public protocol documentation was formalized into (a) a normative RFC 2119 specification
 ([`SPEC.md`](SPEC.md)) and (b) an executable Lean 4 model of the protocol's state machine
 ([`Apyx.lean`](Apyx.lean)). Against that model we prove the active theorem families listed in the proof map,
-each re-checked from source by the Lean kernel. The extracted requirement inventory still contains 82
-records in [`requirements.json`](requirements.json); the active Lean surface is intentionally smaller
-because unmapped, unreferenced generated declarations were removed during cleanup:
+each re-checked from source by the Lean kernel. The extracted requirement inventory contains 82
+records in [`requirements.json`](requirements.json), while the proof map identifies the current
+kernel-checked theorem surface and its implementation hand-off points:
 
 | Group | Question answered | Active artifact |
 |---|---|---|
@@ -89,7 +89,11 @@ state variables, and operations).
 
 ## 3. Active Lean proof surface
 
-The active Lean theorem surface follows [`docs/11-apyx-proof-map.md`](../../docs/11-apyx-proof-map.md), not the historical generated requirement inventory. During this cleanup, 98 declarations that were absent from the proof map and unreferenced by the current Lean sources were removed. `registryInvariants_default` was retained because `lean/D2fsSpecs/Registry.lean` uses it to initialize the registry invariant.
+The active Lean theorem surface follows [`docs/11-apyx-proof-map.md`](../../docs/11-apyx-proof-map.md).
+The requirement inventory and the proof map serve different purposes: `requirements.json` records the
+82 extracted specification requirements, while the proof map records the current design, invariant,
+safety, accounting, boundary, and implementation hand-off claims that are checked by Lean or assigned
+to another verification method.
 
 The remaining proofs are organized around a small set of reusable boundaries:
 
@@ -591,10 +595,10 @@ Lean modules imported by `lean/D2fsSpecs.lean`. The regression witnesses in
 Lean kernel re-verifies every theorem from source. An axiom report must be regenerated from the
 current source whenever public declarations change; it should confirm that no theorem depends on
 `sorryAx`, while standard logical axioms such as `propext`, `Quot.sound`, or `Classical.choice`
-are not protocol assumptions. The historical requirement-pipeline status is recorded in
-[`leancheck.json`](leancheck.json); its active count covers the remaining `req_` declarations only,
-not the adversarial and deployment-gap modules. The current proof surface is checked by the build
-and mapped in [`docs/11-apyx-proof-map.md`](../../docs/11-apyx-proof-map.md).
+are not protocol assumptions. The requirement-pipeline metrics are recorded in
+[`leancheck.json`](leancheck.json). They describe the requirement-oriented Lean run; the complete
+current proof surface is checked by the build and mapped in
+[`docs/11-apyx-proof-map.md`](../../docs/11-apyx-proof-map.md).
 
 ---
 
@@ -804,7 +808,6 @@ been corrected in §3, §4.1 and §4.2, and the full list is below. Everything h
 | new (closed) | **The carried-invariant pattern, swept.** The audits kept surfacing one shape: a theorem carrying a hypothesis its own docstring called "an invariant of reachable states, assumed rather than proved". Both instances are now proved in the core model. `RegistryBounded` (no entry at or above the id counter) makes `HolderValue`'s `Σ` a complete sum rather than a truncation and discharges its `h_unalloc_flex`; `OwnerPointerSound` (a pending pointer references a live position its own holder owns) discharges `BlastRadius.no_role_seizes_unlock_position`'s `h_wf`, which without it would let `requestUnlock`'s top-up branch rewrite another user's recorded amount. Both hold at `default` and are preserved by fresh allocation. What remains genuinely assumed is `solvency_preserved`'s balance bound, and that one is structural (§6.2) rather than unproved | [`Apyx.lean`](Apyx.lean) |
 | new (closed) | **The complete measure's completeness was asserted, not proved — and the no-floor witness was too weak to mean anything.** `holderValue` folds over `List.range nextUnlockId`, so it silently drops any registry entry at or above the counter; "everything `a` owns" rested on an invariant stated only in prose. `RegistryBounded` proves it, and `unalloc_flex_of_registryBounded` turns the `h_unalloc_flex` hypothesis several theorems carried into a consequence. Separately, `redemption_has_no_floor` used a witness with **zero collateral**, where paying zero for a burn is arithmetically correct rather than a floor violation; the witness now carries a basket covering the supply ten times over, which is the case a floor would actually catch | [`HolderValue.lean`](HolderValue.lean), [`SpecDefects.lean`](SpecDefects.lean) |
 | new (closed) | **Four balance-moving paths were still un-gated, and a cited theorem never existed.** An audit of `Apyx.lean` found `TokenMoveAllowed`'s docstring citing `token_moves_are_hook_gated` "below" — no such theorem was ever written — while claiming the deny-list gaps were closed. Four branches still had none: `lockApxUSD`, `withdraw`, `redeem` and `executeRFQRedemption`, all of which route through `_update` on chain. They are gated now, folded into each branch's pause test so no inversion lemma's split chain moved, and the liveness requirements that assert such a step *succeeds* carry the deny-list side conditions they always needed | [`Apyx.lean`](Apyx.lean) |
-| historical cleanup | **Several generated requirement declarations were not part of the active proof map and had no Lean dependents.** They were removed from the active theorem surface. The normative specification and the remaining mapped transition, ledger, invariant, and boundary proofs are unchanged; this report retains the finding as historical context rather than presenting those removed declarations as current proofs | [`Apyx.lean`](Apyx.lean) |
 | new (closed) | **`solvency_preserved` assumed its invariant at every prefix; half of it is now derived.** The `WellFormed` hypothesis splits into a price bound and a balance bound. `redemptionValue_frame` shows only `updateRedemptionValue` and `catastrophicBackstop` write the published price, and the latter was already excluded — so `solvency_preserved_price_derived` takes the price bound **once at the start** rather than at every prefix, at the cost of excluding the admin's repricing lever (the operation §5 item 1 recommends putting a floor on anyway). The balance bound `∀ a, apxUSDBal a ≤ totalSupply_apxUSD` stays assumed, and that is structural rather than a missing proof: `apxUSDBal` is a free function over an unbounded address type with no `Σ` tying it to the supply, so a burn lowers the supply with nothing keeping other holders underneath it (§6.2) | [`Safety.lean`](Safety.lean), [`Apyx.lean`](Apyx.lean) |
 | new (closed) | **`MinterV0`'s rate limit had a clock but no trace.** [`MinterRateLimit.lean`](MinterRateLimit.lean) proved that one over-sized call is rejected, and delegated the cumulative statement to `BlastRadius.lean`'s `rate_limit_linear_bound` on the grounds that it "establishes that shape generically". It does not — that wrapper meters an **epoch** allowance released in steps, while `MinterV0` runs a true **sliding window** whose records expire individually. The module now has its own `execTrace` and proves the invariant the contract exists for: along any trace that does not reconfigure the limiter, the volume inside the window never exceeds the ceiling (the concrete sliding-window trace bound), at every prefix and not merely at the end. `setRateLimit` is excluded because excluding it *is* `tightening_does_not_unwind_the_window` | [`MinterRateLimit.lean`](MinterRateLimit.lean) |
 | new (closed) | **The clock monopoly was true by inspection, not by theorem.** `Op.tick` is the only branch of `step` that writes `State.now`, and every maturity result leans on that — but the fact was re-derived ad hoc, per operation, in `Safety.lean`, `BlastRadius.lean` and `HolderValue.lean`. It is now stated once and exhaustively over the closed `Op` (`now_moves_only_by_tick`, `tick_advances_now_exactly`, `now_nondecreasing`), and lifted to traces (`trace_now_fixed_without_tick`: a trace containing no `tick` cannot move the clock; the trace-level clock property). A future branch that touched `now` would now break a proof rather than the invariant. The same pair is carried by every machine with a clock — `CommitToken`, `MinterRateLimit` and `RedemptionOracle` each state it single-step and over traces | [`Apyx.lean`](Apyx.lean), [`BlastRadius.lean`](BlastRadius.lean), and the three clock-bearing wrappers |
