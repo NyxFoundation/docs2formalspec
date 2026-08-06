@@ -224,6 +224,15 @@ If inv_step only covers a SafeAction subtype while Reach permits every Action, t
 
 The invariant should be factored into small lemmas. A single giant invariant theorem is difficult to review and tends to hide which accounting relationship actually carries the argument.
 
+In the current source, `ProtocolInv` combines `RegistryWellIndexed`, `Solvent`,
+`WellFormed`, and `ApxUSDLedgerConsistent`. `protocolInv_default` proves the
+base case, `protocolInv_stepResult_accepted` proves preservation at the
+accepted-result boundary, and `ProtocolReach` uses that same accepted
+`StepResult` relation. `protocolInv_reachable` is therefore the global theorem
+for the explicitly restricted, well-formed solvency-scoped relation. The
+restriction and the post-state `WellFormed` premise are part of the relation;
+they are not hidden assumptions.
+
 ## 7. Build the economic property ladder
 
 The properties should be proved in dependency order.

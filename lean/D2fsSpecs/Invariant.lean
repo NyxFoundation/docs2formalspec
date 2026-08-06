@@ -128,7 +128,8 @@ inductive ProtocolReach : State → Prop
   | initial : ProtocolReach (default : State)
   | next {s s' : State} {op : Op} {caller : Address} :
       ProtocolReach s →
-      step s op caller = some s' →
+      (es : List Event) →
+      stepResult s op caller = .accepted s' es →
       SolvencyScopedOp op →
       WellFormed s' →
       ProtocolReach s'
@@ -142,6 +143,7 @@ unconditional safety guarantee about the deployed system. -/
 theorem protocolInv_reachable (s : State) (h : ProtocolReach s) : ProtocolInv s := by
   induction h with
   | initial => exact protocolInv_default
-  | next _ hstep hscope hwf' ih => exact protocolInv_step _ _ _ _ ih hstep hscope hwf'
+  | next _ _ hacc hscope hwf' ih =>
+      exact protocolInv_stepResult_accepted _ _ _ _ _ ih hacc hscope hwf'
 
 end Apyx
