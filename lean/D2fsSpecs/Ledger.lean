@@ -59,15 +59,23 @@ this module must not touch. The **first slice of option 2 now exists** (see
 "First balance-writer slice" below): `apxUSDLedgerConsistent_mint` and
 `apxUSDLedgerConsistent_burn` prove exactly the support-inclusion / sum-delta
 facts for the two *primitive* single-address writers, applied in isolation.
-Everything else — `transferApxUSD`, the composite operations, and the plumbing
-that connects each `step` branch's underflow guard to the burn-side bound —
-remains open, so `ApxUSDLedgerConsistent` is still an *initialization-plus-
-fragment* invariant with a named gap, matching how `Invariant.lean` keeps
+The **second slice** composes those primitives with the public transition
+function for the five simplest `step` branches:
+`apxUSDLedgerConsistent_basic_step` (see "Scoped public-step slice" below)
+covers `depositUSDC`, `mintApxUSD`, `lockApxUSD`, `requestUnlock` and
+`flexibleRequestUnlock`, including the plumbing that discharges each burning
+branch's underflow guard into the burn-side bound. Everything else —
+`transferApxUSD`, the claim re-mints, `redeemApxUSD`, `executeRFQRedemption`,
+`poolRedeem`, and the frame proofs for the non-writing branches — remains
+open, so `ApxUSDLedgerConsistent` is still an *initialization-plus-fragment*
+invariant with a named gap, matching how `Invariant.lean` keeps
 `WellFormed s'` an explicit hypothesis instead of pretending to derive it.
 
 Status (proof-map §11): `apxUSDLedgerConsistent_default` is model-local;
 `apxUSDLedgerConsistent_mint` / `apxUSDLedgerConsistent_burn` are model-local
-per-operation lemmas (not trace facts); `ledgerGapWitness_*` and
+per-operation lemmas (not trace facts); `apxUSDLedgerConsistent_basic_step` is
+a model-local *scoped* step fact (five branches, explicit disjunction — not a
+trace invariant and not full `Op` coverage); `ledgerGapWitness_*` and
 `wellFormed_solvent_not_imply_ledgerConsistent` are witness/regression facts,
 not universal theorems.
 -/
@@ -182,13 +190,14 @@ the two primitive writers, applied in isolation:
   guard of exactly this shape, but that guard is **not** imported here — the
   hypothesis must be discharged by the caller.
 
-Still uncovered, which is why no universal `step`-preservation theorem is
+Still uncovered, which is why no *universal* `step`-preservation theorem is
 stated: `transferApxUSD` (a two-address update needing a paired sum lemma),
-`requestUnlockStep` (burn composed with registry writes), the claim re-mints,
-`executeRFQRedemption`, `poolRedeem`, the deposit-path mints, and the plumbing
-that each `step` branch's balance guard discharges the burn-side bound above.
-Those are future slices; composing them per branch of `step` (the
-`solvency_step` scoping discipline) is the remaining work.
+the claim re-mints, `executeRFQRedemption`, and `poolRedeem`. The five
+simplest `step` branches — the deposit-path mints and the three
+guard-protected single-burn paths, `requestUnlockStep` included — are now
+composed per branch in `apxUSDLedgerConsistent_basic_step` below (the
+`solvency_step` scoping discipline); extending its explicit disjunction
+branch-by-branch is the remaining work.
 
 The `sumOver_*` helpers below are dependency-free `List` lemmas (the project
 carries no Mathlib): congruence on members, and the two single-address
@@ -353,6 +362,190 @@ theorem apxUSDLedgerConsistent_burn (s : State) (fromAddr : Address) (amount : N
         sumOver_congr (fun b _ => by simp)
       rw [hcong]
       omega
+
+/-! ## Scoped public-step slice: `apxUSDLedgerConsistent_basic_step`
+
+Second slice of the per-operation programme: the primitive mint/burn lemmas
+above, composed with the public transition function for the **five** `step`
+branches whose apxUSD-ledger effect is a single primitive `mintApxUSD` or a
+single guard-protected `burnApxUSD` —
+
+* `Op.depositUSDC` — mints `amount` to the caller (plus USDC bookkeeping);
+* `Op.mintApxUSD` — mints `amount` to `to` (arbitrage path);
+* `Op.lockApxUSD` — burns `amount` from the caller, then vault/apyUSD writes;
+* `Op.requestUnlock` — burns via `requestUnlockStep`, then registry writes;
+* `Op.flexibleRequestUnlock` — burns, then `createFlexibleUnlock`.
+
+Each burning branch carries the guard `¬ (s.apxUSDBal caller < amount)`, which
+is exactly the bound `apxUSDLedgerConsistent_burn` needs; the inversion lemmas
+below surface it, so it is discharged locally from the successful `step` —
+nothing is assumed beyond `ApxUSDLedgerConsistent s` and `step … = some s'`.
+
+**Scoped, not universal — read this before citing the theorem.** The theorem
+takes an explicit disjunction naming its five operations rather than claiming
+all of `Op`. Remaining branches, deliberately out of scope: `claimUnlock` /
+`flexibleClaimUnlock` (re-mints whose amounts come out of the registries),
+`redeemApxUSD`, `executeRFQRedemption`, `poolRedeem` (burns whose guards sit
+behind price/reserve arithmetic), and the non-writing branches (`withdraw`,
+`redeem`, `tick`, pause/list/admin ops), which need per-branch frame lemmas
+instead. Extending the disjunction branch-by-branch — the `solvency_step`
+scoping discipline — is the remaining work named in the module docstring.
+
+The `step_*_ledgerProj` inversion lemmas are local re-derivations trimmed to
+the two projections `ApxUSDLedgerConsistent` reads: the full inversion lemmas
+in `Apyx.lean` are `private`, the same situation `Safety.lean` resolves the
+same way. -/
+
+/-- Frame theorem: `ApxUSDLedgerConsistent` reads exactly two state
+projections — `apxUSDBal` and `totalSupply_apxUSD` — so any state agreeing
+with a consistent one on both is itself consistent. This is what lets each
+`step` branch's wrapper writes (`emitEvent`, `updateExchangeRate`, registry
+and NFT writes, apyUSD and USDC moves) be discarded. -/
+theorem apxUSDLedgerConsistent_of_projections_eq {s t : State}
+    (hbal : s.apxUSDBal = t.apxUSDBal)
+    (hsup : s.totalSupply_apxUSD = t.totalSupply_apxUSD)
+    (h : ApxUSDLedgerConsistent t) : ApxUSDLedgerConsistent s := by
+  obtain ⟨holders, hnd, hcov, hsum⟩ := h
+  refine ⟨holders, hnd, ?_, ?_⟩
+  · intro a ha
+    refine hcov a ?_
+    rw [← hbal]
+    exact ha
+  · rw [hbal, hsup]
+    exact hsum
+
+/-- `Op.depositUSDC` inversion, ledger projections only: the post-state agrees
+with `mintApxUSD s caller amount` on `apxUSDBal` and `totalSupply_apxUSD` (the
+USDC bookkeeping and the event log touch neither). -/
+private theorem step_depositUSDC_ledgerProj (s : State) (amount : Nat) (caller : Address)
+    (s' : State) (h : step s (Op.depositUSDC amount) caller = some s') :
+    s'.apxUSDBal = (mintApxUSD s caller amount).apxUSDBal ∧
+    s'.totalSupply_apxUSD = (mintApxUSD s caller amount).totalSupply_apxUSD := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · cases Option.some.inj h
+          exact ⟨by simp [emitEvent, mintApxUSD], by simp [emitEvent, mintApxUSD]⟩
+
+/-- `Op.mintApxUSD` inversion, ledger projections only: the post-state agrees
+with `mintApxUSD s to amount` on the two ledger projections. -/
+private theorem step_mintApxUSD_ledgerProj (s : State) (to : Address) (amount : Nat)
+    (caller : Address) (s' : State)
+    (h : step s (Op.mintApxUSD to amount) caller = some s') :
+    s'.apxUSDBal = (mintApxUSD s to amount).apxUSDBal ∧
+    s'.totalSupply_apxUSD = (mintApxUSD s to amount).totalSupply_apxUSD := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · split at h
+          · exact absurd h (by simp)
+          · cases Option.some.inj h
+            exact ⟨by simp [emitEvent, mintApxUSD], by simp [emitEvent, mintApxUSD]⟩
+
+/-- `Op.lockApxUSD` inversion, ledger projections only: the branch guard gives
+the burn bound, and the post-state agrees with `burnApxUSD s caller amount` on
+the two ledger projections (the vault, apyUSD, rate and event writes touch
+neither). -/
+private theorem step_lockApxUSD_ledgerProj (s : State) (amount : Nat) (caller : Address)
+    (s' : State) (h : step s (Op.lockApxUSD amount) caller = some s') :
+    amount ≤ s.apxUSDBal caller ∧
+    s'.apxUSDBal = (burnApxUSD s caller amount).apxUSDBal ∧
+    s'.totalSupply_apxUSD = (burnApxUSD s caller amount).totalSupply_apxUSD := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · cases Option.some.inj h
+        exact ⟨by omega, by simp [emitEvent, updateExchangeRate, mintApyUSD],
+          by simp [emitEvent, updateExchangeRate, mintApyUSD]⟩
+
+/-- `Op.requestUnlock` inversion, ledger projections only: the branch guard
+gives the burn bound, and `requestUnlockStep`'s own frame lemmas reduce the
+post-state's ledger projections to those of `burnApxUSD s caller amount`. -/
+private theorem step_requestUnlock_ledgerProj (s : State) (amount : Nat) (caller : Address)
+    (s' : State) (h : step s (Op.requestUnlock amount) caller = some s') :
+    amount ≤ s.apxUSDBal caller ∧
+    s'.apxUSDBal = (burnApxUSD s caller amount).apxUSDBal ∧
+    s'.totalSupply_apxUSD = (burnApxUSD s caller amount).totalSupply_apxUSD := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · cases Option.some.inj h
+        exact ⟨by omega, by simp, by simp [burnApxUSD]⟩
+
+/-- `Op.flexibleRequestUnlock` inversion, ledger projections only: the branch
+guard gives the burn bound, and `createFlexibleUnlock` touches neither ledger
+projection. -/
+private theorem step_flexibleRequestUnlock_ledgerProj (s : State) (amount : Nat)
+    (caller : Address) (s' : State)
+    (h : step s (Op.flexibleRequestUnlock amount) caller = some s') :
+    amount ≤ s.apxUSDBal caller ∧
+    s'.apxUSDBal = (burnApxUSD s caller amount).apxUSDBal ∧
+    s'.totalSupply_apxUSD = (burnApxUSD s caller amount).totalSupply_apxUSD := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · cases Option.some.inj h
+        exact ⟨by omega, by simp [createFlexibleUnlock], by simp [createFlexibleUnlock]⟩
+
+/-- **Scoped public-step preservation of the ledger identity** (second slice).
+A successful `step` of one of the five simple apxUSD balance paths —
+`depositUSDC`, `mintApxUSD`, `lockApxUSD`, `requestUnlock`,
+`flexibleRequestUnlock`, named by the explicit disjunction `hop` — preserves
+`ApxUSDLedgerConsistent`. The two mint paths reduce to
+`apxUSDLedgerConsistent_mint`; the three burn paths discharge
+`apxUSDLedgerConsistent_burn`'s underflow bound from their own branch guard,
+surfaced by the inversion lemmas above. **Not** a claim about all of `Op` —
+see the section docstring for the branches that remain open. -/
+theorem apxUSDLedgerConsistent_basic_step (s s' : State) (op : Op) (caller : Address)
+    (h : ApxUSDLedgerConsistent s)
+    (hstep : step s op caller = some s')
+    (hop : (∃ amount, op = Op.depositUSDC amount) ∨
+           (∃ to amount, op = Op.mintApxUSD to amount) ∨
+           (∃ amount, op = Op.lockApxUSD amount) ∨
+           (∃ amount, op = Op.requestUnlock amount) ∨
+           (∃ amount, op = Op.flexibleRequestUnlock amount)) :
+    ApxUSDLedgerConsistent s' := by
+  rcases hop with ⟨amount, rfl⟩ | ⟨to, amount, rfl⟩ | ⟨amount, rfl⟩ | ⟨amount, rfl⟩
+    | ⟨amount, rfl⟩
+  · obtain ⟨hbal, hsup⟩ := step_depositUSDC_ledgerProj s amount caller s' hstep
+    exact apxUSDLedgerConsistent_of_projections_eq hbal hsup
+      (apxUSDLedgerConsistent_mint s caller amount h)
+  · obtain ⟨hbal, hsup⟩ := step_mintApxUSD_ledgerProj s to amount caller s' hstep
+    exact apxUSDLedgerConsistent_of_projections_eq hbal hsup
+      (apxUSDLedgerConsistent_mint s to amount h)
+  · obtain ⟨hle, hbal, hsup⟩ := step_lockApxUSD_ledgerProj s amount caller s' hstep
+    exact apxUSDLedgerConsistent_of_projections_eq hbal hsup
+      (apxUSDLedgerConsistent_burn s caller amount hle h)
+  · obtain ⟨hle, hbal, hsup⟩ := step_requestUnlock_ledgerProj s amount caller s' hstep
+    exact apxUSDLedgerConsistent_of_projections_eq hbal hsup
+      (apxUSDLedgerConsistent_burn s caller amount hle h)
+  · obtain ⟨hle, hbal, hsup⟩ := step_flexibleRequestUnlock_ledgerProj s amount caller s' hstep
+    exact apxUSDLedgerConsistent_of_projections_eq hbal hsup
+      (apxUSDLedgerConsistent_burn s caller amount hle h)
 
 /-! ## Model-gap / regression witness
 
