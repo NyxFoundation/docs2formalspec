@@ -174,8 +174,13 @@ invariant. At the request boundary, `standardUnlockAmount` and
 explicit: under the request's balance guard, the caller's burned balance plus
 the amount in its tracked standard position is unchanged. The measure returns
 zero for a missing or mismatched pointer, so this theorem does not silently
-assume a canonical registry. It does not yet account for a later claim, all
-pending positions, or a finite liability ledger.
+assume a canonical registry. It does not yet account for all pending positions
+or a finite liability ledger. The claim-side local boundary
+is now explicit too: `claimUnlockStep_effect` exposes the exact successful
+post-state, `stdPositions_retireStandardUnlock` removes an in-range recorded
+amount from the finite position sum, and `claimUnlock_holderValueAt_neutral`
+shows that the owner value is unchanged at any fixed rate. These are local
+settlement facts, not reachability or global solvency theorems.
 
 ### 5.3 Clock consistency
 
@@ -199,8 +204,8 @@ successful `step` relation in `lean/D2fsSpecs/Apyx.lean`:
   `now' = now + dt`;
 - `now_nondecreasing`: every successful operation is monotone in `now`.
 
-These are relational lemmas rather than a state-only `ClockConsistent`
-predicate. That is intentional: the clock is a property of a transition
+These are relational lemmas rather than a state-only clock predicate. That is
+intentional: the clock is a property of a transition
 history, and the state field alone does not say how time was reached. The
 remaining time obligations are the deadline-specific permission lemmas and
 the trace theorems that use these three facts.
@@ -237,37 +242,42 @@ A safety theorem should apply to reachable states, not just to arbitrary states 
 A minimal shape is:
 
 ~~~lean
-def Inv (s : State) : Prop :=
-  LedgerConsistent s ∧
-  RegistryConsistent s ∧
-  ClockConsistent s ∧
-  NumericBounds s
+def ProtocolInv (s : State) : Prop :=
+  RegistryWellIndexed s ∧ Solvent s ∧ WellFormed s ∧
+  ApxUSDLedgerConsistent s
 
-inductive Reach : State → Prop
-  | initial : Reach initialState
-  | step :
-      Reach s ->
-      Allowed action s ->
-      step s action = .accepted s' events ->
-      Reach s'
+inductive ProtocolReach : State → Prop
+  | initial : ProtocolReach (default : State)
+  | next {s s' : State} {op : Op} {caller : Address} :
+      ProtocolReach s ->
+      (es : List Event) ->
+      stepResult s op caller = .accepted s' es ->
+      SolvencyScopedOp op ->
+      WellFormed s' ->
+      ProtocolReach s'
 
-theorem inv_step :
-  Inv s ->
-  Allowed action s ->
-  step s action = .accepted s' events ->
-  Inv s'
+theorem protocolInv_stepResult_accepted :
+  ProtocolInv s ->
+  stepResult s op caller = .accepted s' es ->
+  SolvencyScopedOp op ->
+  WellFormed s' ->
+  ProtocolInv s'
 
-theorem inv_reachable :
-  Reach s -> Inv s
+theorem protocolInv_reachable :
+  ProtocolReach s -> ProtocolInv s
 ~~~
 
 The exact syntax can change, but the logical obligations must remain visible:
 
-1. the initial state satisfies Inv;
-2. every allowed successful transition preserves Inv;
-3. Reach is built using the same transition restrictions used by the preservation theorem.
+1. the initial state satisfies `ProtocolInv`;
+2. every scoped successful transition preserves `ProtocolInv`;
+3. `ProtocolReach` carries the same operation restriction and post-state
+   `WellFormed` premise used by the preservation theorem.
 
-If inv_step only covers a SafeAction subtype while Reach permits every Action, the final theorem has a gap. Either make Reach use the same restriction or prove that every reachable successful action satisfies the required safety condition.
+If a preservation theorem only covers a restricted operation subtype while
+reachability permits every `Op`, the final theorem has a gap. Either make the
+reachability relation use the same restriction or prove that every reachable
+successful action satisfies the required safety condition.
 
 The invariant should be factored into small lemmas. A single giant invariant theorem is difficult to review and tends to hide which accounting relationship actually carries the argument.
 
@@ -323,7 +333,9 @@ floor-divided pro-rata payout does not automatically conserve a reserve;
 `paid_mint_trace_balance_bound` in `BlastRadius.lean` for the narrower trace
 slice in which only paid mint operations occur. It bounds a holder's final
 apxUSD balance by its initial balance plus attempted USDC input; unlock claims
-and their position ledger remain a separate open accounting problem.
+and their position ledger now have local request and claim boundary facts in
+`Apyx.lean` and `HolderValue.lean`, but the inductive full-trace liability
+ledger remains open.
 `redemptionValue_frame`, `redemption_price_writers`, and
 `admin_alone_moves_redemption_price` for price writers; `reserve_outflow_only_via_redemption`
 and the buffer theorems for non-depletion boundaries; and
@@ -579,8 +591,11 @@ but the proof-map claim now points to the exact theorem. The local accounting
 identity `requestUnlockStep_pending_conservation` is the next layer: it requires
 the same balance guard enforced by the transition and covers both fresh and
 top-up requests, including malformed pointer states. It stops at the request
-boundary; a claim-trace theorem still needs an explicit finite position ledger
-and a proof that the claim consumes the corresponding liability exactly.
+boundary. The matching claim-side layer is now `claimUnlock_holderValueAt_neutral`:
+given an in-range position and a successful claim, it proves that the owner loses
+the position amount while receiving the same apxUSD amount. A complete
+request-to-claim trace still needs an inductive finite liability ledger and a
+reachability theorem connecting every live position to that ledger.
 
 The global layer is where the protocol-level claims belong:
 

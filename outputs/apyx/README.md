@@ -232,7 +232,11 @@ exploitable in-model — §9.3 gives a five-step admin+oracle sequence in which 
 theorem and the sequence extracts 100 USDC. A narrower trace slice is now closed by
 `paid_mint_trace_balance_bound`: traces containing only the two paid-mint operations cannot raise a
 holder's balance beyond its initial balance plus attempted USDC input. This does not cover unlock
-claims, flexible claims, or mixed traces, so it is not the missing full trace theorem.
+claims, flexible claims, or mixed traces, so it is not the missing full trace theorem. The
+standard claim boundary is now closed locally: `claimUnlock_holderValueAt_neutral` proves that
+a successful in-range claim removes the recorded amount from the complete standard-position
+sum and mints the same amount back to the owner at any fixed rate. A full trace theorem still
+needs an inductive finite liability ledger and reachability closure.
 
 Supporting theorems include the exact per-role effect frames (`admin_frame`, `oracle_frame`,
 `yield_distributor_frame`, and the `step_*_exact` family), the non-custodial lemmas
@@ -296,6 +300,7 @@ extract value using only legitimate operations.
 | No peg-spread round trip | The arbitrage mint (needs price > $1) and arbitrage redeem (needs price < $1) require opposite price regimes, so no single state enables both | `no_same_state_arbitrage_round_trip` |
 | Redemption request is backed | A redemption request burns **exactly** the requested apxUSD and leaves the caller a tracked position with a reset cooldown. A fresh position records exactly that amount; a top-up records the previous position amount plus that amount | `requestUnlock_backs_claim_by_burn`, `requestUnlock_backs_claim_by_burn_exact`, `requestUnlockStep_exact_position` |
 | Request-boundary liability conservation | When the request's balance guard holds (`amount ≤ caller's apxUSD balance`), the caller's burned balance plus its tracked standard-unlock amount is unchanged by `requestUnlockStep`. The definition returns zero for a missing or mismatched pointer, so the theorem does not assume a canonical registry. This is a request-boundary identity, not a complete request→claim trace or finite liability ledger | `requestUnlockStep_pending_conservation` |
+| Standard claim settles its liability | For a successful claim whose `id` lies below `nextUnlockId`, the recorded owner's complete position value is unchanged at every fixed rate: the claim removes the recorded amount from `stdPositions` and mints the same amount of apxUSD. The theorem is local and does not prove reachability or global solvency | `claimUnlockStep_effect`, `stdPositions_retireStandardUnlock`, `claimUnlock_holderValueAt_neutral` |
 | No free extraction (trace) | Over arbitrary traces, no address's fixed-rate holdings can increase — but the trace must avoid **nine** operation families: `mintApxUSD`, `lockApxUSD`, `withdraw`, `redeem`, `claimUnlock`, `flexibleClaimUnlock`, `catastrophicBackstop`, `withdrawReserve`, `poolRedeem`. That excludes the settlement legs of the redemption channel, so it covers the request/RFQ/arbitrage-redeem operations only. The live-rate closure is also open (§6.2) | `caller_net_nonpositive_trace` |
 | Paid-mint trace bound | On traces containing only `depositUSDC` and `mintApxUSD`, a holder's final apxUSD balance is at most its initial balance plus the total attempted USDC input. Failed attempts count in the bound; unlock claims and other credit channels are excluded | `paid_mint_trace_balance_bound` |
 | Share-price monotonicity | A new deposit never lowers the **live** per-share price, and crediting yield preserves it (raising it only as yield vests over time) — the ERC-4626 dilution invariant | `exchange_rate_monotone_deposit`, `exchange_rate_monotone_creditYield`, `req_exchange_rate_non_decreasing` |

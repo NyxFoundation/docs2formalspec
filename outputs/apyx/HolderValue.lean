@@ -279,6 +279,65 @@ theorem stdPositions_of_fresh_entry (s s' : State) (owner : Address) (amount ce 
   congr 1
   simp [stdAmt, hnew]
 
+/-! ## Settling a standard position
+
+The request-side conservation law records an amount in the standard registry. The
+matching claim-side law removes that same amount from the finite position sum and
+mints it back to the recorded owner. The helper below is deliberately generic: it
+only says that one member of a finite `List.range` changes by a known amount. The
+`id < nextUnlockId` premise is what prevents a position outside the modeled finite
+support from being mistaken for an accounted liability.
+-/
+
+private theorem sum_range_replace (n id amount : Nat) (f g : Nat → Nat)
+    (hid : id < n) (hat : f id = g id + amount)
+    (hother : ∀ j, j < n → j ≠ id → f j = g j) :
+    ((List.range n).map f).sum = ((List.range n).map g).sum + amount := by
+  induction n generalizing id amount f g with
+  | zero => omega
+  | succ n ih =>
+      by_cases hlast : id = n
+      · subst id
+        have hprefix : ((List.range n).map f).sum = ((List.range n).map g).sum := by
+          congr 1
+          apply List.map_congr_left
+          intro j hj
+          have hj' : j < n := List.mem_range.mp hj
+          exact hother j (by omega) (by omega)
+        simp only [List.range_succ, List.map_append, List.sum_append,
+          List.map_cons, List.map_nil, List.sum_cons, List.sum_nil]
+        rw [hprefix, hat]
+        omega
+      · have hid' : id < n := by omega
+        have hother' : ∀ j, j < n → j ≠ id → f j = g j := by
+          intro j hj hji
+          exact hother j (by omega) hji
+        have hrec := ih id amount f g hid' hat hother'
+        simp only [List.range_succ, List.map_append, List.sum_append,
+          List.map_cons, List.map_nil, List.sum_cons, List.sum_nil]
+        rw [hrec]
+        rw [hother n (by omega) (by omega)]
+        omega
+
+/-- Retiring an in-range standard position removes exactly its recorded amount
+from the owner's finite standard-position sum. Other positions, including any
+additional positions for the same owner, remain accounted for. -/
+theorem stdPositions_retireStandardUnlock (s : State) (id : Nat) (owner : Address)
+    (amount cooldownEnd : Nat) (hid : id < s.nextUnlockId)
+    (hreq : s.unlockRequests id = some (owner, amount, cooldownEnd)) :
+    stdPositions (retireStandardUnlock s id owner) owner + amount =
+      stdPositions s owner := by
+  let r := retireStandardUnlock s id owner
+  have hat : stdAmt s owner id = stdAmt r owner id + amount := by
+    simp [r, stdAmt, retireStandardUnlock, burnUnlockNFT, hreq]
+  have hother : ∀ j, j < s.nextUnlockId → j ≠ id →
+      stdAmt s owner j = stdAmt r owner j := by
+    intro j hj hji
+    simp [r, stdAmt, retireStandardUnlock, burnUnlockNFT, hji]
+  have hsum := sum_range_replace s.nextUnlockId id amount
+    (stdAmt s owner) (stdAmt r owner) hid hat hother
+  exact hsum.symm
+
 /-- **A vault withdrawal's payout is measured.** The receiver's standard-position sum rises by
 exactly the `assets` withdrawn.
 
@@ -546,6 +605,46 @@ def holderValueAt (R : Nat) (s : State) (a : Address) : Nat :=
 /-- At the state's own live rate, the parameterized form is `holderValue`. -/
 theorem holderValueAt_live (s : State) (a : Address) :
     holderValueAt (computeExchangeRate s) s a = holderValue s a := rfl
+
+/-- A successful standard claim is neutral for the recorded owner's complete
+position value at every fixed pricing rate. The claim mints the recorded amount
+back while retiring that amount from the finite standard-position ledger. The
+`id < nextUnlockId` premise is the explicit finite-support boundary; no global
+registry invariant is smuggled into this local settlement theorem. -/
+theorem claimUnlock_holderValueAt_neutral (s : State) (id : Nat)
+    (owner : Address) (amount cooldownEnd : Nat) (caller : Address) (s' : State)
+    (hid : id < s.nextUnlockId)
+    (hreq : s.unlockRequests id = some (owner, amount, cooldownEnd))
+    (h_step : step s (Op.claimUnlock id) caller = some s') :
+    ∀ R, holderValueAt R s' owner = holderValueAt R s owner := by
+  intro R
+  obtain ⟨recordedOwner, recordedAmount, recordedCooldown, hentry, _, _, _, hpost⟩ :=
+    claimUnlockStep_effect s id caller s' h_step
+  rw [hreq] at hentry
+  simp only [Option.some.injEq, Prod.mk.injEq] at hentry
+  obtain ⟨rfl, rfl, rfl⟩ := hentry
+  subst s'
+  have hstd := stdPositions_retireStandardUnlock s id owner amount cooldownEnd hid hreq
+  have hstd' : stdPositions (mintApxUSD (retireStandardUnlock s id owner) owner amount) owner
+      + amount = stdPositions s owner := by
+    change stdPositions (retireStandardUnlock s id owner) owner + amount = stdPositions s owner
+    exact hstd
+  have hbalance : (mintApxUSD (retireStandardUnlock s id owner) owner amount).apxUSDBal owner
+      = s.apxUSDBal owner + amount := by
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
+  have hshares : (mintApxUSD (retireStandardUnlock s id owner) owner amount).apyUSDBal owner
+      = s.apyUSDBal owner := by
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
+  have husdc : (mintApxUSD (retireStandardUnlock s id owner) owner amount).usdcBal owner
+      = s.usdcBal owner := by
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
+  have hflex : flexPositions (mintApxUSD (retireStandardUnlock s id owner) owner amount) owner
+      = flexPositions s owner := by
+    change flexPositions (retireStandardUnlock s id owner) owner = flexPositions s owner
+    rfl
+  unfold holderValueAt valueAt
+  rw [hbalance, hshares, husdc, hflex]
+  omega
 
 @[simp] private theorem pv_apxUSDBal' (s : State) :
     (pullVestedYield s).apxUSDBal = s.apxUSDBal := by

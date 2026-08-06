@@ -1534,8 +1534,23 @@ private theorem step_claimUnlock_some (s : State) (id : Nat) (caller : Address) 
         · split at h
           · exact absurd h (by simp)
           · exact ⟨owner, amount, cooldownEnd, heq, by simp_all, by assumption, by omega,
-              (Option.some.inj h).symm⟩
+                (Option.some.inj h).symm⟩
         · exact absurd h (by simp)
+
+/-- Public transition inversion for a successful standard claim. Downstream
+accounting modules use this boundary theorem instead of duplicating the guard
+case split. The result exposes the recorded owner, amount, cooldown, and exact
+post-state effect; it does not assert that the position id is in the finite
+registry support or that the registry is globally well formed. -/
+theorem claimUnlockStep_effect (s : State) (id : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.claimUnlock id) caller = some s') :
+    ∃ owner amount cooldownEnd,
+      s.unlockRequests id = some (owner, amount, cooldownEnd) ∧
+      s.unlockTokenOwner id = some owner ∧
+      (caller = owner ∨ caller = s.unlockTokenOperator) ∧
+      cooldownEnd ≤ s.now ∧
+      s' = mintApxUSD (retireStandardUnlock s id owner) owner amount := by
+  exact step_claimUnlock_some s id caller s' h
 
 private theorem step_flexibleClaimUnlock_some (s : State) (id : Nat) (caller : Address) (s' : State)
     (h : step s (Op.flexibleClaimUnlock id) caller = some s') :
