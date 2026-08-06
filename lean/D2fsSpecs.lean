@@ -2,6 +2,7 @@
 -- This module serves as the root of the `D2fsSpecs` library.
 import D2fsSpecs.Apyx
 import D2fsSpecs.Registry
+import D2fsSpecs.Transition
 import D2fsSpecs.Basic
 import D2fsSpecs.CommitToken
 import D2fsSpecs.LiquidationBatcher
