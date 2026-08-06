@@ -2329,6 +2329,24 @@ def holderValueExecutionRate (s : State) (op : Op) : Nat :=
   | Op.redeem _ _ => computeExchangeRate (pullVestedYield s)
   | _ => computeExchangeRate s
 
+theorem holderValueExecutionRate_eq_live_of_rateAware
+    (s : State) (op : Op) (h_op : RateAwareHolderValueOp op)
+    (h_period : 0 < s.vestPeriod) :
+    holderValueExecutionRate s op = computeExchangeRate s := by
+  rcases h_op with h_stable | ⟨amount, rfl⟩ | ⟨assets, receiver, rfl⟩ | ⟨shares, receiver, rfl⟩
+  · rcases h_stable with h_rate | h_standard | ⟨amount, rfl⟩ | ⟨requestId, rfl⟩
+    · rcases h_rate with ⟨amount, rfl⟩ | ⟨amount, rfl⟩ <;> rfl
+    · rcases h_standard with ⟨amount, rfl⟩ | ⟨requestId, rfl⟩ <;> rfl
+    · rfl
+    · rfl
+  · rfl
+  · unfold holderValueExecutionRate computeExchangeRate
+    rw [totalAssets_pullVestedYield_of_pos_period s h_period]
+    simp
+  · unfold holderValueExecutionRate computeExchangeRate
+    rw [totalAssets_pullVestedYield_of_pos_period s h_period]
+    simp
+
 def traceNextState (s : State) (p : Op × Address) : State :=
   match step s p.1 p.2 with
   | none => s
@@ -2487,11 +2505,9 @@ theorem holderValueAt_rateAware_trace_bound
               simpa [execTrace, traceNextState, hstep] using
                 Nat.le_trans hbound (Nat.le_trans hpostrate hlocal)
 
-/-- A live-value corollary is available when the first execution rate is no
-higher than the initial live rate. This premise is intentionally explicit:
-pending vesting can make `computeExchangeRate (pullVestedYield s)` higher than
-`computeExchangeRate s`, and the model does not identify that increase with
-conservation. -/
+/-- A live-value corollary for a positive-period model. The first execution
+rate is derived to equal the initial live rate; later rate movement remains
+represented by the explicit pairwise execution-rate schedule. -/
 theorem holderValue_rateAware_trace_nonincreasing
     (s : State) (σ : List (Op × Address)) (a : Address) (R₀ : Nat)
     (h_registry : RegistryWellIndexed s)
@@ -2504,18 +2520,28 @@ theorem holderValue_rateAware_trace_nonincreasing
       | p :: _ => R₀ = holderValueExecutionRate s p.1)
     (h_rates : List.Pairwise (fun r₁ r₂ => r₂ ≤ r₁)
       (liveRateSequence s σ))
-    (h_initial_rate : R₀ ≤ computeExchangeRate s) :
+    (h_period : 0 < s.vestPeriod) :
     holderValue (execTrace s σ) a ≤ holderValue s a := by
-  have hbound := holderValueAt_rateAware_trace_bound s σ a R₀ h_registry h_safe h_own h_ops
-    h_nonempty h_rate h_rates
-  have hmono := holderValueAt_mono_rate s a R₀ (computeExchangeRate s) h_initial_rate
-  calc
-    holderValue (execTrace s σ) a =
-        holderValueAt (computeExchangeRate (execTrace s σ)) (execTrace s σ) a :=
-      (holderValueAt_live (execTrace s σ) a).symm
-    _ ≤ holderValueAt R₀ s a := hbound
-    _ ≤ holderValueAt (computeExchangeRate s) s a := hmono
-    _ = holderValue s a := holderValueAt_live s a
+  cases σ with
+  | nil => exact False.elim (h_nonempty rfl)
+  | cons p σ =>
+    have hfirst_op : RateAwareHolderValueOp p.1 := h_ops p List.mem_cons_self
+    have hfirst_rate := holderValueExecutionRate_eq_live_of_rateAware s p.1 hfirst_op h_period
+    have h_initial_rate : R₀ ≤ computeExchangeRate s := by
+      have hR : R₀ = holderValueExecutionRate s p.1 := by simpa using h_rate
+      rw [hR, hfirst_rate]
+      exact Nat.le_refl _
+    have hbound := holderValueAt_rateAware_trace_bound s (p :: σ) a R₀ h_registry h_safe h_own h_ops
+      h_nonempty h_rate h_rates
+    have hmono := holderValueAt_mono_rate s a R₀ (computeExchangeRate s) h_initial_rate
+    calc
+      holderValue (execTrace s (p :: σ)) a =
+          holderValueAt (computeExchangeRate (execTrace s (p :: σ)))
+            (execTrace s (p :: σ)) a :=
+        (holderValueAt_live (execTrace s (p :: σ)) a).symm
+      _ ≤ holderValueAt R₀ s a := hbound
+      _ ≤ holderValueAt (computeExchangeRate s) s a := hmono
+      _ = holderValue s a := holderValueAt_live s a
 
 /-- At a fixed pricing rate, a timed trace consisting of the holder's standard
 requests, standard claims, and waits is neutral. This is the honest

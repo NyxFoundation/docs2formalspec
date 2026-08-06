@@ -1186,7 +1186,7 @@ def redeemForMinAssets (s : State) (shares minAssets : Nat) (receiver caller : A
     (pullVestedYield s).apxUSDBal = s.apxUSDBal := by
   unfold pullVestedYield; dsimp only; split <;> rfl
 
-@[simp] private theorem pullVestedYield_totalSupply_apyUSD (s : State) :
+@[simp] theorem pullVestedYield_totalSupply_apyUSD (s : State) :
     (pullVestedYield s).totalSupply_apyUSD = s.totalSupply_apyUSD := by
   unfold pullVestedYield; dsimp only; split <;> rfl
 
@@ -1267,6 +1267,37 @@ private theorem newlyVestedAmount_le_total (s : State) (n : Nat) :
   · exact Nat.zero_le _
   · exact Nat.le_refl _
   · exact div_mul_le_total (by omega)
+
+/-! Pulling vested yield changes where the realized amount is stored, not the
+total asset balance used for pricing, when the vesting period is non-zero.
+The positive-period premise is load-bearing: with `vestPeriod = 0`, a pull
+can re-anchor a previously future-dated zero-period stream and make it appear
+vested at the same timestamp. -/
+theorem totalAssets_pullVestedYield_of_pos_period (s : State)
+    (h_period : 0 < s.vestPeriod) :
+    totalAssets (pullVestedYield s) = totalAssets s := by
+  unfold totalAssets pullVestedYield
+  dsimp only
+  split
+  · rfl
+  · rename_i hv
+    simp [vestedAmount, newlyVestedAmount]
+    omega
+
+/-- The positive-period premise above is necessary in this model. With a
+zero-length stream that has not reached its old start time, pulling an already
+realized amount re-anchors the stream and makes the remaining stream visible at
+the same timestamp. -/
+theorem totalAssets_pullVestedYield_zero_period_counterexample :
+    let s : State :=
+      { (default : State) with
+          fullyVestedAmount := 1
+          vestTotal := 1
+          vestStart := 1
+          vestPeriod := 0
+          now := 0 }
+    totalAssets s < totalAssets (pullVestedYield s) := by
+  decide
 
 /-- `newlyVestedAmount` is monotone in time. -/
 private theorem newlyVestedAmount_mono (s : State) {n m : Nat} (h : n ≤ m) :

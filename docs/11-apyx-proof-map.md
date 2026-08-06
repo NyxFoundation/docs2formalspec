@@ -221,12 +221,16 @@ The rate-aware definitions `RateAwareHolderValueOp`,
 `holderValueExecutionRate`, `RateAwareSideCondition`, and `liveRateSequence`
 make that argument stateable. `holderValueAt_rateAware_trace_bound` proves the
 fixed-to-live bound under a pairwise non-increasing execution-rate schedule;
-`holderValue_rateAware_trace_nonincreasing` adds the explicit first-rate
-condition needed to compare against the initial live value. The side condition
-only carries the no-premium redemption bound through the trace; operator
-exclusion is not needed because the trace is holder-signed and the claim frames
-used by this theorem are already generic. This is a conditional vault-trace
-theorem, not a blanket closure of the live-rate gap.
+`totalAssets_pullVestedYield_of_pos_period` and
+`holderValueExecutionRate_eq_live_of_rateAware` derive the initial-rate bridge
+when `0 < vestPeriod`, so `holderValue_rateAware_trace_nonincreasing` no longer
+needs a separately supplied first-rate inequality. The counterexample
+`totalAssets_pullVestedYield_zero_period_counterexample` shows why the positive
+period premise is a model condition rather than a proof artifact. The side
+condition only carries the no-premium redemption bound through the trace;
+operator exclusion is not needed because the trace is holder-signed and the
+claim frames used by this theorem are already generic. This is a conditional
+vault-trace theorem, not a blanket closure of the live-rate gap.
 
 ### 5.3 Clock consistency
 
