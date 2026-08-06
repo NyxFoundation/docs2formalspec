@@ -16,13 +16,13 @@
 Apyx's public protocol documentation was formalized into (a) a normative RFC 2119 specification
 ([`SPEC.md`](SPEC.md)) and (b) an executable Lean 4 model of the protocol's state machine
 ([`Apyx.lean`](Apyx.lean)). Against that model we prove the active theorem families listed in the proof map,
-each re-checked from source by the Lean kernel. The extracted requirement inventory contains 82
+each re-checked from source by the Lean kernel. The extracted requirement inventory contains 83
 records in [`requirements.json`](requirements.json), while the proof map identifies the current
 kernel-checked theorem surface and its implementation hand-off points:
 
 | Group | Question answered | Active artifact |
 |---|---|---|
-| **Requirement records** | What does the extracted RFC 2119 inventory ask for? | 82 records in [`requirements.json`](requirements.json) |
+| **Requirement records** | What does the extracted RFC 2119 inventory ask for? | 83 records in [`requirements.json`](requirements.json) |
 | **Active Lean proof surface** | Which mapped design, invariant, safety, and boundary claims are kernel-checked? | [`docs/11-apyx-proof-map.md`](../../docs/11-apyx-proof-map.md) |
 | **Implementation hand-off** | Which deployment-specific questions remain outside the core model? | `DeploymentFees.lean`, `DeploymentGaps.lean`, `MulDivFidelity.lean` |
 
@@ -91,7 +91,7 @@ state variables, and operations).
 
 The active Lean theorem surface follows [`docs/11-apyx-proof-map.md`](../../docs/11-apyx-proof-map.md).
 The requirement inventory and the proof map serve different purposes: `requirements.json` records the
-82 extracted specification requirements, while the proof map records the current design, invariant,
+83 extracted specification requirements, while the proof map records the current design, invariant,
 safety, accounting, boundary, and implementation hand-off claims that are checked by Lean or assigned
 to another verification method.
 
@@ -598,7 +598,11 @@ current source whenever public declarations change; it should confirm that no th
 are not protocol assumptions. The requirement-pipeline metrics are recorded in
 [`leancheck.json`](leancheck.json). They describe the requirement-oriented Lean run; the complete
 current proof surface is checked by the build and mapped in
-[`docs/11-apyx-proof-map.md`](../../docs/11-apyx-proof-map.md).
+[`docs/11-apyx-proof-map.md`](../../docs/11-apyx-proof-map.md). Two of its fields are frozen at
+generation time and no longer describe the pruned sources: `killed: 8` counts the `-- BROKEN:`
+blocks the repair ladder had commented out, all of which were deleted along with their markers in
+the prune commit (`454690d`), and `theorems: 27` counts only the `req_*` theorems of the generated
+module, not the hand-written proof surface the build checks.
 
 ---
 
@@ -607,7 +611,7 @@ current proof surface is checked by the build and mapped in
 | File | Contents |
 |---|---|
 | [`SPEC.md`](SPEC.md) | The normative RFC 2119 specification (human-readable) |
-| [`requirements.json`](requirements.json) | The 82 extracted requirements in structured form; not every record has an active standalone theorem |
+| [`requirements.json`](requirements.json) | The 83 extracted requirements in structured form; not every record has an active standalone theorem |
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine |
 | [`Apyx.lean`](Apyx.lean) | The formal model (`State`, `Op`, `step`) and the active proof surface |
 | [`BlastRadius.lean`](BlastRadius.lean) | Key-compromise blast-radius proofs and defense wrappers |
