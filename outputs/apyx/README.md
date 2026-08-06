@@ -5,8 +5,8 @@
 | **Subject** | Apyx (apyx.fi) — the apxUSD / apyUSD dividend-backed stablecoin protocol |
 | **Contracts** (Ethereum mainnet, per the ingested documentation) | apxUSD [`0x98A8…4665`](https://etherscan.io/address/0x98A878b1Cd98131B271883B390f68D2c90674665) · apyUSD [`0x38EE…8a6A`](https://etherscan.io/address/0x38EEb52F0771140d10c4E9A9a72349A329Fe8a6A) · UnlockToken [`0x9377…BF4e6`](https://etherscan.io/address/0x93775E2dFa4e716c361A1f53F212c7AE031BF4e6) |
 | **Method** | RFC 2119 specification → Lean 4 state-machine model → machine-checked theorems |
-| **Result** | 0 `sorry`, kernel-verified (`lake build D2fsSpecs`, Lean 4.31.0). No internal *contradiction* was found in Apyx's specification. The analysis machine-proved concrete design weaknesses — a single-key (`ADMIN_ROLE`) reserve-drain and unbounded repricing path, and the absence of a redemption-price floor (§4.1, §5, §9.1) — and, in a self-review of this report's own model, found and fixed four defects in the **formalization** (§9.3). |
-| **Date** | 2026-08-06 |
+| **Result** | The current Lean tree builds with 0 `sorry` and 0 vacuous theorems (`lake build D2fsSpecs`, Lean 4.31.0). The model proves the active design, ledger, registry, pending-liability, and adversarial boundaries described below; it does not prove bytecode conformance. The model still exposes a single-key (`ADMIN_ROLE`) reserve-drain and unbounded repricing path, and the absence of a redemption-price floor (§4.1, §5, §9.1). |
+| **Date** | 2026-08-06 (synchronized with the current Lean tree) |
 | **Self-review** | This report has been reviewed against its own Lean source; findings and fixes are in [`code_review_lean.md`](code_review_lean.md) and §9.3. Regression tests: [`review_witnesses/`](review_witnesses/). Deployment reads that ground the fixes: [`deployment_ground_truth.md`](deployment_ground_truth.md). |
 
 ---
@@ -117,6 +117,19 @@ The remaining proofs are organized around a small set of reusable boundaries:
 - holder-value, solvency, rounding, price, and blast-radius properties;
 - trace composition with explicit revert-skip, time, support, and caller premises;
 - deployment/SPECA hand-off points for fees, decimal scaling, and implementation fidelity.
+
+The latest Lean additions close the following model-local layers. These are the current source of truth
+for what is proved; prose claims not backed by one of these declarations are not promoted to protocol
+guarantees:
+
+| Layer | Current Lean result |
+|---|---|
+| Token ledgers | `apxUSDLedgerConsistent_trace` and `apyUSDLedgerConsistent_trace` preserve finite-support balance/supply identities across revert-skip traces. |
+| Registry and receipts | `RegistryWellIndexed`, `RegistryBounded`, `OwnerPointerSound`, and `unlockTokenLedgerConsistent_trace` preserve allocation, owner-pointer, and receipt face-value consistency. |
+| Composite invariant | `ProtocolInv` carries registry indexing, solvency, `WellFormed`, and both finite token ledgers; `ProtocolInvWithReceiptLedger` adds the receipt relation. `protocolInv_reachableOps` derives post-state `WellFormed` under the explicit at-most-par price regime. |
+| Pending liabilities | `SolventOutstanding` and `protocolInvOutstanding_reachable` include pending standard/flexible unlock face amounts; claims are in scope, while vault exits, stress, backstop, and bare reserve withdrawal remain explicit exclusions. |
+| USDC boundary | `UsdcLedgerConsistent` / `usdcLedgerConsistent_trace` preserve an external-parameterized USDC ledger under explicit holder-support and non-backstop premises. This is not a `State`-internal total-supply theorem. |
+| Holder value | `holderValue` includes pending positions; `holderValueAt_rateAware_trace_rateAdjusted` accounts for signed rate revaluation, while `holderValue_rateAware_trace_nonincreasing` remains conditional on a non-increasing execution-rate schedule. |
 
 The exact theorem names and their proof dependencies are maintained in the proof map. A theorem mentioned only in the historical report is not, by itself, an active Lean result.
 
@@ -564,7 +577,7 @@ Halmos, hevm; **Fuzz** = Echidna, Medusa, Foundry invariant; **Config** = role-g
 | 3 | **Bytecode ⊨ model** — the model is a *hand-built interpretation* and can diverge from the contract (as the vesting and catastrophic-per-unit cases here showed) | Proofs are about the Lean model, not `ApxUSD`/`ApyUSD`/`RedemptionPoolV0`/`LinearVestV0` bytecode | **SMT (Certora/Halmos) on the actual contracts** — the primary complement |
 | 4 | **Fixed-point rounding & decimals** — **partly closed.** The four `previewX` rounding directions were read off the verified source and the model now matches them (`previewMint` was Floor and is now Ceil, §9.3). What remains is the USDC(6)↔apxUSD/apyUSD(18) scaling, which the model still treats as commensurate | Model uses ideal `Nat` division; no `uint256`/decimals semantics | SMT + Static |
 | 5 | **Overflow / unchecked / division-by-zero** — Lean `x/0 = 0` masks a Solidity revert; `unchecked{}` blocks | Nat arithmetic never overflows or reverts | Static + SMT |
-| 6 | **ERC-20/4626 ledger identity** `Σ balances = totalSupply` — finite apxUSD and apyUSD ledger relations are now initialized and preserved along modeled traces (`apxUSDLedgerConsistent_trace`, `apyUSDLedgerConsistent_trace`); the separate `WellFormed` per-address balance bound used by solvency theorems remains an assumption | `State` still stores bare `Address → Nat` functions, so arbitrary hand-written states need not satisfy either finite relation | SMT invariant on the deployed token/vault, plus the Lean reachable-state relations |
+| 6 | **ERC-20/4626 ledger identity** `Σ balances = totalSupply` — finite apxUSD and apyUSD ledger relations are initialized and preserved along modeled traces (`apxUSDLedgerConsistent_trace`, `apyUSDLedgerConsistent_trace`). The apxUSD ledger now derives the per-address balance half of `WellFormed`; the price half remains an explicit at-most-par operation regime in `protocolInv_reachableOps` | `State` still stores bare `Address → Nat` functions, so arbitrary hand-written states need not satisfy either finite relation; the base `ProtocolInv` theorem keeps `WellFormed` as a state-side premise | SMT invariant on the deployed token/vault, plus the Lean reachable-state relations |
 | 7 | ~~**ERC-4626 inflation defense in the real vault**~~ — **answered, and the answer is negative.** `ApyUSD._decimalsOffset()` returns `0`, so the only structural defence is OpenZeppelin's single virtual share, and `deposit()` does not revert on zero shares. The model now carries the same `+1` and reports the residue rather than claiming immunity (§9.3, §4.2). Remaining implementation work is the decision itself: whether to raise `_decimalsOffset` or seed the vault | — | Protocol decision + Fuzz to size the exposure |
 | 8 | **Vesting timestamp detail** — `LinearVestV0` separates `lastDepositTimestamp`/`lastTransferTimestamp`; the model collapses to a single `vestStart` (documented simplification), so a pull can shift the vesting end | Model has one clock anchor | SMT/Fuzz on `LinearVestV0` |
 | 9 | **Aggregate conservation of the pro-rata split** (catastrophic-backstop 2nd clause) | The *per-address* credit `reserve·balance/totalSupply` is proved (`req_catastrophic_backstop`). Finite ledger relations now make an aggregate statement expressible, but `pro_rata_floor_underpays_witness` shows the current floor formula can leave remainder; an exact drained-reserve theorem needs allocation or rational accounting (§6.2) | Implementation audit + SMT |
@@ -629,6 +642,9 @@ module, not the hand-written proof surface the build checks.
 | [`property-manifest.csv`](property-manifest.csv) | The requirement-to-theorem join: 108 rows (83 extracted + 25 deployment-derived), each with spec anchor, covering theorem(s), assurance result, and evidence (§3) |
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine |
 | [`Apyx.lean`](Apyx.lean) | The formal model (`State`, `Op`, `step`) and the active proof surface |
+| [`Registry.lean`](../../lean/D2fsSpecs/Registry.lean) | Reachability, allocation, owner-pointer, and registry well-indexing invariants |
+| [`Ledger.lean`](../../lean/D2fsSpecs/Ledger.lean) | Finite apxUSD ledger identity and trace preservation |
+| [`Invariant.lean`](../../lean/D2fsSpecs/Invariant.lean) | Composite, receipt-aware, and pending-liability invariant layers |
 | [`BlastRadius.lean`](BlastRadius.lean) | Key-compromise blast-radius proofs and defense wrappers |
 | [`HolderValue.lean`](HolderValue.lean) | The complete signed per-holder value ledger, and the `caller_value_*` family restated over it (§9.3) |
 | [`DeploymentGaps.lean`](DeploymentGaps.lean) | The vesting-beneficiary single-key drain, the apxUSD supply cap and its coalition escape, and the vest-clock deviation — formalized from verified Solidity (§9.3) |

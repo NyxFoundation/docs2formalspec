@@ -1,5 +1,10 @@
 **Apyx Protocol – Formal State‑Transition Model**  
-*(Version 1.0 Draft – quantitative view)*  
+*(Lean-synchronized public model, 2026-08-06)*
+
+This document describes the current `State`, `Op`, and `step` definitions in [`Apyx.lean`](Apyx.lean).
+The model is an abstract design model, not a Solidity refinement proof. Successful steps return
+`some State`; reverted steps return `none` and are skipped by `execTrace`. The companion modules add
+ledger, registry, pending-liability, holder-value, and deployment-derived boundaries.
 
 ---
 
@@ -52,16 +57,16 @@
 
 | Operation | Inputs | Preconditions (must hold) | Effects (state updates & external calls) |
 |-----------|--------|---------------------------|------------------------------------------|
-| **depositUSDC** *(standard mint pathway)* | `amount` (USDC) | `!globalPause` ∧ `whitelist[msg.sender]` ∧ `!denylist[msg.sender]` ∧ `amount > 0` | Off‑chain Treasury receives `amount`; `totalSupply_apxUSD += amount`; ERC‑20 `apxUSD.mint(msg.sender, amount)` at $1/unit, unconditionally (no market-price gate — see `mintApxUSD` for the separate arbitrage pathway). |
+| **depositUSDC** *(standard mint pathway)* | `amount` (USDC) | `!globalPause` ∧ `whitelist[msg.sender]` ∧ `!denylist[msg.sender]` ∧ `amount ≤ balanceUSDC(msg.sender)` | Off‑chain Treasury receives `amount`; `totalSupply_apxUSD += amount`; ERC‑20 `apxUSD.mint(msg.sender, amount)` at $1/unit, unconditionally (the abstract dispatcher permits the zero amount). |
 | **mintApxUSD** *(arbitrage pathway)* | `to`, `amount` | `!globalPause` ∧ `whitelist[msg.sender]` ∧ `!denylist[msg.sender]` ∧ `!denylist[to]` ∧ **`apxUSDMarketPrice > 1e27`** (apxUSD trading above $1) ∧ `amount ≤ balanceUSDC(msg.sender)` | Transfer USDC to Treasury; `totalSupply_apxUSD += amount`; ERC‑20 `apxUSD.mint(to, amount)` at $1/unit. |
-| **lockApxUSD** | `amount` | `balanceOf_apxUSD(msg.sender) ≥ amount` ∧ `amount > 0` | `apxUSD.transferFrom(msg.sender, vault, amount)`; `shares = amount * 1e27 / computeExchangeRate(s)` — the **live** rate, as the deployment's `previewDeposit` is; `totalSupply_apyUSD += shares`; `apyUSD.mint(msg.sender, shares)`. Floor rounding means a deposit below the current share price mints fewer shares than it pays for, matching `previewDeposit(1 wei) = 0` read on-chain (§5, `README` §9.3). |
-| **requestUnlock** *(standard redemption request)* | `amount` | `!globalPause` ∧ `balanceOf_apxUSD(msg.sender) ≥ amount` | Burn `amount` **apxUSD** from `msg.sender`; enforce **at most one pending standard request per user** — if the caller already has a pending standard position, top it up (`amount` added, cooldown reset); else open a fresh one. Cooldown `= now + 20 days`; mint/refresh the caller's `apxUSD_unlock` NFT. |
-| **claimUnlock** | `requestId` | `(msg.sender == owner(requestId)` **∨ `msg.sender == unlockTokenOperator`**`)` ∧ `block.timestamp ≥ cooldownEnd[requestId]` | Burn NFT; `apxUSD.mint(owner(requestId), amount)`; **retire the position** — clear `unlockRequests[requestId]` *and* the owner's `unlockRequestId` pointer (`retireStandardUnlock`), mirroring `CommitToken.redeem`'s `delete _requests[owner]`. Clearing only the NFT left the settled entry live and made the holder's next request permanently unclaimable (`README` §9.3). The vault (as configured operator) may trigger this on behalf of the owner. |
-| **redeemApxUSD** *(arbitrage redemption pathway)* | `amount` | `!globalPause` ∧ `whitelist[msg.sender]` ∧ **`apxUSDMarketPrice < 1e27`** (apxUSD trading below $1) ∧ `balanceOf_apxUSD(msg.sender) ≥ amount` ∧ `usdcReserve ≥ amount·redemptionValue/1e27` ∧ the step does not decrease the buffer | Burn `amount` apxUSD; `usdcReserve -= amount·redemptionValue/1e27`; `USDC.transfer(msg.sender, amount·redemptionValue/1e27)`; `totalSupply_apxUSD -= amount`. |
-| **withdraw** | `assets`, `receiver` | `balanceOf_apyUSD(msg.sender) ≥ assets / exchangeRate` | Pull vested yield from `LinearVestV0`; burn corresponding apyUSD shares; deposit `assets` into `UnlockToken` (creates unlock NFT with 20‑day cooldown). |
+| **lockApxUSD** | `amount` | `!globalPause` ∧ `!denylist[msg.sender]` ∧ `balanceOf_apxUSD(msg.sender) ≥ amount`; a positive amount is rejected only when the live model rate floors to zero | `apxUSD.transferFrom(msg.sender, vault, amount)`; `shares = amount * 1e27 / computeExchangeRate(s)` — the **live** rate; `totalSupply_apyUSD += shares`; `apyUSD.mint(msg.sender, shares)`. Floor rounding means a deposit below the current share price can mint zero shares, matching `previewDeposit(1 wei) = 0` read on-chain. |
+| **requestUnlock** *(standard redemption request)* | `amount` | `!globalPause` ∧ `!denylist[msg.sender]` ∧ `balanceOf_apxUSD(msg.sender) ≥ amount` | Burn `amount` **apxUSD** from `msg.sender`; in this request registry, a repeat request tops up the same pointed-to position and resets its cooldown. Vault receipts are a separate fresh-position path. |
+| **claimUnlock** | `requestId` | Recorded request/receipt; `!globalPause` ∧ `!denylist[owner]` ∧ `(msg.sender == owner ∨ msg.sender == unlockTokenOperator)` ∧ `block.timestamp ≥ cooldownEnd[requestId]` | Burn NFT; `apxUSD.mint(owner(requestId), amount)`; **retire the position** — clear `unlockRequests[requestId]` *and* the owner's `unlockRequestId` pointer (`retireStandardUnlock`). |
+| **redeemApxUSD** *(arbitrage redemption pathway)* | `amount` | `!globalPause` ∧ `!denylist[msg.sender]` ∧ `whitelist[msg.sender]` ∧ **`apxUSDMarketPrice < 1e27`** ∧ `balanceOf_apxUSD(msg.sender) ≥ amount` ∧ reserve suffices ∧ the step does not decrease the derived buffer | Burn `amount` apxUSD; `usdcReserve -= amount·redemptionValue/1e27`; `USDC.transfer(msg.sender, amount·redemptionValue/1e27)`. |
+| **withdraw** | `assets`, `receiver` | `!globalPause` ∧ both caller/receiver are not deny-listed ∧ `receiver = msg.sender` ∧ positive assets require a positive `withdrawShares(assets, computeExchangeRate(pullVestedYield(s)))` quote ∧ caller has the shares ∧ vault has the assets | Pull vested yield; compute the live rate; burn the ceil-rounded share amount; deposit `assets` into `UnlockToken` as a fresh position with a 20-day cooldown. |
 | **redeem** | `shares`, `receiver` | `!globalPause` ∧ `balanceOf_apyUSD(msg.sender) ≥ shares` ∧ vault holds enough apxUSD after pulling vested yield | Pull vested yield **first**, then price: `assets = shares·computeExchangeRate(pullVestedYield s)/1e27`. The deployment does the same, with the comment "Pull vested yield so liquid assets match `totalAssets()`". Burn `shares` apyUSD; `vaultApxUSDBal -= assets`; open a standard unlock position for `receiver` (`assets`, 20-day cooldown) — a **fresh** position per call, matching `redeemForReceipt`, which mints a new `UnlockReceipt` and returns its own `tokenId`. |
-| **flexibleRequestUnlock** | `amount` | `!globalPause` ∧ `balanceOf_apxUSD(msg.sender) ≥ amount` | Burn `amount` apxUSD; open a *flexible* unlock position (records `requestTime`); multiple concurrent flexible requests are allowed. |
-| **flexibleClaimUnlock** | `requestId` | (owner ∨ operator) ∧ `now ≥ requestTime + 3 days` | Burn the flexible NFT; `apxUSD.mint(owner, amount − fee)`, `fee = amount·feeBps/10000` with `feeBps` declining linearly from 3.5% to a 0.1% floor. |
+| **flexibleRequestUnlock** | `amount` | `!globalPause` ∧ `!denylist[msg.sender]` ∧ `balanceOf_apxUSD(msg.sender) ≥ amount` | Burn `amount` apxUSD; open a *flexible* unlock position (records `requestTime`); multiple concurrent flexible requests are allowed. |
+| **flexibleClaimUnlock** | `requestId` | `!globalPause` ∧ `!denylist[owner]` ∧ (owner ∨ operator) ∧ `now ≥ requestTime + 3 days` | Burn the flexible NFT; `apxUSD.mint(owner, amount − fee)`. The documentation-derived model uses the 3.5%→0.1% schedule; deployment fidelity is separately formalized in `DeploymentFees.lean`. |
 | **pause / unpause** | – | `msg.sender` has `PAUSE_ROLE` | Set `globalPause = true / false`. |
 | **addToWhitelist / removeFromWhitelist** | `addr` | `msg.sender` has `ADMIN_ROLE` | `whitelist[addr] = true / false`. |
 | **addToDenylist / removeFromDenylist** | `addr` | `msg.sender` has `ADMIN_ROLE` | `denylist[addr] = true / false`. |
@@ -80,14 +85,31 @@
 ### 4. Key Quantitative Guarantees  
 
 * **Mint price** = $1 = 1 apxUSD (exact) on-chain via `depositUSDC`; the `mintApxUSD` arbitrage pathway also prices at $1 but only while `apxUSDMarketPrice > 1e27`. (Any spreads/execution costs are applied **off-chain** at USD collection — `MinterV0` mints 1:1 on-chain — so they are out of on-chain scope.)
-* **ExchangeRate (apyUSD→apxUSD)** **non-decreasing** in time (`req_exchange_rate_non_decreasing`) and across a deposit (`exchange_rate_monotone_deposit`). It is denominated in apxUSD (the vault's ERC-4626 `convertToAssets`), so it rises only with yield and is **structurally insulated from apxUSD-collateral stress**: a collateral loss reduces apxUSD's USD `redemptionValue`, not the apxUSD count backing apyUSD. **It is not bounded below by `1e27`** — no theorem establishes that, and `Regression.lean` §R4b exhibits a state where the live rate floors to 0. The deployment reads 1.4036, but that is an observation, not an invariant.
+* **ExchangeRate (apyUSD→apxUSD)** is computed live by `computeExchangeRate`, not read from the `exchangeRate` field. The model proves time/deposit monotonicity only under the premises of the named theorems; mixed traces require the rate-aware theorems in `HolderValue.lean`. It is **not bounded below by `1e27`** — `Regression.lean` §R4b exhibits a state where the live rate floors to 0. The deployment read of 1.4036 is an observation, not an invariant.
 * **Cooldown** = 20 days (claimable after) with early‑claim fee = `3.5 % – (t/20d)*(3.4 %)` (minimum 0.1 %).  
 * **Flexible redemption** minimum claim after 3 days, same fee schedule.  
   These two lines preserve the documentation-corpus model. They are not deployment-fidelity claims: `DeploymentFees.lean` records the verified live receipt curve as 3.4% down to 0%, its mutable admin ceiling, and the separate 10 bps vault-side `unlockingFee` omitted from this model.
-* **Over-collateralization**: `overcollateralizationBuffer ≥ 0`. It **MUST NOT decrease during routine redemptions** (machine-checked: `req_buffer_non_decreasing` over `redeemApxUSD` / `requestUnlock` / `flexibleRequestUnlock` / `executeRFQRedemption`) and may grow via yield spreads and collateral appreciation. Two operations are the documented exceptions: a modeled stress **loss** (`handleStressEvent`) can reduce it — the buffer absorbing the shock — and a **catastrophic backstop** distributes it entirely, driving it to 0. (Matches `corpus.md`, which scopes 'not consumed during routine redemptions'; the earlier unconditional 'may only increase' wording was an over-generalized extraction, corrected 2026-07-08.)
+* **Over-collateralization**: the derived buffer is `max(0, totalCollateralValue − totalSupply_apxUSD·redemptionValue/ray)`. It **MUST NOT decrease during the modeled routine-redemption slice** (machine-checked: `req_buffer_non_decreasing` over `redeemApxUSD` / `requestUnlock` / `flexibleRequestUnlock` / `executeRFQRedemption`). Stress loss, catastrophic backstop, and admin reserve withdrawal are explicit exceptions in the transition model. The separate `overcollateralizationBuffer` field is a legacy state field written only by the backstop and is not used as a hidden margin term.
 * **Yield vesting** linear over `vestPeriod` (default 20 days); `vestedAmount = fullyVestedAmount + newlyVested`, and deposits/period-changes accrue the newly-vested portion into `fullyVestedAmount` before resetting the clock, so accrued yield is never forfeited (REQ‑credit‑preserves‑accrued‑vest). *(Model simplification vs contract: the contract separates `lastDepositTimestamp` from `lastTransferTimestamp` so pulls don't extend the vesting end; the model uses a single `vestStart`, so a pull restarts the remaining pool's clock — a documented remaining approximation.)*  
 * **UnlockToken singleton/operator**: exactly one `unlockTokenAddress` exists and is never reassigned; `unlockTokenOperator` (the vault) never changes and may claim on behalf of any recorded owner once cooldown has elapsed.  
 * **Monthly yield-rate cadence**: `setYieldRate` succeeds at most once per 30-day period, and the accepted rate is bounded by the previous period's recorded collateral-base yield.  
+
+### 4.1 Lean proof layers
+
+The current proof surface is organized as follows:
+
+| Layer | Current declarations | Scope |
+|---|---|---|
+| Token ledgers | `apxUSDLedgerConsistent_trace`, `apyUSDLedgerConsistent_trace` | Finite-support balance/supply identities across revert-skip traces. |
+| Registry and receipts | `RegistryBounded`, `OwnerPointerSound`, `unlockTokenLedgerConsistent_trace` | Allocation, owner-pointer, and receipt face-value consistency. |
+| Composite invariants | `ProtocolInv`, `ProtocolInvWithReceiptLedger`, `ProtocolInvOutstanding` | Conditional composition of registry, solvency, well-formedness, token ledgers, receipts, and pending obligations. |
+| Holder value | `holderValue`, `holderValueAt_rateAware_trace_rateAdjusted`, `apxUSDFlow_trace` | Complete per-holder value including pending positions, explicit signed rate revaluation, and internal custody flow. |
+| External USDC | `UsdcLedgerConsistent`, `usdcLedgerConsistent_trace` | Parameterized boundary with supplied holder support and total supply; not a field-level invariant of `State`. |
+
+The strongest statements are conditional by design. In particular, a theorem about `ProtocolInv` or
+`SolventOutstanding` is not an unconditional guarantee for arbitrary hand-written `State` values, and
+none of these theorems proves that deployed bytecode refines this model. See [`SPEC.md`](SPEC.md) §10b
+and [`property-manifest.csv`](property-manifest.csv) for requirement-level status.
 
 ---  
 

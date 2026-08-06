@@ -1,6 +1,7 @@
 # Apyx Protocol Specification  
-**Version:** 1.0 – Draft  
-**Status:** Working Draft (intended for discussion and review)  
+**Version:** 1.1 – Lean-synchronized
+**Status:** Current public specification; Lean correspondence and limitations are recorded in §10b.
+**Last synchronized:** 2026-08-06
 
 ---
 
@@ -16,6 +17,12 @@ The purpose of this document is to capture, in a single normative reference, all
 * Collateral management, over‑collateralization buffers, and stress‑event handling.  
 * All on‑chain contract interactions (ERC‑4626 vault, UnlockToken, YieldDistributor, LinearVestV0, etc.).  
 
+This document is the normative requirement inventory, not a claim that every requirement is proved.
+The machine-checked correspondence is the Lean model in [`Apyx.lean`](Apyx.lean) and its companion
+modules. The exact requirement-to-theorem status is maintained in
+[`property-manifest.csv`](property-manifest.csv); `model=partial`, `guard-only`, `out-of-scope`, and
+`impl=not-run` entries must be read literally.
+
 ---
 
 ## 2. Terminology  
@@ -30,7 +37,7 @@ The following terms have the meanings defined below. The definitions use the key
 | **YieldDistributor** | Contract that credits converted apxUSD proceeds to the apyUSD vault. |
 | **LinearVestV0** | Contract that implements a linear vesting mechanism for streamed yield. |
 | **Redemption Value** | The dollar‑denominated value per apxUSD that reflects the underlying collateral basket and any applicable spreads. |
-| **Over‑collateralization Buffer** | The excess of Redemption Value over the market value of the collateral, which must be preserved (or may grow) under normal operation. |
+| **Over‑collateralization Buffer** | The excess collateral after valuing outstanding apxUSD redemption obligations; in the Lean model this is `max(0, totalCollateralValue − totalSupply_apxUSD × redemptionValue / ray)`. |
 | **Whitelist** | List of participants approved to mint or redeem apxUSD (or to perform arbitrage) based on eligibility and jurisdiction. |
 | **Global Pause** | Protocol‑wide flag that, when active, blocks all deposit and mint operations. |
 | **Deny List** | List of addresses that are prohibited from depositing or minting. |
@@ -64,9 +71,9 @@ The following terms have the meanings defined below. The definitions use the key
 
 * `totalSupply_apxUSD` – total minted apxUSD.  
 * `totalSupply_apyUSD` – total minted apyUSD shares.  
-* `RedemptionValue` – current dollar value per apxUSD (tracks basket).  
-* `OvercollateralizationBuffer` – RedemptionValue – TotalCollateralValue.  
-* `exchangeRate` – apxUSD per apyUSD (≥ 1, non‑decreasing).  
+* `RedemptionValue` – current per-unit dollar value of apxUSD (the Lean model uses `ray = 10^27`; the deployed redemption pool uses a different scale).
+* `OvercollateralizationBuffer` – the derived excess `max(0, TotalCollateralValue − totalSupply_apxUSD × RedemptionValue / ray)`; the model also contains a separate legacy field that is zero on the default/reachable design traces.
+* `exchangeRate` – the live apxUSD-per-apyUSD rate derived from `totalAssets` and `totalSupply_apyUSD`; the Lean model uses OpenZeppelin-style virtual `+1` terms. It is **not** an invariant that the rate is ≥ 1.
 * `cooldownEndTimestamp[user][requestId]` – timestamp after which unlock can be claimed.  
 * `whitelist[address]`, `denylist[address]` – access‑control mappings.  
 * `globalPause` – boolean flag.  
@@ -76,9 +83,9 @@ The following terms have the meanings defined below. The definitions use the key
 | Operation | Description |
 |-----------|-------------|
 | `depositUSDC(uint256 amount)` | User sends USDC to the Offchain Treasury; protocol mints apxUSD (REQ‑deposit‑mint‑apxusd). |
-| `mintApXUSD(address to, uint256 amount)` | Mints apxUSD at $1 per unit (REQ‑mint‑price, REQ‑issuance‑price‑one). |
-| `lockApXUSD(uint256 amount)` | Locks apxUSD in the vault, mints apyUSD (REQ‑lock‑apxusd). |
-| `redeemApXUSD(uint256 amount)` | Burns apxUSD and returns USDC at Redemption Value (REQ‑redemption‑value, REQ‑redemption‑value‑uniform, REQ‑mint‑redeem‑at‑redemption‑value). |
+| `mintApxUSD(address to, uint256 amount)` | Arbitrage mint at $1 per unit while the modeled market price is above par (REQ‑mint‑price, REQ‑issuance‑price‑one). |
+| `lockApxUSD(uint256 amount)` | Locks apxUSD in the vault and mints apyUSD at the live derived rate (REQ‑lock‑apxusd). |
+| `redeemApxUSD(uint256 amount)` | Burns apxUSD and pays USDC at `redemptionValue`, subject to the modeled below-par and buffer guards (REQ‑redemption‑value, REQ‑redemption‑value‑uniform, REQ‑mint‑redeem‑at‑redemption‑value). |
 | `requestUnlock(uint256 amount)` | Initiates unlock, mints `apxUSD_unlock` NFT (REQ‑unlock‑receipt‑nft‑mint). |
 | `claimUnlock(uint256 requestId)` | After cooldown, redeems `apxUSD_unlock` for apxUSD (REQ‑unlock‑token‑redeemable‑1to1‑after‑20d). |
 | `withdraw(uint256 assets, address receiver)` | Synchronous withdrawal of apxUSD (REQ‑synchronous‑withdraw‑return‑token). |
@@ -88,6 +95,11 @@ The following terms have the meanings defined below. The definitions use the key
 | `setYieldRate(uint256 amount)` | Monthly yield rate setting (REQ‑monthly‑yield‑rate‑set). |
 | `creditYield(uint256 amount)` | YieldDistributor credits vault (REQ‑yield‑distributor‑credit). |
 | `voteBufferDeployment()` | Governance token holders vote on buffer deployment (REQ‑governance‑deploy‑buffer). |
+
+The Lean dispatcher also includes `redeem(shares, receiver)`, `flexibleRequestUnlock`,
+`flexibleClaimUnlock`, `executeRFQRedemption`, `updateRedemptionValue`, `handleStressEvent`,
+`catastrophicBackstop`, `setVestPeriod`, `setApxUSDMarketPrice`, `withdrawReserve`, `poolRedeem`,
+and `tick`. Their exact guards and post-states are stated by the effect theorems in `Apyx.lean`.
 
 ---
 
@@ -136,6 +148,13 @@ The following terms have the meanings defined below. The definitions use the key
 | **REQ‑flexible‑redemption‑claim‑minimum** | **A flexible redemption claim MUST be executable only after a minimum of 3 days have elapsed since the request.** |
 | **REQ‑flexible‑redemption‑early‑fee** | **The early redemption fee applied to a flexible redemption claim MUST start at 3.5 % and decline linearly over time to a minimum of 0.1 %.** |
 | **REQ‑single‑pending‑redemption‑per‑user** | **Each user MUST have at most one pending redemption request; if the user adds assets to an existing request, the cooldown timer MUST reset to the time of the update.** *(Scope, per DR‑23: this governs the unlock **request registry**, where a repeat request tops up the existing position. Vault `withdraw`/`redeem` mint a separate receipt per call and are outside it.)* |
+
+**Lean status for this requirement.** `req_single_pending_redemption_per_user` proves the existing
+request is topped up and its cooldown is reset. It does not prove global uniqueness of every live
+position. The vault `withdraw`/`redeem` path intentionally creates a fresh receipt per call, while
+`RegistryBounded` and `OwnerPointerSound` provide the stronger registry invariants used by the
+current composite proofs. The manifest therefore records the requirement as partial rather than
+silently treating the reset theorem as a uniqueness theorem.
 
 > **Deployment-fidelity note (2026-08-06).** The two fee requirements above are formalized as written from the documentation corpus. The verified deployment read recorded in `DeploymentFees.lean` reports a live receipt curve of 3.4% down to 0%, with an admin-settable ceiling of 5%; it also has a separate 10 bps vault-side `unlockingFee` that is absent from this corpus. The Lean theorems for the corpus requirements must therefore not be read as proofs of the deployed fee behavior. `DeploymentFees.lean` formalizes the divergence and its consequences.
 | **REQ‑redemption‑async‑process** | **Redemption requests MUST follow the three‑step asynchronous process of request, cooldown, and claim.** |
@@ -325,7 +344,10 @@ The following terms have the meanings defined below. The definitions use the key
 
 3. **Pause Mechanism** – The global pause must be callable only by a designated admin role; when active, it must reliably revert all state‑changing entry points to prevent partial state updates.  
 
-4. **Buffer Integrity** – The over‑collateralization buffer must be stored in a read‑only view that can only be increased by protocol‑defined yield or collateral appreciation; any accidental reduction would constitute a critical vulnerability.  
+4. **Buffer Integrity** – The derived over‑collateralization buffer should only be reduced by explicitly
+   modeled stress/wind-down paths; routine redemption must not consume it. The current Lean model
+   proves only the scoped routine-redemption theorem (`req_buffer_non_decreasing`), not a deployed
+   read-only storage guarantee.
 
 5. **Yield Distribution** – Since yield is streamed continuously, the LinearVestV0 contract must enforce the configured vesting period and prevent premature withdrawals that could lead to under‑payment of vault participants.  
 
@@ -428,6 +450,31 @@ provides:
   §1–10 covers the vault fee, and the model has no counterpart for it.
 
 ---
+
+## 10b. Lean correspondence and current assurance boundary
+
+The current Lean project is dependency-free and builds with Lean 4.31.0. The public target is
+`lake build D2fsSpecs`, with 0 `sorry` and 0 vacuous theorems. The model is an abstract transition
+system: `State` stores address-indexed token balances and `step : State → Op → Address → Option State`
+implements accepted/reverted operations. A reverted operation leaves the state unchanged in
+`execTrace`.
+
+The active model-local proof layers are:
+
+| Layer | Lean declarations | What is actually established |
+|---|---|---|
+| Token supplies | `apxUSDLedgerConsistent_trace`, `apyUSDLedgerConsistent_trace` | Finite-support balance/supply identities are preserved across modeled traces. They are predicates on the abstract `State`, not bytecode proofs. |
+| Registry/receipt integrity | `RegistryWellIndexed`, `RegistryBounded`, `OwnerPointerSound`, `unlockTokenLedgerConsistent_trace` | Allocated positions, owner pointers, and receipt owner/face amounts remain consistent under modeled operations. |
+| Composite design invariant | `ProtocolInv`, `ProtocolInvWithReceiptLedger`, `protocolInv_reachableOps` | Registry, solvency, well-formedness, and token-ledger properties compose under explicit operation restrictions, including the at-most-par price regime. |
+| Pending-aware solvency | `SolventOutstanding`, `protocolInvOutstanding_reachable` | Pending standard/flexible unlock face amounts are included; unlock claims can be chained. Vault exits, stress loss, catastrophic backstop, and bare reserve withdrawal remain explicit exclusions. |
+| Holder value and custody | `holderValue`, `holderValue_rateAware_trace_rateAdjusted`, `apxUSDFlow_trace` | Pending positions and signed rate revaluation are accounted for. The result is conditional accounting, not protocol-wide conservation or deployed-contract conformance. |
+| External USDC | `UsdcLedgerConsistent`, `usdcLedgerConsistent_trace` | A finite holder set and total USDC supply are supplied as external parameters; the current `State` has no USDC total-supply field. Catastrophic backstop rounding and fee-wallet accounting remain outside this boundary. |
+
+The requirement-level join is [`property-manifest.csv`](property-manifest.csv): 108 rows consisting of
+83 extracted `REQ-*` records and 25 deployment-derived `DR-*` records. Its `result` and `impl` columns
+are authoritative for partial coverage and implementation hand-off. Lean proof of an abstract theorem
+does not establish that the deployed Solidity refines `State`/`step`; that connection still requires
+source review and implementation-level tools.
 
 ## 11. References  
 
