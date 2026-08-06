@@ -32,30 +32,17 @@ This module makes the missing identity explicit:
   expressiveness — the abstract `State` admits states no ERC-20 ledger can
   reach — not a claim that the deployed protocol can mint unbacked balances.
 
-## Why there is no `apxUSDLedgerConsistent_step` here
+## From per-writer lemmas to current-step preservation
 
-A step-preservation theorem for `ApxUSDLedgerConsistent` is the natural next
-proof obligation, and it is deliberately **absent** rather than faked. To prove
-that a successful `step` preserves the identity one needs, for every
-balance-writing operation (`mintApxUSD`, `burnApxUSD`, `transferApxUSD`,
-`requestUnlockStep`, the claim re-mints, `executeRFQRedemption`,
-`poolRedeem`, …), a support/update lemma of the shape "the post-state's support
-is contained in the pre-state's support plus the touched addresses, and the sum
-over any covering holder set changes by exactly the supply delta". Such lemmas
-exist for only a subset of writers so far, and they cannot be conjured from the
-aggregate facts (`WellFormed`/`Solvent`) — the witness below is precisely the
-counterexample. The two honest ways to obtain preservation are:
+The model keeps `apxUSDBal` as a bare function, so preservation is proved by
+support/update lemmas rather than assumed from `WellFormed` or `Solvent`. The
+required shape is: the post-state support is contained in the pre-state support
+plus touched addresses, and the sum over a covering holder list changes by
+exactly the supply delta. The witness below remains important because the
+aggregate predicates alone do not imply that identity.
 
-1. **change `State`** to carry an explicit holder domain (e.g. an association
-   list / finite map for `apxUSDBal`), so finite support holds by construction
-   and each writer updates the sum in lockstep with the supply; or
-2. **keep the bare function** and prove, per balance-writing operation, the
-   support-inclusion and sum-delta lemmas described above, then compose them
-   into a preservation theorem with the same operation scoping discipline as
-   `solvency_step`.
-
-Either is a substantial, separately-scoped change to protocol-semantics files
-this module must not touch. The **first slice of option 2 now exists** (see
+The per-writer programme is now complete for the current `Op` datatype. The
+**first slice** (see
 "First balance-writer slice" below): `apxUSDLedgerConsistent_mint` and
 `apxUSDLedgerConsistent_burn` prove exactly the support-inclusion / sum-delta
 facts for the two *primitive* single-address writers, applied in isolation;
@@ -68,11 +55,11 @@ covers `depositUSDC`, `mintApxUSD`, `lockApxUSD`, `requestUnlock` and
 `flexibleRequestUnlock`, including the plumbing that discharges each burning
 branch's underflow guard into the burn-side bound. Separate scoped theorems
 also cover `claimUnlock`, `flexibleClaimUnlock`, `redeemApxUSD`,
-`executeRFQRedemption`, and `poolRedeem`. Everything else —
-the frame proofs for the non-writing branches — remains open, so
-`ApxUSDLedgerConsistent` is still an *initialization-plus-fragment*
-invariant with a named gap, matching how `Invariant.lean` keeps
-`WellFormed s'` an explicit hypothesis instead of pretending to derive it.
+`executeRFQRedemption`, and `poolRedeem`. `apxUSDLedgerConsistent_frame_step`
+covers the non-writing branches. `LedgerCoveredOp` then makes the operation
+checklist explicit, and `apxUSDLedgerConsistent_step` composes every current
+`Op` constructor into one successful-step preservation theorem. This is still a
+state-transition theorem; a trace executor is not defined in this module.
 
 Status (proof-map §11): `apxUSDLedgerConsistent_default` is model-local;
 `apxUSDLedgerConsistent_mint` / `apxUSDLedgerConsistent_burn` /
@@ -82,8 +69,9 @@ trace facts); `apxUSDLedgerConsistent_basic_step` and
 `apxUSDLedgerConsistent_flexibleClaimUnlock_step` /
 `apxUSDLedgerConsistent_redeemApxUSD_step` /
 `apxUSDLedgerConsistent_executeRFQRedemption_step` /
-`apxUSDLedgerConsistent_poolRedeem_step` are model-local *scoped* step facts
-(not a trace invariant and not full `Op` coverage); `ledgerGapWitness_*` and
+`apxUSDLedgerConsistent_poolRedeem_step` are model-local *scoped* step facts;
+`apxUSDLedgerConsistent_frame_step` and `apxUSDLedgerConsistent_step` complete
+the current `Op` coverage; `ledgerGapWitness_*` and
 `wellFormed_solvent_not_imply_ledgerConsistent` are witness/regression facts,
 not universal theorems.
 -/
@@ -199,8 +187,7 @@ the two primitive writers, applied in isolation:
   hypothesis must be discharged by the caller.
 
 Still uncovered, which is why no *universal* `step`-preservation theorem is
-stated: only the balance-non-writing projection frames and final composition
-remain. The primitive `transferApxUSD`
+stated: only the final all-branch composition remains. The primitive `transferApxUSD`
 is now covered by
 `apxUSDLedgerConsistent_transfer`, with an explicit distinct-address
 hypothesis because the current writer mishandles self-transfer. The five
@@ -531,10 +518,9 @@ nothing is assumed beyond `ApxUSDLedgerConsistent s` and `step … = some s'`.
 
 **Scoped, not universal — read this before citing the theorem.** The theorem
 takes an explicit disjunction naming its five operations rather than claiming
-all of `Op`. The balance-writing branches have separate theorems below; the
-non-writing branches (`withdraw`,
-`redeem`, `tick`, pause/list/admin ops), which need per-branch frame lemmas
-instead. Extending the disjunction branch-by-branch — the `solvency_step`
+all of `Op`. The balance-writing branches have separate theorems below, and
+the non-writing branches are covered by `apxUSDLedgerConsistent_frame_step`.
+Extending the explicit scope to include every branch — the `solvency_step`
 scoping discipline — is the remaining work named in the module docstring.
 
 The `step_*_ledgerProj` inversion lemmas are local re-derivations trimmed to
@@ -921,6 +907,161 @@ theorem apxUSDLedgerConsistent_poolRedeem_step
   rw [hpost]
   exact apxUSDLedgerConsistent_of_projections_eq (by rfl) (by rfl)
     (apxUSDLedgerConsistent_burn s caller amount hle h)
+
+/-! ## Balance-non-writing operation frame
+
+The remaining public operations do not write either projection read by
+`ApxUSDLedgerConsistent`. They are listed in an inductive scope rather than
+described by a large negative predicate, so adding a new `Op` constructor does
+not silently make the frame theorem claim more than it proves. -/
+
+inductive LedgerFrameOp : Op → Prop where
+  | withdraw (assets : Nat) (receiver : Address) : LedgerFrameOp (Op.withdraw assets receiver)
+  | redeem (shares : Nat) (receiver : Address) : LedgerFrameOp (Op.redeem shares receiver)
+  | pause : LedgerFrameOp Op.pause
+  | unpause : LedgerFrameOp Op.unpause
+  | addToWhitelist (addr : Address) : LedgerFrameOp (Op.addToWhitelist addr)
+  | removeFromWhitelist (addr : Address) : LedgerFrameOp (Op.removeFromWhitelist addr)
+  | addToDenylist (addr : Address) : LedgerFrameOp (Op.addToDenylist addr)
+  | removeFromDenylist (addr : Address) : LedgerFrameOp (Op.removeFromDenylist addr)
+  | setYieldRate (bps : Nat) : LedgerFrameOp (Op.setYieldRate bps)
+  | creditYield (amount : Nat) : LedgerFrameOp (Op.creditYield amount)
+  | voteBufferDeployment : LedgerFrameOp Op.voteBufferDeployment
+  | submitRFQRequest (amount : Nat) : LedgerFrameOp (Op.submitRFQRequest amount)
+  | updateRedemptionValue (newValue : Nat) : LedgerFrameOp (Op.updateRedemptionValue newValue)
+  | handleStressEvent (amount : Nat) : LedgerFrameOp (Op.handleStressEvent amount)
+  | catastrophicBackstop : LedgerFrameOp Op.catastrophicBackstop
+  | setVestPeriod (p : Nat) : LedgerFrameOp (Op.setVestPeriod p)
+  | setApxUSDMarketPrice (price : Nat) : LedgerFrameOp (Op.setApxUSDMarketPrice price)
+  | withdrawReserve (amount : Nat) (receiver : Address) :
+      LedgerFrameOp (Op.withdrawReserve amount receiver)
+  | tick (dt : Nat) : LedgerFrameOp (Op.tick dt)
+
+/-- Successful balance-non-writing operations preserve both ledger projections.
+The theorem is intentionally a frame fact, not yet the final all-operation
+preservation theorem. -/
+theorem apxUSDLedgerConsistent_frame_step
+    (s s' : State) (op : Op) (caller : Address) (hop : LedgerFrameOp op)
+    (hstep : step s op caller = some s') :
+    s'.apxUSDBal = s.apxUSDBal ∧ s'.totalSupply_apxUSD = s.totalSupply_apxUSD := by
+  cases hop <;>
+    simp only [step] at hstep
+  all_goals
+    repeat' split at hstep
+    all_goals
+      cases hstep <;>
+        constructor <;>
+          simp [burnApyUSD, createStandardUnlock, emitEvent, updateExchangeRate]
+
+/-! ## All-operation composition
+
+`LedgerCoveredOp` is the explicit checklist for the current `Op` datatype. Its
+balance-writing constructors dispatch to the branch theorems above, while its
+frame constructor delegates to `LedgerFrameOp`. Keeping this as an inductive
+family makes coverage reviewable: a new protocol operation cannot enter the
+all-operation theorem without a new constructor and proof case. -/
+
+inductive LedgerCoveredOp : Op → Prop where
+  | deposit (amount : Nat) : LedgerCoveredOp (Op.depositUSDC amount)
+  | mint (to : Address) (amount : Nat) : LedgerCoveredOp (Op.mintApxUSD to amount)
+  | lock (amount : Nat) : LedgerCoveredOp (Op.lockApxUSD amount)
+  | requestUnlock (amount : Nat) : LedgerCoveredOp (Op.requestUnlock amount)
+  | claimUnlock (id : Nat) : LedgerCoveredOp (Op.claimUnlock id)
+  | redeemApxUSD (amount : Nat) : LedgerCoveredOp (Op.redeemApxUSD amount)
+  | flexibleRequestUnlock (amount : Nat) : LedgerCoveredOp (Op.flexibleRequestUnlock amount)
+  | flexibleClaimUnlock (id : Nat) : LedgerCoveredOp (Op.flexibleClaimUnlock id)
+  | executeRFQRedemption (user : Address) (amount : Nat) :
+      LedgerCoveredOp (Op.executeRFQRedemption user amount)
+  | poolRedeem (amount : Nat) (receiver : Address) (minOut : Nat) :
+      LedgerCoveredOp (Op.poolRedeem amount receiver minOut)
+  | frame {op : Op} (h : LedgerFrameOp op) : LedgerCoveredOp op
+
+/-- **All current public operations preserve the explicit ledger identity**,
+under the explicit coverage witness `LedgerCoveredOp op`. This is the
+composition theorem: every constructor of the current `Op` datatype is either
+a balance-writing branch with its own proof or a balance-non-writing frame.
+The witness is retained in the theorem signature so adding a new `Op` forces
+the coverage list to be updated instead of silently changing the claim. -/
+theorem apxUSDLedgerConsistent_covered_step
+    (s s' : State) (op : Op) (caller : Address)
+    (hop : LedgerCoveredOp op) (h : ApxUSDLedgerConsistent s)
+    (hstep : step s op caller = some s') :
+    ApxUSDLedgerConsistent s' := by
+  cases hop with
+  | deposit amount =>
+      exact apxUSDLedgerConsistent_basic_step s s' (Op.depositUSDC amount) caller h hstep
+        (Or.inl ⟨amount, rfl⟩)
+  | mint to amount =>
+      exact apxUSDLedgerConsistent_basic_step s s' (Op.mintApxUSD to amount) caller h hstep
+        (Or.inr (Or.inl ⟨to, amount, rfl⟩))
+  | lock amount =>
+      exact apxUSDLedgerConsistent_basic_step s s' (Op.lockApxUSD amount) caller h hstep
+        (Or.inr (Or.inr (Or.inl ⟨amount, rfl⟩)))
+  | requestUnlock amount =>
+      exact apxUSDLedgerConsistent_basic_step s s' (Op.requestUnlock amount) caller h hstep
+        (Or.inr (Or.inr (Or.inr (Or.inl ⟨amount, rfl⟩))))
+  | claimUnlock id =>
+      exact apxUSDLedgerConsistent_claimUnlock_step s id caller s' h hstep
+  | redeemApxUSD amount =>
+      exact apxUSDLedgerConsistent_redeemApxUSD_step s amount caller s' h hstep
+  | flexibleRequestUnlock amount =>
+      exact apxUSDLedgerConsistent_basic_step s s' (Op.flexibleRequestUnlock amount) caller h hstep
+        (Or.inr (Or.inr (Or.inr (Or.inr ⟨amount, rfl⟩))))
+  | flexibleClaimUnlock id =>
+      exact apxUSDLedgerConsistent_flexibleClaimUnlock_step s id caller s' h hstep
+  | executeRFQRedemption user amount =>
+      exact apxUSDLedgerConsistent_executeRFQRedemption_step s user amount caller s' h hstep
+  | poolRedeem amount receiver minOut =>
+      exact apxUSDLedgerConsistent_poolRedeem_step s amount receiver minOut caller s' h hstep
+  | frame hframe =>
+      obtain ⟨hbal, hsup⟩ := apxUSDLedgerConsistent_frame_step s s' op caller hframe hstep
+      exact apxUSDLedgerConsistent_of_projections_eq hbal hsup h
+
+/-- Every constructor of the current `Op` datatype is accounted for by
+`LedgerCoveredOp`: either a dedicated writer theorem or the frame family. -/
+theorem ledgerCoveredOp_all (op : Op) : LedgerCoveredOp op := by
+  cases op with
+  | depositUSDC amount => exact .deposit amount
+  | mintApxUSD to amount => exact .mint to amount
+  | lockApxUSD amount => exact .lock amount
+  | requestUnlock amount => exact .requestUnlock amount
+  | claimUnlock id => exact .claimUnlock id
+  | redeemApxUSD amount => exact .redeemApxUSD amount
+  | withdraw assets receiver => exact .frame (.withdraw assets receiver)
+  | redeem shares receiver => exact .frame (.redeem shares receiver)
+  | flexibleRequestUnlock amount => exact .flexibleRequestUnlock amount
+  | flexibleClaimUnlock id => exact .flexibleClaimUnlock id
+  | pause => exact .frame .pause
+  | unpause => exact .frame .unpause
+  | addToWhitelist addr => exact .frame (.addToWhitelist addr)
+  | removeFromWhitelist addr => exact .frame (.removeFromWhitelist addr)
+  | addToDenylist addr => exact .frame (.addToDenylist addr)
+  | removeFromDenylist addr => exact .frame (.removeFromDenylist addr)
+  | setYieldRate bps => exact .frame (.setYieldRate bps)
+  | creditYield amount => exact .frame (.creditYield amount)
+  | voteBufferDeployment => exact .frame .voteBufferDeployment
+  | submitRFQRequest amount => exact .frame (.submitRFQRequest amount)
+  | executeRFQRedemption user amount => exact .executeRFQRedemption user amount
+  | updateRedemptionValue newValue => exact .frame (.updateRedemptionValue newValue)
+  | handleStressEvent amount => exact .frame (.handleStressEvent amount)
+  | catastrophicBackstop => exact .frame .catastrophicBackstop
+  | setVestPeriod p => exact .frame (.setVestPeriod p)
+  | setApxUSDMarketPrice price => exact .frame (.setApxUSDMarketPrice price)
+  | withdrawReserve amount receiver => exact .frame (.withdrawReserve amount receiver)
+  | poolRedeem amount receiver minOut => exact .poolRedeem amount receiver minOut
+  | tick dt => exact .frame (.tick dt)
+
+/-- **Universal successful-step ledger preservation for the current model.**
+The operation coverage is discharged by `ledgerCoveredOp_all`; the explicit
+coverage family remains visible in the proof architecture so future additions
+to `Op` must add a corresponding proof case. -/
+theorem apxUSDLedgerConsistent_step
+    (s s' : State) (op : Op) (caller : Address)
+    (h : ApxUSDLedgerConsistent s)
+    (hstep : step s op caller = some s') :
+    ApxUSDLedgerConsistent s' :=
+  apxUSDLedgerConsistent_covered_step s s' op caller
+    (ledgerCoveredOp_all op) h hstep
 
 /-! ## Model-gap / regression witness
 
