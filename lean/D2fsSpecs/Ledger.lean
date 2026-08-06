@@ -67,8 +67,8 @@ function for the five simplest `step` branches:
 covers `depositUSDC`, `mintApxUSD`, `lockApxUSD`, `requestUnlock` and
 `flexibleRequestUnlock`, including the plumbing that discharges each burning
 branch's underflow guard into the burn-side bound. Separate scoped theorems
-also cover `claimUnlock`, `flexibleClaimUnlock`, and `redeemApxUSD`. Everything
-else — `executeRFQRedemption`, `poolRedeem`, and
+also cover `claimUnlock`, `flexibleClaimUnlock`, `redeemApxUSD`, and
+`executeRFQRedemption`. Everything else — `poolRedeem` and
 the frame proofs for the non-writing branches — remains open, so
 `ApxUSDLedgerConsistent` is still an *initialization-plus-fragment*
 invariant with a named gap, matching how `Invariant.lean` keeps
@@ -80,7 +80,8 @@ Status (proof-map §11): `apxUSDLedgerConsistent_default` is model-local;
 trace facts); `apxUSDLedgerConsistent_basic_step` and
 `apxUSDLedgerConsistent_claimUnlock_step` /
 `apxUSDLedgerConsistent_flexibleClaimUnlock_step` /
-`apxUSDLedgerConsistent_redeemApxUSD_step` are model-local *scoped* step facts
+`apxUSDLedgerConsistent_redeemApxUSD_step` /
+`apxUSDLedgerConsistent_executeRFQRedemption_step` are model-local *scoped* step facts
 (not a trace invariant and not full `Op` coverage); `ledgerGapWitness_*` and
 `wellFormed_solvent_not_imply_ledgerConsistent` are witness/regression facts,
 not universal theorems.
@@ -197,7 +198,7 @@ the two primitive writers, applied in isolation:
   hypothesis must be discharged by the caller.
 
 Still uncovered, which is why no *universal* `step`-preservation theorem is
-stated: `executeRFQRedemption` and `poolRedeem`. The primitive `transferApxUSD`
+stated: `poolRedeem`. The primitive `transferApxUSD`
 is now covered by
 `apxUSDLedgerConsistent_transfer`, with an explicit distinct-address
 hypothesis because the current writer mishandles self-transfer. The five
@@ -528,8 +529,8 @@ nothing is assumed beyond `ApxUSDLedgerConsistent s` and `step … = some s'`.
 
 **Scoped, not universal — read this before citing the theorem.** The theorem
 takes an explicit disjunction naming its five operations rather than claiming
-all of `Op`. Both registry remint branches and `redeemApxUSD` have separate
-theorems below; `executeRFQRedemption`, `poolRedeem` (burns whose guards sit
+all of `Op`. Both registry remint branches, `redeemApxUSD`, and
+`executeRFQRedemption` have separate theorems below; `poolRedeem` (whose guards sit
 behind price/reserve arithmetic), and the non-writing branches (`withdraw`,
 `redeem`, `tick`, pause/list/admin ops), which need per-branch frame lemmas
 instead. Extending the disjunction branch-by-branch — the `solvency_step`
@@ -829,6 +830,51 @@ theorem apxUSDLedgerConsistent_redeemApxUSD_step
   rw [hpost]
   exact apxUSDLedgerConsistent_of_projections_eq (by simp [emitEvent]) (by simp [emitEvent])
     (apxUSDLedgerConsistent_burn s caller amount hle h)
+
+/-! ## Scoped RFQ-redemption burn slice -/
+
+private theorem step_executeRFQRedemption_ledgerProj
+    (s : State) (user : Address) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.executeRFQRedemption user amount) caller = some s') :
+    amount ≤ s.apxUSDBal user ∧
+    s' = { burnApxUSD s user amount with
+        rfqRequests := fun a => if a = user then
+          (burnApxUSD s user amount).rfqRequests a - amount
+          else (burnApxUSD s user amount).rfqRequests a
+        usdcReserve := (burnApxUSD s user amount).usdcReserve -
+          (amount * s.redemptionValue) / ray
+        usdcBal := fun a => if a = user then
+          (burnApxUSD s user amount).usdcBal a +
+            (amount * s.redemptionValue) / ray
+          else (burnApxUSD s user amount).usdcBal a } := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · split at h
+          · exact absurd h (by simp)
+          · split at h
+            · exact absurd h (by simp)
+            · exact ⟨by omega, (Option.some.inj h).symm⟩
+
+/-- A successful RFQ redemption preserves the finite ledger identity. The RFQ
+request, reserve and USDC settlement writes do not affect the two apxUSD ledger
+projections; the user-side burn is guarded by the request and balance checks. -/
+theorem apxUSDLedgerConsistent_executeRFQRedemption_step
+    (s : State) (user : Address) (amount : Nat) (caller : Address) (s' : State)
+    (h : ApxUSDLedgerConsistent s)
+    (hstep : step s (Op.executeRFQRedemption user amount) caller = some s') :
+    ApxUSDLedgerConsistent s' := by
+  obtain ⟨hle, hpost⟩ :=
+    step_executeRFQRedemption_ledgerProj s user amount caller s' hstep
+  rw [hpost]
+  exact apxUSDLedgerConsistent_of_projections_eq (by rfl) (by rfl)
+    (apxUSDLedgerConsistent_burn s user amount hle h)
 
 /-! ## Model-gap / regression witness
 
