@@ -188,6 +188,34 @@ holder products can be summed exactly and divided by `ray` once. This is an
 explicit rational-style accounting convention, not a claim that the deployed
 contract exposes this aggregate numerator.
 
+The pending-apxUSD boundary is a separate, registry-indexed layer rather than
+another conjunct of `ProtocolInv`. `standardUnlockTotal` and
+`flexibleUnlockTotal` sum the two finite registries by id;
+`pendingApxUSD` combines them, and `outstandingApxUSD` adds the circulating
+apxUSD supply. Fresh-allocation and in-place update/retirement lemmas make the
+arithmetic visible:
+`standardUnlockTotal_createStandardUnlock`,
+`standardUnlockTotal_updateStandardUnlock`,
+`standardUnlockTotal_retireStandardUnlock`,
+`flexibleUnlockTotal_createFlexibleUnlock`,
+`flexibleUnlockTotal_createStandardUnlock`,
+`standardUnlockTotal_createFlexibleUnlock`,
+`flexibleUnlockTotal_retireFlexibleUnlock`, and
+`flexibleUnlockTotal_retireStandardUnlock`. The request-side wrappers are
+`standardUnlockTotal_requestUnlockStep`,
+`flexibleUnlockTotal_requestUnlockStep`,
+`standardUnlockTotal_flexibleRequestUnlockStep`,
+`outstandingApxUSD_requestUnlockStep`,
+`outstandingApxUSD_requestUnlock`,
+`outstandingApxUSD_flexibleRequestUnlock`, and
+`outstandingApxUSD_flexibleRequestUnlock_step`. Standard settlement is closed
+by `outstandingApxUSD_claimUnlock`; flexible settlement is deliberately stated
+as `outstandingApxUSD_flexibleClaimUnlock`, where the outstanding amount falls
+by exactly the modeled early-exit fee. These are boundary theorems, not a
+protocol-wide asset-conservation theorem: the current state has neither a fee
+wallet balance nor explicit unlock-token custody, so adding them to
+`ProtocolInv` would be an unsupported model claim.
+
 ### 5.2 Registry consistency
 
 For pending requests, positions, or claims, specify:

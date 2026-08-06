@@ -731,6 +731,440 @@ private theorem sum_range_replace (n id amount : Nat) (f g : Nat → Nat)
         rw [hother n (by omega) (by omega)]
         omega
 
+/-! ## Aggregate pending-apxUSD boundary
+
+`stdPositions` and `flexPositions` are holder-facing views. The following
+totals deliberately sum the registries by position id instead: they do not
+need a finite address list and therefore do not pretend that the `usdcBal`
+function or the protocol's custody fields already form a complete asset
+ledger. Adding the current apxUSD supply gives the amount of apxUSD that is
+either circulating or owed by a pending unlock claim.
+-/
+
+/-- Total face amount in the finite standard-unlock registry. -/
+def standardUnlockTotal (s : State) : Nat :=
+  ((List.range s.nextUnlockId).map (fun i =>
+    match s.unlockRequests i with
+    | some (_, amount, _) => amount
+    | none => 0)).sum
+
+/-- Total face amount in the finite flexible-unlock registry. -/
+def flexibleUnlockTotal (s : State) : Nat :=
+  ((List.range s.nextUnlockId).map (fun i =>
+    match s.flexibleUnlockRequests i with
+    | some (_, amount, _, _) => amount
+    | none => 0)).sum
+
+/-- The two pending unlock registries, counted in apxUSD face units. -/
+def pendingApxUSD (s : State) : Nat :=
+  standardUnlockTotal s + flexibleUnlockTotal s
+
+/-- Circulating apxUSD plus the face amount promised by pending unlocks. -/
+def outstandingApxUSD (s : State) : Nat :=
+  s.totalSupply_apxUSD + pendingApxUSD s
+
+theorem standardUnlockTotal_createStandardUnlock (s : State) (owner : Address)
+    (amount : Nat) :
+    standardUnlockTotal (createStandardUnlock s owner amount) =
+      standardUnlockTotal s + amount := by
+  unfold standardUnlockTotal
+  rw [show (createStandardUnlock s owner amount).nextUnlockId = s.nextUnlockId + 1 by rfl,
+    List.range_succ, List.map_append, List.sum_append]
+  have hsame : ((List.range s.nextUnlockId).map (fun i =>
+      match (createStandardUnlock s owner amount).unlockRequests i with
+      | some (_, amount, _) => amount
+      | none => 0)) =
+      ((List.range s.nextUnlockId).map (fun i =>
+      match s.unlockRequests i with
+      | some (_, amount, _) => amount
+      | none => 0)) := by
+    apply List.map_congr_left
+    intro i hi
+    have hne : i ≠ s.nextUnlockId := Nat.ne_of_lt (List.mem_range.mp hi)
+    simp [createStandardUnlock, hne]
+  rw [hsame]
+  simp [createStandardUnlock]
+
+theorem flexibleUnlockTotal_createFlexibleUnlock (s : State) (owner : Address)
+    (amount : Nat) :
+    flexibleUnlockTotal (createFlexibleUnlock s owner amount) =
+      flexibleUnlockTotal s + amount := by
+  unfold flexibleUnlockTotal
+  rw [show (createFlexibleUnlock s owner amount).nextUnlockId = s.nextUnlockId + 1 by rfl,
+    List.range_succ, List.map_append, List.sum_append]
+  have hsame : ((List.range s.nextUnlockId).map (fun i =>
+      match (createFlexibleUnlock s owner amount).flexibleUnlockRequests i with
+      | some (_, amount, _, _) => amount
+      | none => 0)) =
+      ((List.range s.nextUnlockId).map (fun i =>
+      match s.flexibleUnlockRequests i with
+      | some (_, amount, _, _) => amount
+      | none => 0)) := by
+    apply List.map_congr_left
+    intro i hi
+    have hne : i ≠ s.nextUnlockId := Nat.ne_of_lt (List.mem_range.mp hi)
+    simp [createFlexibleUnlock, hne]
+  rw [hsame]
+  simp [createFlexibleUnlock]
+
+theorem standardUnlockTotal_createFlexibleUnlock (s : State) (owner : Address)
+    (amount : Nat) (h_unalloc : s.unlockRequests s.nextUnlockId = none) :
+    standardUnlockTotal (createFlexibleUnlock s owner amount) =
+      standardUnlockTotal s := by
+  unfold standardUnlockTotal
+  rw [show (createFlexibleUnlock s owner amount).nextUnlockId = s.nextUnlockId + 1 by rfl,
+    List.range_succ, List.map_append, List.sum_append]
+  have hsame : ((List.range s.nextUnlockId).map (fun i =>
+      match (createFlexibleUnlock s owner amount).unlockRequests i with
+      | some (_, amount, _) => amount
+      | none => 0)) =
+      ((List.range s.nextUnlockId).map (fun i =>
+      match s.unlockRequests i with
+      | some (_, amount, _) => amount
+      | none => 0)) := by
+    apply List.map_congr_left
+    intro i hi
+    simp [createFlexibleUnlock]
+  rw [hsame]
+  simp [createFlexibleUnlock, h_unalloc]
+
+theorem standardUnlockTotal_updateStandardUnlock (s : State) (id : Nat)
+    (owner : Address) (oldAmount oldEnd addAmount : Nat)
+    (hid : id < s.nextUnlockId)
+    (hreq : s.unlockRequests id = some (owner, oldAmount, oldEnd)) :
+    standardUnlockTotal (updateStandardUnlock s id owner addAmount) =
+      standardUnlockTotal s + addAmount := by
+  unfold standardUnlockTotal
+  have hnext : (updateStandardUnlock s id owner addAmount).nextUnlockId = s.nextUnlockId := by
+    simp [updateStandardUnlock, hreq]
+  rw [hnext]
+  have htarget : (fun i =>
+      match (updateStandardUnlock s id owner addAmount).unlockRequests i with
+      | some (_, amount, _) => amount
+      | none => 0) id =
+      (fun i => match s.unlockRequests i with
+      | some (_, amount, _) => amount
+      | none => 0) id + addAmount := by
+    simp [updateStandardUnlock, hreq]
+  apply sum_range_replace s.nextUnlockId id addAmount _ _ hid htarget
+  intro j hj hne
+  simp [updateStandardUnlock, hreq, hne]
+
+theorem flexibleUnlockTotal_retireFlexibleUnlock (s : State) (id : Nat)
+    (owner : Address) (amount requestTime cooldownEnd : Nat)
+    (hid : id < s.nextUnlockId)
+    (hreq : s.flexibleUnlockRequests id =
+      some (owner, amount, requestTime, cooldownEnd)) :
+    flexibleUnlockTotal (retireFlexibleUnlock s id) + amount =
+      flexibleUnlockTotal s := by
+  unfold flexibleUnlockTotal
+  have hnext : (retireFlexibleUnlock s id).nextUnlockId = s.nextUnlockId := by
+    simp [retireFlexibleUnlock, burnUnlockNFT]
+  rw [hnext]
+  have htarget : (fun i => match s.flexibleUnlockRequests i with
+      | some (_, amount, _, _) => amount
+      | none => 0) id =
+      (fun i => match (retireFlexibleUnlock s id).flexibleUnlockRequests i with
+      | some (_, amount, _, _) => amount
+      | none => 0) id + amount := by
+    simp [retireFlexibleUnlock, burnUnlockNFT, hreq]
+  have hother : ∀ j, j < s.nextUnlockId → j ≠ id →
+      (fun i => match s.flexibleUnlockRequests i with
+      | some (_, amount, _, _) => amount
+      | none => 0) j =
+      (fun i => match (retireFlexibleUnlock s id).flexibleUnlockRequests i with
+      | some (_, amount, _, _) => amount
+      | none => 0) j := by
+    intro j hj hne
+    simp [retireFlexibleUnlock, burnUnlockNFT, hne]
+  exact (sum_range_replace s.nextUnlockId id amount _ _ hid htarget hother).symm
+
+theorem standardUnlockTotal_retireStandardUnlock (s : State) (id : Nat)
+    (owner : Address) (amount cooldownEnd : Nat)
+    (hid : id < s.nextUnlockId)
+    (hreq : s.unlockRequests id = some (owner, amount, cooldownEnd)) :
+    standardUnlockTotal (retireStandardUnlock s id owner) + amount =
+      standardUnlockTotal s := by
+  unfold standardUnlockTotal
+  have hnext : (retireStandardUnlock s id owner).nextUnlockId = s.nextUnlockId := by
+    simp [retireStandardUnlock, burnUnlockNFT]
+  rw [hnext]
+  have htarget : (fun i => match s.unlockRequests i with
+      | some (_, amount, _) => amount
+      | none => 0) id =
+      (fun i => match (retireStandardUnlock s id owner).unlockRequests i with
+      | some (_, amount, _) => amount
+      | none => 0) id + amount := by
+    simp [retireStandardUnlock, burnUnlockNFT, hreq]
+  have hother : ∀ j, j < s.nextUnlockId → j ≠ id →
+      (fun i => match s.unlockRequests i with
+      | some (_, amount, _) => amount
+      | none => 0) j =
+      (fun i => match (retireStandardUnlock s id owner).unlockRequests i with
+      | some (_, amount, _) => amount
+      | none => 0) j := by
+    intro j hj hne
+    simp [retireStandardUnlock, burnUnlockNFT, hne]
+  exact (sum_range_replace s.nextUnlockId id amount _ _ hid htarget hother).symm
+
+theorem flexibleUnlockTotal_createStandardUnlock (s : State) (owner : Address)
+    (amount : Nat) (h_unalloc : s.flexibleUnlockRequests s.nextUnlockId = none) :
+    flexibleUnlockTotal (createStandardUnlock s owner amount) =
+      flexibleUnlockTotal s := by
+  unfold flexibleUnlockTotal
+  rw [show (createStandardUnlock s owner amount).nextUnlockId = s.nextUnlockId + 1 by rfl,
+    List.range_succ, List.map_append, List.sum_append]
+  have hsame : ((List.range s.nextUnlockId).map (fun i =>
+      match (createStandardUnlock s owner amount).flexibleUnlockRequests i with
+      | some (_, amount, _, _) => amount
+      | none => 0)) =
+      ((List.range s.nextUnlockId).map (fun i =>
+      match s.flexibleUnlockRequests i with
+      | some (_, amount, _, _) => amount
+      | none => 0)) := by
+    apply List.map_congr_left
+    intro i hi
+    simp [createStandardUnlock]
+  rw [hsame]
+  simp [createStandardUnlock, h_unalloc]
+
+/-! ### Request-level obligation conservation
+
+The pointer and registry assumptions are explicit here. Without boundedness, a
+stale pointer could update a record at or above `nextUnlockId`, which the finite
+aggregate would not see; proving that case would silently overstate the model.
+-/
+
+theorem standardUnlockTotal_requestUnlockStep (s : State) (caller amount : Nat)
+    (hregistry : RegistryWellIndexed s) :
+    standardUnlockTotal (requestUnlockStep s caller amount) =
+      standardUnlockTotal s + amount := by
+  have hb : RegistryBounded (burnApxUSD s caller amount) :=
+    (registryWellIndexed_burnApxUSD s caller amount hregistry).1
+  have hburn : standardUnlockTotal (burnApxUSD s caller amount) =
+      standardUnlockTotal s := by rfl
+  unfold requestUnlockStep
+  split
+  · rename_i id hptr
+    split
+    · rename_i owner oldAmount oldEnd hentry
+      by_cases howner : owner = caller
+      · rw [if_pos howner]
+        subst owner
+        have hid : id < (burnApxUSD s caller amount).nextUnlockId := by
+          by_cases hlt : id < (burnApxUSD s caller amount).nextUnlockId
+          · exact hlt
+          · have hge : (burnApxUSD s caller amount).nextUnlockId ≤ id := Nat.le_of_not_gt hlt
+            rw [hb.1 id hge] at hentry
+            cases hentry
+        have hupdate := standardUnlockTotal_updateStandardUnlock
+          (burnApxUSD s caller amount) id caller oldAmount oldEnd amount hid hentry
+        rw [hburn] at hupdate
+        exact hupdate
+      · rw [if_neg howner]
+        have hcreate := standardUnlockTotal_createStandardUnlock
+          (burnApxUSD s caller amount) caller amount
+        rw [hburn] at hcreate
+        exact hcreate
+    · have hcreate := standardUnlockTotal_createStandardUnlock
+        (burnApxUSD s caller amount) caller amount
+      rw [hburn] at hcreate
+      exact hcreate
+  · have hcreate := standardUnlockTotal_createStandardUnlock
+      (burnApxUSD s caller amount) caller amount
+    rw [hburn] at hcreate
+    exact hcreate
+
+theorem flexibleUnlockTotal_requestUnlockStep (s : State) (caller amount : Nat)
+    (hregistry : RegistryWellIndexed s) :
+    flexibleUnlockTotal (requestUnlockStep s caller amount) =
+      flexibleUnlockTotal s := by
+  have hb : RegistryBounded (burnApxUSD s caller amount) :=
+    (registryWellIndexed_burnApxUSD s caller amount hregistry).1
+  unfold requestUnlockStep
+  split
+  · rename_i id hptr
+    split
+    · rename_i owner oldAmount oldEnd hentry
+      by_cases howner : owner = caller
+      · rw [if_pos howner]
+        have hburnflex : flexibleUnlockTotal (burnApxUSD s caller amount) =
+            flexibleUnlockTotal s := by rfl
+        unfold flexibleUnlockTotal
+        have hnext : (updateStandardUnlock (burnApxUSD s caller amount)
+            id caller amount).nextUnlockId =
+            (burnApxUSD s caller amount).nextUnlockId := by
+          simp [updateStandardUnlock, hentry]
+        have hflex : (updateStandardUnlock (burnApxUSD s caller amount)
+            id caller amount).flexibleUnlockRequests =
+            (burnApxUSD s caller amount).flexibleUnlockRequests := by
+          simp [updateStandardUnlock, hentry]
+        rw [hnext, hflex]
+        simpa [flexibleUnlockTotal] using hburnflex
+      · rw [if_neg howner]
+        have h_unalloc : (burnApxUSD s caller amount).flexibleUnlockRequests
+            (burnApxUSD s caller amount).nextUnlockId = none :=
+          hb.2 _ (Nat.le_refl _)
+        exact flexibleUnlockTotal_createStandardUnlock
+          (burnApxUSD s caller amount) caller amount h_unalloc
+    · have h_unalloc : (burnApxUSD s caller amount).flexibleUnlockRequests
+          (burnApxUSD s caller amount).nextUnlockId = none :=
+        hb.2 _ (Nat.le_refl _)
+      exact flexibleUnlockTotal_createStandardUnlock
+        (burnApxUSD s caller amount) caller amount h_unalloc
+  · have h_unalloc : (burnApxUSD s caller amount).flexibleUnlockRequests
+        (burnApxUSD s caller amount).nextUnlockId = none :=
+      hb.2 _ (Nat.le_refl _)
+    exact flexibleUnlockTotal_createStandardUnlock
+      (burnApxUSD s caller amount) caller amount h_unalloc
+
+/-- A successful standard request moves face value from circulating apxUSD into
+the standard registry: the combined circulating-plus-pending obligation is
+unchanged. The supply-underflow premise is separate from the registry premise
+because `burnApxUSD` uses truncated natural subtraction. -/
+theorem outstandingApxUSD_requestUnlockStep (s : State) (caller amount : Nat)
+    (hregistry : RegistryWellIndexed s)
+    (hsupply : amount ≤ s.totalSupply_apxUSD) :
+    outstandingApxUSD (requestUnlockStep s caller amount) =
+      outstandingApxUSD s := by
+  unfold outstandingApxUSD pendingApxUSD
+  rw [requestUnlockStep_totalSupply_apxUSD,
+    standardUnlockTotal_requestUnlockStep s caller amount hregistry,
+    flexibleUnlockTotal_requestUnlockStep s caller amount hregistry]
+  omega
+
+theorem outstandingApxUSD_requestUnlock (s : State) (amount : Nat)
+    (caller : Address) (s' : State)
+    (hregistry : RegistryWellIndexed s)
+    (hsupply : amount ≤ s.totalSupply_apxUSD)
+    (h_step : step s (Op.requestUnlock amount) caller = some s') :
+    outstandingApxUSD s' = outstandingApxUSD s := by
+  obtain ⟨-, -, hpost⟩ := requestUnlockStep_effect s amount caller s' h_step
+  subst s'
+  exact outstandingApxUSD_requestUnlockStep s caller amount hregistry hsupply
+
+theorem standardUnlockTotal_flexibleRequestUnlockStep (s : State) (caller amount : Nat)
+    (hregistry : RegistryWellIndexed s) :
+    standardUnlockTotal (createFlexibleUnlock (burnApxUSD s caller amount) caller amount) =
+      standardUnlockTotal s := by
+  have hb : RegistryBounded (burnApxUSD s caller amount) :=
+    (registryWellIndexed_burnApxUSD s caller amount hregistry).1
+  have h_unalloc : (burnApxUSD s caller amount).unlockRequests
+      (burnApxUSD s caller amount).nextUnlockId = none :=
+    hb.1 _ (Nat.le_refl _)
+  have hcreate := standardUnlockTotal_createFlexibleUnlock
+    (burnApxUSD s caller amount) caller amount h_unalloc
+  have hburn : standardUnlockTotal (burnApxUSD s caller amount) =
+      standardUnlockTotal s := by rfl
+  rw [hburn] at hcreate
+  exact hcreate
+
+theorem outstandingApxUSD_flexibleRequestUnlock (s : State) (caller amount : Nat)
+    (hregistry : RegistryWellIndexed s)
+    (hsupply : amount ≤ s.totalSupply_apxUSD) :
+    outstandingApxUSD (createFlexibleUnlock (burnApxUSD s caller amount) caller amount) =
+      outstandingApxUSD s := by
+  have hstd := standardUnlockTotal_flexibleRequestUnlockStep s caller amount hregistry
+  have hflex := flexibleUnlockTotal_createFlexibleUnlock
+    (burnApxUSD s caller amount) caller amount
+  have hburnflex : flexibleUnlockTotal (burnApxUSD s caller amount) =
+      flexibleUnlockTotal s := by rfl
+  have hpostSupply : (createFlexibleUnlock (burnApxUSD s caller amount)
+      caller amount).totalSupply_apxUSD = s.totalSupply_apxUSD - amount := by rfl
+  have hpostStd : standardUnlockTotal
+      (createFlexibleUnlock (burnApxUSD s caller amount) caller amount) =
+      standardUnlockTotal s := hstd
+  have hpostFlex : flexibleUnlockTotal
+      (createFlexibleUnlock (burnApxUSD s caller amount) caller amount) =
+      flexibleUnlockTotal s + amount := by
+    rw [hflex, hburnflex]
+  unfold outstandingApxUSD pendingApxUSD
+  rw [hpostSupply, hpostStd, hpostFlex]
+  omega
+
+theorem outstandingApxUSD_flexibleRequestUnlock_step (s : State) (amount : Nat)
+    (caller : Address) (s' : State)
+    (hregistry : RegistryWellIndexed s)
+    (hsupply : amount ≤ s.totalSupply_apxUSD)
+    (h_step : step s (Op.flexibleRequestUnlock amount) caller = some s') :
+    outstandingApxUSD s' = outstandingApxUSD s := by
+  obtain ⟨-, -, hpost⟩ := flexibleRequestUnlockStep_effect s amount caller s' h_step
+  subst s'
+  exact outstandingApxUSD_flexibleRequestUnlock s caller amount hregistry hsupply
+
+theorem flexibleUnlockTotal_retireStandardUnlock (s : State) (id : Nat)
+    (owner : Address) :
+    flexibleUnlockTotal (retireStandardUnlock s id owner) =
+      flexibleUnlockTotal s := by
+  unfold flexibleUnlockTotal
+  simp [retireStandardUnlock, burnUnlockNFT]
+
+/-- A successful standard claim moves the face amount back from the standard
+registry into circulating apxUSD, preserving the combined obligation. -/
+theorem outstandingApxUSD_claimUnlock (s : State) (id : Nat)
+    (owner : Address) (amount cooldownEnd : Nat) (caller : Address) (s' : State)
+    (hid : id < s.nextUnlockId)
+    (hreq : s.unlockRequests id = some (owner, amount, cooldownEnd))
+    (h_step : step s (Op.claimUnlock id) caller = some s') :
+    outstandingApxUSD s' = outstandingApxUSD s := by
+  obtain ⟨recordedOwner, recordedAmount, recordedCooldown, hentry, _, _, _, hpost⟩ :=
+    claimUnlockStep_effect s id caller s' h_step
+  rw [hreq] at hentry
+  simp only [Option.some.injEq, Prod.mk.injEq] at hentry
+  obtain ⟨rfl, rfl, rfl⟩ := hentry
+  subst s'
+  have hstd := standardUnlockTotal_retireStandardUnlock s id owner amount cooldownEnd hid hreq
+  have hflex := flexibleUnlockTotal_retireStandardUnlock s id owner
+  have hstdmint : standardUnlockTotal
+      (mintApxUSD (retireStandardUnlock s id owner) owner amount) =
+      standardUnlockTotal (retireStandardUnlock s id owner) := by rfl
+  have hflexmint : flexibleUnlockTotal
+      (mintApxUSD (retireStandardUnlock s id owner) owner amount) =
+      flexibleUnlockTotal (retireStandardUnlock s id owner) := by rfl
+  have hsupply : (mintApxUSD (retireStandardUnlock s id owner) owner amount).totalSupply_apxUSD =
+      s.totalSupply_apxUSD + amount := by rfl
+  unfold outstandingApxUSD pendingApxUSD
+  rw [hsupply, hstdmint, hflexmint, hflex]
+  omega
+
+/-- A successful flexible claim preserves the outstanding face obligation up
+to the explicit fee. The theorem records the fee as a sink because the current
+`State` has no fee-wallet balance; it does not pretend that the fee is still
+held by the protocol. -/
+theorem outstandingApxUSD_flexibleClaimUnlock (s : State) (id : Nat)
+    (owner : Address) (amount requestTime cooldownEnd : Nat) (caller : Address) (s' : State)
+    (hid : id < s.nextUnlockId)
+    (hreq : s.flexibleUnlockRequests id =
+      some (owner, amount, requestTime, cooldownEnd))
+    (h_step : step s (Op.flexibleClaimUnlock id) caller = some s') :
+    outstandingApxUSD s' + amount * flexibleUnlockFee requestTime s.now / 10000 =
+      outstandingApxUSD s := by
+  obtain ⟨recordedOwner, recordedAmount, recordedRequestTime, recordedCooldownEnd,
+    hentry, _, _, _, hpost⟩ := flexibleClaimStep_effect s id caller s' h_step
+  rw [hreq] at hentry
+  simp only [Option.some.injEq, Prod.mk.injEq] at hentry
+  obtain ⟨rfl, rfl, rfl, rfl⟩ := hentry
+  subst s'
+  let fee := amount * flexibleUnlockFee requestTime s.now / 10000
+  have hfee : fee ≤ amount := by
+    exact flexibleClaimFee_le_amount amount requestTime s.now
+  have hflex := flexibleUnlockTotal_retireFlexibleUnlock
+    s id owner amount requestTime cooldownEnd hid hreq
+  have hstd : standardUnlockTotal (retireFlexibleUnlock s id) =
+      standardUnlockTotal s := by rfl
+  have hstdmint : standardUnlockTotal
+      (mintApxUSD (retireFlexibleUnlock s id) owner (amount - fee)) =
+      standardUnlockTotal (retireFlexibleUnlock s id) := by rfl
+  have hflexmint : flexibleUnlockTotal
+      (mintApxUSD (retireFlexibleUnlock s id) owner (amount - fee)) =
+      flexibleUnlockTotal (retireFlexibleUnlock s id) := by rfl
+  have hsupply : (mintApxUSD (retireFlexibleUnlock s id) owner (amount - fee)).totalSupply_apxUSD =
+      s.totalSupply_apxUSD + (amount - fee) := by rfl
+  unfold outstandingApxUSD pendingApxUSD
+  rw [hsupply, hstdmint, hflexmint, hstd]
+  dsimp [fee] at hfee hflex ⊢
+  omega
+
 /-- The top-up branch changes one existing standard record in place. This is
 the sum-level counterpart of `updateStandardUnlock_unlockRequests_eq`: once
 the target record is known to be the caller's record, the caller's finite
