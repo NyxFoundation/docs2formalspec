@@ -1,6 +1,7 @@
 import D2fsSpecs.Registry
 import D2fsSpecs.Safety
 import D2fsSpecs.Ledger
+import D2fsSpecs.Transition
 
 /-!
 # Conditional composite invariant layer
@@ -100,6 +101,19 @@ theorem protocolInv_step (s : State) (op : Op) (caller : Address) (s' : State)
      hscope.1 hscope.2.1 hscope.2.2.1 hscope.2.2.2.1 hscope.2.2.2.2,
    hwf',
    apxUSDLedgerConsistent_step s s' op caller h.2.2.2 hstep⟩
+
+/-- The same composite preservation theorem stated over the explicit
+`StepResult` boundary. The event payload is carried through but does not enter
+the current invariant; the accepted-result equivalence supplies the underlying
+successful `step` equation. -/
+theorem protocolInv_stepResult_accepted
+    (s : State) (op : Op) (caller : Address) (s' : State) (es : List Event)
+    (h : ProtocolInv s)
+    (hacc : stepResult s op caller = .accepted s' es)
+    (hscope : SolvencyScopedOp op) (hwf' : WellFormed s') :
+    ProtocolInv s' :=
+  protocolInv_step s op caller s' h
+    ((stepResult_accepted_iff s op caller s' es).mp hacc).1 hscope hwf'
 
 /-- Restricted reachability: states obtainable from `default` by successful
 transitions that (a) avoid the five solvency-excluded operations and (b) land in
