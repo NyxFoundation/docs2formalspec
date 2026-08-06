@@ -836,6 +836,23 @@ theorem unlockTokenLedgerConsistent_mintApxUSD
   intro id hid
   simpa [mintApxUSD] using h id hid
 
+def UnlockTokenLedgerFrame (s s' : State) : Prop :=
+  s'.nextUnlockId = s.nextUnlockId ∧
+  s'.unlockRequests = s.unlockRequests ∧
+  s'.flexibleUnlockRequests = s.flexibleUnlockRequests ∧
+  s'.unlockTokenOwner = s.unlockTokenOwner ∧
+  s'.unlockTokenAmount = s.unlockTokenAmount
+
+theorem unlockTokenLedgerConsistent_of_frame (s s' : State)
+    (hframe : UnlockTokenLedgerFrame s s')
+    (h : UnlockTokenLedgerConsistent s) :
+    UnlockTokenLedgerConsistent s' := by
+  rcases hframe with ⟨hnext, hstd, hflex, howner, hamount⟩
+  intro id hid
+  have hid' : id < s.nextUnlockId := by
+    simpa [hnext] using hid
+  simpa [hnext, hstd, hflex, howner, hamount] using h id hid'
+
 theorem unlockTokenLedgerConsistent_createStandardUnlock
     (s : State) (owner : Address) (amount : Nat)
     (hregistry : RegistryWellIndexed s)
@@ -1012,6 +1029,188 @@ theorem unlockTokenLedgerConsistent_flexibleClaimUnlock
   exact unlockTokenLedgerConsistent_mintApxUSD
     (retireFlexibleUnlock s id) owner
       (amount - amount * flexibleUnlockFee requestTime s.now / 10000) hret
+
+theorem unlockTokenLedgerConsistent_pullVestedYield
+    (s : State) (h : UnlockTokenLedgerConsistent s) :
+    UnlockTokenLedgerConsistent (pullVestedYield s) := by
+  apply unlockTokenLedgerConsistent_of_frame s (pullVestedYield s) ?_ h
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;>
+    unfold pullVestedYield <;> dsimp only <;> split <;> rfl
+
+theorem unlockTokenLedgerConsistent_vaultExitChain
+    (s1 : State) (caller shares assets : Nat)
+    (receiver : Address) (name : String) (evArgs : List Nat)
+    (hregistry : RegistryWellIndexed s1)
+    (hledger : UnlockTokenLedgerConsistent s1) :
+    UnlockTokenLedgerConsistent (emitEvent (updateExchangeRate (createStandardUnlock
+      { burnApyUSD s1 caller shares with
+          vaultApxUSDBal := (burnApyUSD s1 caller shares).vaultApxUSDBal - assets }
+      receiver assets)) name evArgs) := by
+  let u : State := { burnApyUSD s1 caller shares with
+      vaultApxUSDBal := (burnApyUSD s1 caller shares).vaultApxUSDBal - assets }
+  have hu : UnlockTokenLedgerConsistent u := by
+    intro id hid
+    simpa [u, burnApyUSD] using hledger id hid
+  have hregu : RegistryWellIndexed u := by
+    dsimp [u]
+    exact registryWellIndexed_of_frame s1 _ ⟨rfl, rfl, rfl, rfl, rfl⟩ hregistry
+  have hcreated : UnlockTokenLedgerConsistent (createStandardUnlock u receiver assets) :=
+    unlockTokenLedgerConsistent_createStandardUnlock u receiver assets hregu hu
+  have hframe : UnlockTokenLedgerFrame (createStandardUnlock u receiver assets)
+      (emitEvent (updateExchangeRate (createStandardUnlock u receiver assets)) name evArgs) := by
+    refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;>
+      simp [emitEvent, updateExchangeRate]
+  have hfinal := unlockTokenLedgerConsistent_of_frame
+    (createStandardUnlock u receiver assets)
+    (emitEvent (updateExchangeRate (createStandardUnlock u receiver assets)) name evArgs)
+    hframe hcreated
+  simpa [u] using hfinal
+
+theorem unlockTokenLedgerConsistent_withdraw
+    (s : State) (assets : Nat) (receiver caller : Address) (s' : State)
+    (hregistry : RegistryWellIndexed s)
+    (hledger : UnlockTokenLedgerConsistent s)
+    (h_step : step s (Op.withdraw assets receiver) caller = some s') :
+    UnlockTokenLedgerConsistent s' := by
+  obtain ⟨-, -, -, hpost⟩ := withdrawStep_effect s assets receiver caller s' h_step
+  subst s'
+  exact unlockTokenLedgerConsistent_vaultExitChain
+    (pullVestedYield s) caller
+      (withdrawShares assets (computeExchangeRate (pullVestedYield s))) assets
+      receiver "Withdraw"
+      [caller, receiver, caller, assets,
+        withdrawShares assets (computeExchangeRate (pullVestedYield s))]
+      (registryWellIndexed_pullVestedYield s hregistry)
+      (unlockTokenLedgerConsistent_pullVestedYield s hledger)
+
+theorem unlockTokenLedgerConsistent_redeem
+    (s : State) (shares : Nat) (receiver caller : Address) (s' : State)
+    (hregistry : RegistryWellIndexed s)
+    (hledger : UnlockTokenLedgerConsistent s)
+    (h_step : step s (Op.redeem shares receiver) caller = some s') :
+    UnlockTokenLedgerConsistent s' := by
+  obtain ⟨-, -, -, hpost⟩ := redeemStep_effect s shares receiver caller s' h_step
+  subst s'
+  exact unlockTokenLedgerConsistent_vaultExitChain
+    (pullVestedYield s) caller shares
+      (redeemAssets shares (computeExchangeRate (pullVestedYield s))) receiver "Withdraw"
+      [caller, receiver, caller,
+        redeemAssets shares (computeExchangeRate (pullVestedYield s)), shares]
+      (registryWellIndexed_pullVestedYield s hregistry)
+      (unlockTokenLedgerConsistent_pullVestedYield s hledger)
+
+inductive UnlockTokenLedgerCoveredOp : Op → Prop
+  | requestUnlock (amount : Nat) : UnlockTokenLedgerCoveredOp (Op.requestUnlock amount)
+  | claimUnlock (id : Nat) : UnlockTokenLedgerCoveredOp (Op.claimUnlock id)
+  | withdraw (assets : Nat) (receiver : Address) :
+      UnlockTokenLedgerCoveredOp (Op.withdraw assets receiver)
+  | redeem (shares : Nat) (receiver : Address) :
+      UnlockTokenLedgerCoveredOp (Op.redeem shares receiver)
+  | flexibleRequestUnlock (amount : Nat) :
+      UnlockTokenLedgerCoveredOp (Op.flexibleRequestUnlock amount)
+  | flexibleClaimUnlock (id : Nat) :
+      UnlockTokenLedgerCoveredOp (Op.flexibleClaimUnlock id)
+  | frame {op : Op} (h : RegistryStaticOp op) : UnlockTokenLedgerCoveredOp op
+
+theorem unlockTokenLedgerConsistent_covered_step
+    (s s' : State) (op : Op) (caller : Address)
+    (hregistry : RegistryWellIndexed s)
+    (hop : UnlockTokenLedgerCoveredOp op)
+    (hledger : UnlockTokenLedgerConsistent s)
+    (hstep : step s op caller = some s') :
+    UnlockTokenLedgerConsistent s' := by
+  cases hop with
+  | requestUnlock amount =>
+      exact unlockTokenLedgerConsistent_requestUnlock s amount caller s'
+        hregistry hledger hstep
+  | claimUnlock id =>
+      exact unlockTokenLedgerConsistent_claimUnlock s id caller s' hledger hstep
+  | withdraw assets receiver =>
+      exact unlockTokenLedgerConsistent_withdraw s assets receiver caller s'
+        hregistry hledger hstep
+  | redeem shares receiver =>
+      exact unlockTokenLedgerConsistent_redeem s shares receiver caller s'
+        hregistry hledger hstep
+  | flexibleRequestUnlock amount =>
+      exact unlockTokenLedgerConsistent_flexibleRequestUnlock s amount caller s'
+        hregistry hledger hstep
+  | flexibleClaimUnlock id =>
+      exact unlockTokenLedgerConsistent_flexibleClaimUnlock s id caller s' hledger hstep
+  | frame hframe =>
+      cases op with
+      | requestUnlock n => exact False.elim (hframe.1 n rfl)
+      | claimUnlock n => exact False.elim (hframe.2.1 n rfl)
+      | withdraw n r => exact False.elim (hframe.2.2.1 n r rfl)
+      | redeem n r => exact False.elim (hframe.2.2.2.1 n r rfl)
+      | flexibleRequestUnlock n => exact False.elim (hframe.2.2.2.2.1 n rfl)
+      | flexibleClaimUnlock n => exact False.elim (hframe.2.2.2.2.2 n rfl)
+      | _ =>
+          simp only [step] at hstep
+          (repeat' split at hstep) <;>
+            first
+              | cases Option.some.inj hstep
+                exact unlockTokenLedgerConsistent_of_frame s _
+                  ⟨rfl, rfl, rfl, rfl, rfl⟩ hledger
+              | exact absurd hstep (by simp)
+
+theorem unlockTokenLedgerCoveredOp_all (op : Op) :
+    UnlockTokenLedgerCoveredOp op := by
+  cases op with
+  | requestUnlock amount => exact .requestUnlock amount
+  | claimUnlock id => exact .claimUnlock id
+  | withdraw assets receiver => exact .withdraw assets receiver
+  | redeem shares receiver => exact .redeem shares receiver
+  | flexibleRequestUnlock amount => exact .flexibleRequestUnlock amount
+  | flexibleClaimUnlock id => exact .flexibleClaimUnlock id
+  | depositUSDC amount => exact .frame (by simp [RegistryStaticOp])
+  | mintApxUSD to amount => exact .frame (by simp [RegistryStaticOp])
+  | lockApxUSD amount => exact .frame (by simp [RegistryStaticOp])
+  | redeemApxUSD amount => exact .frame (by simp [RegistryStaticOp])
+  | pause => exact .frame (by simp [RegistryStaticOp])
+  | unpause => exact .frame (by simp [RegistryStaticOp])
+  | addToWhitelist addr => exact .frame (by simp [RegistryStaticOp])
+  | removeFromWhitelist addr => exact .frame (by simp [RegistryStaticOp])
+  | addToDenylist addr => exact .frame (by simp [RegistryStaticOp])
+  | removeFromDenylist addr => exact .frame (by simp [RegistryStaticOp])
+  | setYieldRate bps => exact .frame (by simp [RegistryStaticOp])
+  | creditYield amount => exact .frame (by simp [RegistryStaticOp])
+  | voteBufferDeployment => exact .frame (by simp [RegistryStaticOp])
+  | submitRFQRequest amount => exact .frame (by simp [RegistryStaticOp])
+  | executeRFQRedemption user amount => exact .frame (by simp [RegistryStaticOp])
+  | updateRedemptionValue newValue => exact .frame (by simp [RegistryStaticOp])
+  | handleStressEvent amount => exact .frame (by simp [RegistryStaticOp])
+  | catastrophicBackstop => exact .frame (by simp [RegistryStaticOp])
+  | setVestPeriod p => exact .frame (by simp [RegistryStaticOp])
+  | setApxUSDMarketPrice price => exact .frame (by simp [RegistryStaticOp])
+  | withdrawReserve amount receiver => exact .frame (by simp [RegistryStaticOp])
+  | poolRedeem amount receiver minOut => exact .frame (by simp [RegistryStaticOp])
+  | tick dt => exact .frame (by simp [RegistryStaticOp])
+
+theorem unlockTokenLedgerConsistent_step
+    (s s' : State) (op : Op) (caller : Address)
+    (hregistry : RegistryWellIndexed s)
+    (hledger : UnlockTokenLedgerConsistent s)
+    (hstep : step s op caller = some s') :
+    UnlockTokenLedgerConsistent s' :=
+  unlockTokenLedgerConsistent_covered_step s s' op caller hregistry
+    (unlockTokenLedgerCoveredOp_all op) hledger hstep
+
+theorem unlockTokenLedgerConsistent_trace (s : State) (σ : List (Op × Address))
+    (hregistry : RegistryReach s)
+    (hledger : UnlockTokenLedgerConsistent s) :
+    UnlockTokenLedgerConsistent (execTrace s σ) := by
+  induction σ generalizing s with
+  | nil => exact hledger
+  | cons p σ ih =>
+      obtain ⟨op, caller⟩ := p
+      simp only [execTrace]
+      cases hstep : step s op caller with
+      | none => exact ih s hregistry hledger
+      | some s' =>
+          have hregistry' : RegistryReach s' := RegistryReach.next hregistry hstep
+          exact ih s' hregistry'
+            (unlockTokenLedgerConsistent_step s s' op caller
+              (registryWellIndexed_reachable s hregistry) hledger hstep)
 
 /-! ## The missing USDC ledger, stated without inventing a State field
 

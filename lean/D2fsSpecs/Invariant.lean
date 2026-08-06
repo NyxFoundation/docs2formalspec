@@ -64,6 +64,17 @@ def ProtocolInv (s : State) : Prop :=
   RegistryWellIndexed s ∧ Solvent s ∧ WellFormed s ∧
     ApxUSDLedgerConsistent s ∧ ApyUSDLedgerConsistent s
 
+/-- The receipt-aware extension of `ProtocolInv`.
+
+This is kept as a separate predicate rather than silently changing `ProtocolInv`:
+the latter is already used for the solvency-scoped design relation, while this
+extension adds the model-local identity tying pending registry amounts to the
+receipt owner and face amount. The receipt identity has its own exhaustive
+operation coverage; it does not add a fee-wallet or USDC ledger that the current
+`State` cannot represent. -/
+def ProtocolInvWithReceiptLedger (s : State) : Prop :=
+  ProtocolInv s ∧ UnlockTokenLedgerConsistent s
+
 /-- Exactly the five operation exclusions `solvency_step` requires, packaged as
 one predicate on the operation. `claimUnlock`/`flexibleClaimUnlock` re-mint
 against unlock obligations `Solvent` does not track as liabilities;
@@ -86,6 +97,10 @@ theorem protocolInv_default : ProtocolInv (default : State) := by
     apxUSDLedgerConsistent_default, apyUSDLedgerConsistent_default⟩
   exact ⟨(fun _ => Nat.zero_le _), Nat.zero_le _⟩
 
+theorem protocolInvWithReceiptLedger_default :
+    ProtocolInvWithReceiptLedger (default : State) := by
+  exact ⟨protocolInv_default, unlockTokenLedgerConsistent_default⟩
+
 /-- Conditional preservation: a successful step preserves `ProtocolInv`, given
 (1) the five solvency exclusions on the operation and (2) `WellFormed` at the
 **post**-state, supplied as an explicit hypothesis. The registry conjunct is
@@ -105,6 +120,19 @@ theorem protocolInv_step (s : State) (op : Op) (caller : Address) (s' : State)
    apxUSDLedgerConsistent_step s s' op caller h.2.2.2.1 hstep,
    apyUSDLedgerConsistent_step s s' op caller h.2.2.2.2 hstep⟩
 
+/-- Conditional preservation of the receipt-aware composite. The solvency and
+`WellFormed` premises are exactly those of `protocolInv_step`; receipt
+consistency additionally consumes the registry premise and its exhaustive
+operation coverage. -/
+theorem protocolInvWithReceiptLedger_step
+    (s : State) (op : Op) (caller : Address) (s' : State)
+    (h : ProtocolInvWithReceiptLedger s)
+    (hstep : step s op caller = some s')
+    (hscope : SolvencyScopedOp op) (hwf' : WellFormed s') :
+    ProtocolInvWithReceiptLedger s' := by
+  refine ⟨protocolInv_step s op caller s' h.1 hstep hscope hwf', ?_⟩
+  exact unlockTokenLedgerConsistent_step s s' op caller h.1.1 h.2 hstep
+
 /-- The same composite preservation theorem stated over the explicit
 `StepResult` boundary. The event payload is carried through but does not enter
 the current invariant; the accepted-result equivalence supplies the underlying
@@ -116,6 +144,15 @@ theorem protocolInv_stepResult_accepted
     (hscope : SolvencyScopedOp op) (hwf' : WellFormed s') :
     ProtocolInv s' :=
   protocolInv_step s op caller s' h
+    ((stepResult_accepted_iff s op caller s' es).mp hacc).1 hscope hwf'
+
+theorem protocolInvWithReceiptLedger_stepResult_accepted
+    (s : State) (op : Op) (caller : Address) (s' : State) (es : List Event)
+    (h : ProtocolInvWithReceiptLedger s)
+    (hacc : stepResult s op caller = .accepted s' es)
+    (hscope : SolvencyScopedOp op) (hwf' : WellFormed s') :
+    ProtocolInvWithReceiptLedger s' :=
+  protocolInvWithReceiptLedger_step s op caller s' h
     ((stepResult_accepted_iff s op caller s' es).mp hacc).1 hscope hwf'
 
 /-- Restricted reachability: states obtainable from `default` by successful
@@ -148,5 +185,12 @@ theorem protocolInv_reachable (s : State) (h : ProtocolReach s) : ProtocolInv s 
   | initial => exact protocolInv_default
   | next _ _ hacc hscope hwf' ih =>
       exact protocolInv_stepResult_accepted _ _ _ _ _ ih hacc hscope hwf'
+
+theorem protocolInvWithReceiptLedger_reachable
+    (s : State) (h : ProtocolReach s) : ProtocolInvWithReceiptLedger s := by
+  induction h with
+  | initial => exact protocolInvWithReceiptLedger_default
+  | next _ _ hacc hscope hwf' ih =>
+      exact protocolInvWithReceiptLedger_stepResult_accepted _ _ _ _ _ ih hacc hscope hwf'
 
 end Apyx

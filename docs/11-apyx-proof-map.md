@@ -491,6 +491,17 @@ they are not hidden assumptions. Neither ledger identity is derived from
 `WellFormed` or `Solvent`; each is a separately initialized and trace-preserved
 relation over the current abstract state machine.
 
+Receipt consistency is now composed without changing the meaning of
+`ProtocolInv`: `ProtocolInvWithReceiptLedger` adds
+`UnlockTokenLedgerConsistent`, `protocolInvWithReceiptLedger_step` preserves it,
+and `protocolInvWithReceiptLedger_reachable` lifts the result over the same
+restricted reachability relation. The receipt layer has its own exhaustive
+`UnlockTokenLedgerCoveredOp` classification: request/claim operations use their
+dedicated lifecycle proofs, vault exits use the `createStandardUnlock` chain,
+and every other `Op` must provide a receipt/registry frame. This closes the
+model-local receipt identity, but it still does not create a USDC total-supply,
+fee-wallet, or on-chain NFT-custody field that is absent from `State`.
+
 ## 7. Build the economic property ladder
 
 The properties should be proved in dependency order.

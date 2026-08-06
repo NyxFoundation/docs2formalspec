@@ -756,4 +756,27 @@ example : UnlockTokenLedgerConsistent c1 := by
   apply unlockTokenLedgerConsistent_claimUnlock c0 0 1 c1 c0_unlockTokenLedgerConsistent
   simp [c1, execTrace, step, c0, retireStandardUnlock, burnUnlockNFT, mintApxUSD]
 
+/-! ## R18 — receipt consistency has exhaustive operation coverage
+
+The receipt relation is now composed with every constructor of Op through an
+explicit coverage witness. Operations that allocate or retire positions use
+their dedicated theorem; all other operations are required to prove a registry
+and receipt frame. The stronger composite is kept separate from ProtocolInv so
+the existing solvency-scoped invariant does not silently change meaning. -/
+
+example : ProtocolInvWithReceiptLedger (default : State) :=
+  protocolInvWithReceiptLedger_default
+
+example : UnlockTokenLedgerCoveredOp (Op.withdraw 1 1) :=
+  unlockTokenLedgerCoveredOp_all (Op.withdraw 1 1)
+
+example : UnlockTokenLedgerCoveredOp (Op.setYieldRate 25) :=
+  unlockTokenLedgerCoveredOp_all (Op.setYieldRate 25)
+
+example : UnlockTokenLedgerConsistent
+    (execTrace (default : State) [(Op.tick 1, 0), (Op.requestUnlock 0, 0)]) := by
+  exact unlockTokenLedgerConsistent_trace (default : State)
+    [(Op.tick 1, 0), (Op.requestUnlock 0, 0)] RegistryReach.initial
+    unlockTokenLedgerConsistent_default
+
 end Apyx
