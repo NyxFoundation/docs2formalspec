@@ -244,19 +244,27 @@ lemmas show the exact arithmetic needed for deposits, reserve payouts, and
 unaffected operations. `UsdcLedgerEffect` and
 `usdcLedgerConsistent_effect` compose those cases without pretending that the
 current dispatcher has supplied the missing finite support or total supply.
-These remain interface lemmas, not a reachable-state USDC invariant: tying a
-concrete `Op` to one of the effects is now closed for `depositUSDC`,
-`mintApxUSD`, `redeemApxUSD`, `executeRFQRedemption`, `withdrawReserve`, and
-`poolRedeem` by `depositUSDCStep_effect`, `mintApxUSDStep_effect`,
+The six concrete mappings are closed for `depositUSDC`, `mintApxUSD`,
+`redeemApxUSD`, `executeRFQRedemption`, `withdrawReserve`, and `poolRedeem`
+by `depositUSDCStep_effect`, `mintApxUSDStep_effect`,
 `redeemApxUSDStep_effect`, `executeRFQRedemptionStep_effect`,
 `withdrawReserveStep_effect`, `poolRedeemStep_effect` and their
 `usdcLedgerEffect_depositUSDC`, `usdcLedgerEffect_mintApxUSD`,
 `usdcLedgerEffect_redeemApxUSD`, `usdcLedgerEffect_executeRFQRedemption`,
 `usdcLedgerEffect_withdrawReserve`, and `usdcLedgerEffect_poolRedeem`
-theorems in `Apyx.lean` and `HolderValue.lean`. Regression §R24 pins the
-support rule with a counterparty that burns its own apxUSD while a different
-address receives the USDC. The receiver or requested user, rather than an
-executing counterparty, must be in the external support set.
+theorems in `Apyx.lean` and `HolderValue.lean`. `UsdcLedgerFrameOp`,
+`UsdcLedgerCoveredOp`, `usdcLedgerCoveredOp_of_not_backstop`,
+`usdcLedgerConsistent_covered_step`, `usdcLedgerConsistent_step`, and
+`usdcLedgerConsistent_trace` then lift those mappings and all USDC-frame
+operations to a conditional successful-step and revert-skip trace boundary.
+Every operation in that boundary must be different from
+`catastrophicBackstop`. For `depositUSDC` and `mintApxUSD`, the debited caller
+must be in the external support list; for redemption and withdrawal paths, the
+credited caller, requested user, or named receiver must be in it. These
+premises are required for every trace entry, including operations that revert.
+Regression §R24 pins the receiver rule, and §R25 pins the trace composition.
+The requested user or named receiver, rather than an executing RFQ
+counterparty, determines the payout support entry.
 `catastrophicBackstop` remains outside this exact effect for two reasons: it
 distributes to many addresses, while the effect has a single-receiver payout
 arm, and its per-holder Nat division can leave a rounding remainder. Its

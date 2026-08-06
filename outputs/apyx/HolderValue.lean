@@ -1411,6 +1411,205 @@ theorem usdcLedgerConsistent_effect
       hledger receiver amount hmem hle hbal hreserve
   · exact usdcLedgerConsistent_of_frame s s' holders totalSupply hledger hframe
 
+/-- Operations whose successful transitions leave the external USDC ledger
+unchanged. The six operations with an explicit debit or payout effect are
+intentionally absent. `catastrophicBackstop` is absent as well: its
+multi-recipient, floor-divided distribution needs a separate remainder model. -/
+inductive UsdcLedgerFrameOp : Op → Prop where
+  | lockApxUSD (amount : Nat) : UsdcLedgerFrameOp (Op.lockApxUSD amount)
+  | requestUnlock (amount : Nat) : UsdcLedgerFrameOp (Op.requestUnlock amount)
+  | claimUnlock (id : Nat) : UsdcLedgerFrameOp (Op.claimUnlock id)
+  | withdraw (assets : Nat) (receiver : Address) :
+      UsdcLedgerFrameOp (Op.withdraw assets receiver)
+  | redeem (shares : Nat) (receiver : Address) :
+      UsdcLedgerFrameOp (Op.redeem shares receiver)
+  | flexibleRequestUnlock (amount : Nat) :
+      UsdcLedgerFrameOp (Op.flexibleRequestUnlock amount)
+  | flexibleClaimUnlock (id : Nat) : UsdcLedgerFrameOp (Op.flexibleClaimUnlock id)
+  | pause : UsdcLedgerFrameOp Op.pause
+  | unpause : UsdcLedgerFrameOp Op.unpause
+  | addToWhitelist (addr : Address) : UsdcLedgerFrameOp (Op.addToWhitelist addr)
+  | removeFromWhitelist (addr : Address) : UsdcLedgerFrameOp (Op.removeFromWhitelist addr)
+  | addToDenylist (addr : Address) : UsdcLedgerFrameOp (Op.addToDenylist addr)
+  | removeFromDenylist (addr : Address) : UsdcLedgerFrameOp (Op.removeFromDenylist addr)
+  | setYieldRate (bps : Nat) : UsdcLedgerFrameOp (Op.setYieldRate bps)
+  | creditYield (amount : Nat) : UsdcLedgerFrameOp (Op.creditYield amount)
+  | voteBufferDeployment : UsdcLedgerFrameOp Op.voteBufferDeployment
+  | submitRFQRequest (amount : Nat) : UsdcLedgerFrameOp (Op.submitRFQRequest amount)
+  | updateRedemptionValue (newValue : Nat) :
+      UsdcLedgerFrameOp (Op.updateRedemptionValue newValue)
+  | handleStressEvent (amount : Nat) : UsdcLedgerFrameOp (Op.handleStressEvent amount)
+  | setVestPeriod (p : Nat) : UsdcLedgerFrameOp (Op.setVestPeriod p)
+  | setApxUSDMarketPrice (price : Nat) :
+      UsdcLedgerFrameOp (Op.setApxUSDMarketPrice price)
+  | tick (dt : Nat) : UsdcLedgerFrameOp (Op.tick dt)
+
+@[simp] theorem usdcLedgerFrame_pullVestedYield_usdcBal (s : State) :
+    (pullVestedYield s).usdcBal = s.usdcBal := by
+  unfold pullVestedYield
+  dsimp
+  split <;> rfl
+
+@[simp] theorem usdcLedgerFrame_pullVestedYield_usdcReserve (s : State) :
+    (pullVestedYield s).usdcReserve = s.usdcReserve := by
+  unfold pullVestedYield
+  dsimp
+  split <;> rfl
+
+set_option maxHeartbeats 800000 in
+theorem usdcLedgerFrame_step
+    (s s' : State) (op : Op) (caller : Address)
+    (hop : UsdcLedgerFrameOp op)
+    (hstep : step s op caller = some s') :
+    UsdcLedgerFrame s s' := by
+  cases hop <;>
+    simp only [step] at hstep
+  all_goals
+    repeat' split at hstep
+    all_goals
+      cases hstep <;>
+        constructor <;>
+          simp [burnApxUSD, burnApyUSD, mintApxUSD, mintApyUSD, emitEvent,
+            createStandardUnlock, retireStandardUnlock,
+            createFlexibleUnlock, retireFlexibleUnlock, burnUnlockNFT,
+            updateExchangeRate]
+
+/-- The operation coverage for the USDC ledger, excluding only the
+catastrophic backstop whose semantics are intentionally a separate boundary. -/
+inductive UsdcLedgerCoveredOp : Op → Prop where
+  | depositUSDC (amount : Nat) : UsdcLedgerCoveredOp (Op.depositUSDC amount)
+  | mintApxUSD (to : Address) (amount : Nat) :
+      UsdcLedgerCoveredOp (Op.mintApxUSD to amount)
+  | redeemApxUSD (amount : Nat) : UsdcLedgerCoveredOp (Op.redeemApxUSD amount)
+  | executeRFQRedemption (user : Address) (amount : Nat) :
+      UsdcLedgerCoveredOp (Op.executeRFQRedemption user amount)
+  | withdrawReserve (amount : Nat) (receiver : Address) :
+      UsdcLedgerCoveredOp (Op.withdrawReserve amount receiver)
+  | poolRedeem (amount : Nat) (receiver : Address) (minOut : Nat) :
+      UsdcLedgerCoveredOp (Op.poolRedeem amount receiver minOut)
+  | frame {op : Op} (h : UsdcLedgerFrameOp op) : UsdcLedgerCoveredOp op
+
+theorem usdcLedgerCoveredOp_of_not_backstop (op : Op)
+    (h : op ≠ Op.catastrophicBackstop) : UsdcLedgerCoveredOp op := by
+  cases op with
+  | depositUSDC amount => exact .depositUSDC amount
+  | mintApxUSD to amount => exact .mintApxUSD to amount
+  | lockApxUSD amount => exact .frame (.lockApxUSD amount)
+  | requestUnlock amount => exact .frame (.requestUnlock amount)
+  | claimUnlock id => exact .frame (.claimUnlock id)
+  | redeemApxUSD amount => exact .redeemApxUSD amount
+  | withdraw assets receiver => exact .frame (.withdraw assets receiver)
+  | redeem shares receiver => exact .frame (.redeem shares receiver)
+  | flexibleRequestUnlock amount => exact .frame (.flexibleRequestUnlock amount)
+  | flexibleClaimUnlock id => exact .frame (.flexibleClaimUnlock id)
+  | pause => exact .frame .pause
+  | unpause => exact .frame .unpause
+  | addToWhitelist addr => exact .frame (.addToWhitelist addr)
+  | removeFromWhitelist addr => exact .frame (.removeFromWhitelist addr)
+  | addToDenylist addr => exact .frame (.addToDenylist addr)
+  | removeFromDenylist addr => exact .frame (.removeFromDenylist addr)
+  | setYieldRate bps => exact .frame (.setYieldRate bps)
+  | creditYield amount => exact .frame (.creditYield amount)
+  | voteBufferDeployment => exact .frame .voteBufferDeployment
+  | submitRFQRequest amount => exact .frame (.submitRFQRequest amount)
+  | executeRFQRedemption user amount => exact .executeRFQRedemption user amount
+  | updateRedemptionValue newValue => exact .frame (.updateRedemptionValue newValue)
+  | handleStressEvent amount => exact .frame (.handleStressEvent amount)
+  | catastrophicBackstop => exact False.elim (h rfl)
+  | setVestPeriod p => exact .frame (.setVestPeriod p)
+  | setApxUSDMarketPrice price => exact .frame (.setApxUSDMarketPrice price)
+  | withdrawReserve amount receiver => exact .withdrawReserve amount receiver
+  | poolRedeem amount receiver minOut => exact .poolRedeem amount receiver minOut
+  | tick dt => exact .frame (.tick dt)
+
+/-- Which external support entry a USDC-moving operation needs. The receiver,
+not an executing RFQ counterparty, is selected for payout operations. -/
+def UsdcLedgerSupport (op : Op) (caller : Address) (holders : List Address) : Prop :=
+  match op with
+  | Op.depositUSDC _ => caller ∈ holders
+  | Op.mintApxUSD _ _ => caller ∈ holders
+  | Op.redeemApxUSD _ => caller ∈ holders
+  | Op.executeRFQRedemption user _ => user ∈ holders
+  | Op.withdrawReserve _ receiver => receiver ∈ holders
+  | Op.poolRedeem _ receiver _ => receiver ∈ holders
+  | _ => True
+
+theorem usdcLedgerConsistent_covered_step
+    (s s' : State) (op : Op) (caller : Address)
+    (holders : List Address) (totalSupply : Nat)
+    (hop : UsdcLedgerCoveredOp op)
+    (hsupport : UsdcLedgerSupport op caller holders)
+    (hledger : UsdcLedgerConsistent s holders totalSupply)
+    (hstep : step s op caller = some s') :
+    UsdcLedgerConsistent s' holders totalSupply := by
+  cases hop with
+  | depositUSDC amount =>
+      exact usdcLedgerConsistent_effect s s' holders totalSupply hledger
+        (usdcLedgerEffect_depositUSDC s amount caller s' holders
+          (by simpa [UsdcLedgerSupport] using hsupport) hstep)
+  | mintApxUSD to amount =>
+      exact usdcLedgerConsistent_effect s s' holders totalSupply hledger
+        (usdcLedgerEffect_mintApxUSD s to amount caller s' holders
+          (by simpa [UsdcLedgerSupport] using hsupport) hstep)
+  | redeemApxUSD amount =>
+      exact usdcLedgerConsistent_effect s s' holders totalSupply hledger
+        (usdcLedgerEffect_redeemApxUSD s amount caller s' holders
+          (by simpa [UsdcLedgerSupport] using hsupport) hstep)
+  | executeRFQRedemption user amount =>
+      exact usdcLedgerConsistent_effect s s' holders totalSupply hledger
+        (usdcLedgerEffect_executeRFQRedemption s user amount caller s' holders
+          (by simpa [UsdcLedgerSupport] using hsupport) hstep)
+  | withdrawReserve amount receiver =>
+      exact usdcLedgerConsistent_effect s s' holders totalSupply hledger
+        (usdcLedgerEffect_withdrawReserve s amount receiver caller s' holders
+          (by simpa [UsdcLedgerSupport] using hsupport) hstep)
+  | poolRedeem amount receiver minOut =>
+      exact usdcLedgerConsistent_effect s s' holders totalSupply hledger
+        (usdcLedgerEffect_poolRedeem s amount receiver minOut caller s' holders
+          (by simpa [UsdcLedgerSupport] using hsupport) hstep)
+  | frame hframe =>
+      exact usdcLedgerConsistent_of_frame s s' holders totalSupply hledger
+        (usdcLedgerFrame_step s s' op caller hframe hstep)
+
+theorem usdcLedgerConsistent_step
+    (s s' : State) (op : Op) (caller : Address)
+    (holders : List Address) (totalSupply : Nat)
+    (hop : op ≠ Op.catastrophicBackstop)
+    (hsupport : UsdcLedgerSupport op caller holders)
+    (hledger : UsdcLedgerConsistent s holders totalSupply)
+    (hstep : step s op caller = some s') :
+    UsdcLedgerConsistent s' holders totalSupply :=
+  usdcLedgerConsistent_covered_step s s' op caller holders totalSupply
+    (usdcLedgerCoveredOp_of_not_backstop op hop) hsupport hledger hstep
+
+theorem usdcLedgerConsistent_trace
+    (s : State) (σ : List (Op × Address)) (holders : List Address)
+    (totalSupply : Nat) (hledger : UsdcLedgerConsistent s holders totalSupply)
+    (hscope : ∀ p ∈ σ, p.1 ≠ Op.catastrophicBackstop)
+    (hsupport : ∀ p ∈ σ, UsdcLedgerSupport p.1 p.2 holders) :
+    UsdcLedgerConsistent (execTrace s σ) holders totalSupply := by
+  induction σ generalizing s with
+  | nil => exact hledger
+  | cons p σ ih =>
+      obtain ⟨op, caller⟩ := p
+      simp only [execTrace]
+      cases hstep : step s op caller with
+      | none =>
+          apply ih s hledger
+          · intro q hq
+            exact hscope q (by simp [hq])
+          · intro q hq
+            exact hsupport q (by simp [hq])
+      | some s' =>
+          apply ih s'
+          · exact usdcLedgerConsistent_step s s' op caller holders totalSupply
+              (hscope (op, caller) (by simp))
+              (hsupport (op, caller) (by simp)) hledger hstep
+          · intro q hq
+            exact hscope q (by simp [hq])
+          · intro q hq
+            exact hsupport q (by simp [hq])
+
 /-- Pulling the live vest adds exactly the newly realized amount to custody;
 the circulating and pending obligation ledger is framed. -/
 theorem apxUSDFlow_pullVestedYield (s : State) :

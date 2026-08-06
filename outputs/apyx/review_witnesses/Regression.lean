@@ -907,4 +907,19 @@ example : UsdcLedgerConsistent usdcPoolRedeemPost [1] 100 := by
     (by simp) (by simp [usdcPoolRedeemPost, execTrace, step, usdcPoolRedeemStart,
       default, burnApxUSD, ray])
 
+/-! ## R25 — the external USDC ledger composes across a non-backstop trace
+
+The first step pays a named receiver and the second step is a pure frame. The
+trace theorem therefore preserves the same external ledger without adding a
+USDC field to State. -/
+
+def usdcLedgerTrace : List (Op × Address) :=
+  [(Op.withdrawReserve 50 1, 0), (Op.tick 1, 9)]
+
+example : UsdcLedgerConsistent (execTrace usdcWithdrawReserveStart usdcLedgerTrace) [1] 100 := by
+  apply usdcLedgerConsistent_trace usdcWithdrawReserveStart usdcLedgerTrace [1] 100
+    (by simp [UsdcLedgerConsistent, usdcWithdrawReserveStart, default, sumOver])
+    (by simp [usdcLedgerTrace])
+    (by simp [usdcLedgerTrace, UsdcLedgerSupport])
+
 end Apyx
