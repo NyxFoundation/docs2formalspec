@@ -1,5 +1,6 @@
 import D2fsSpecs.Registry
 import D2fsSpecs.Safety
+import D2fsSpecs.Ledger
 
 /-!
 # Conditional composite invariant layer
@@ -10,7 +11,8 @@ the *same* transition restrictions the preservation theorem uses. This module
 supplies exactly that shape for the facts the development actually carries:
 
 ~~~text
-ProtocolInv s := RegistryWellIndexed s ∧ Solvent s ∧ WellFormed s
+ProtocolInv s := RegistryWellIndexed s ∧ Solvent s ∧ WellFormed s ∧
+  ApxUSDLedgerConsistent s
 ~~~
 
 **This is a conditional, global-design layer — not an unconditional deployed
@@ -23,18 +25,18 @@ current aggregate model, none of which this module repairs:
   re-mint obligation is tracked nowhere on the left-hand side. That is exactly
   why `solvency_step` must exclude `claimUnlock` and `flexibleClaimUnlock`, and
   why those exclusions reappear verbatim in `SolvencyScopedOp` below.
-* **`apxUSDBal` has no finite-support/supply identity.** The ledger is a bare
-  `Address → Nat`; no `Σ_a apxUSDBal a = totalSupply_apxUSD` is stated or
-  maintained, so the per-address bound in `WellFormed` cannot be re-derived
-  after a step that shrinks the supply (see the §6.2 discussion in
-  `Safety.lean`'s S2 docstring).
-* **Consequently `WellFormed s'` is an explicit transition assumption.**
+* **The aggregate facts do not imply the finite ledger identity.** The ledger is
+  a bare `Address → Nat`, so `ApxUSDLedgerConsistent` is carried as a separate
+  conjunct and preserved by the writer program in `Ledger.lean`; it is not
+  derived from `WellFormed`/`Solvent`. The witness in that module records this
+  model expressiveness gap.
+* **`WellFormed s'` is still an explicit transition assumption.**
   `protocolInv_step` takes the post-state's well-formedness as a hypothesis
   rather than proving it, and `ProtocolReach.next` carries the same hypothesis
   so that `protocolInv_reachable` closes the §6 loop *for this restricted
   relation* without a gap between the preservation theorem and the reachability
-  predicate. A future ledger with summation structure could discharge the
-  hypothesis; until then it stays visible.
+  predicate. The ledger conjunct no longer needs this assumption because its
+  successful-step theorem is universal for the current `Op` datatype.
 
 The five operation exclusions are precisely those `solvency_step` already
 requires — `claimUnlock`, `flexibleClaimUnlock`, `handleStressEvent`,
@@ -53,10 +55,11 @@ model-local; `protocolInv_reachable` is reachable-scoped over the restricted
 namespace Apyx
 
 /-- The composite design invariant currently provable in one package: registry
-well-indexedness, aggregate solvency, and ledger well-formedness. Conditional —
+well-indexedness, aggregate solvency, per-address well-formedness, and the
+finite ledger identity. Conditional —
 see the module docstring for what each conjunct does and does not claim. -/
 def ProtocolInv (s : State) : Prop :=
-  RegistryWellIndexed s ∧ Solvent s ∧ WellFormed s
+  RegistryWellIndexed s ∧ Solvent s ∧ WellFormed s ∧ ApxUSDLedgerConsistent s
 
 /-- Exactly the five operation exclusions `solvency_step` requires, packaged as
 one predicate on the operation. `claimUnlock`/`flexibleClaimUnlock` re-mint
@@ -75,27 +78,28 @@ def SolvencyScopedOp (op : Op) : Prop :=
 /-- Initialization: the empty `default` state satisfies the composite invariant.
 Everything is zero, so solvency and well-formedness are trivial; the registry
 part is `registryWellIndexed_default`. -/
-theorem protocolInv_default : ProtocolInv (default : State) :=
-  ⟨registryWellIndexed_default,
-   Nat.zero_le _,
-   fun _ => Nat.zero_le _,
-   Nat.zero_le _⟩
+theorem protocolInv_default : ProtocolInv (default : State) := by
+  refine ⟨registryWellIndexed_default, Nat.zero_le _, ?_,
+    apxUSDLedgerConsistent_default⟩
+  exact ⟨(fun _ => Nat.zero_le _), Nat.zero_le _⟩
 
 /-- Conditional preservation: a successful step preserves `ProtocolInv`, given
 (1) the five solvency exclusions on the operation and (2) `WellFormed` at the
 **post**-state, supplied as an explicit hypothesis. The registry conjunct is
 unconditional (`registryWellIndexed_step`); the solvency conjunct is
 `solvency_step` under its documented exclusions; the well-formedness conjunct
-cannot be derived from the aggregate ledger (no finite-support/supply identity
-for `apxUSDBal`) and is therefore assumed, not proved. -/
+cannot be derived from the aggregate ledger and is therefore assumed, not
+proved; the finite ledger conjunct is supplied by
+`apxUSDLedgerConsistent_step`. -/
 theorem protocolInv_step (s : State) (op : Op) (caller : Address) (s' : State)
     (h : ProtocolInv s) (hstep : step s op caller = some s')
     (hscope : SolvencyScopedOp op) (hwf' : WellFormed s') :
     ProtocolInv s' :=
   ⟨registryWellIndexed_step s op caller s' h.1 hstep,
-   solvency_step s op caller s' hstep h.2.1 h.2.2
+   solvency_step s op caller s' hstep h.2.1 h.2.2.1
      hscope.1 hscope.2.1 hscope.2.2.1 hscope.2.2.2.1 hscope.2.2.2.2,
-   hwf'⟩
+   hwf',
+   apxUSDLedgerConsistent_step s s' op caller h.2.2.2 hstep⟩
 
 /-- Restricted reachability: states obtainable from `default` by successful
 transitions that (a) avoid the five solvency-excluded operations and (b) land in
