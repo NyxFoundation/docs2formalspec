@@ -1112,6 +1112,7 @@ inductive UnlockTokenLedgerCoveredOp : Op → Prop
       UnlockTokenLedgerCoveredOp (Op.flexibleClaimUnlock id)
   | frame {op : Op} (h : RegistryStaticOp op) : UnlockTokenLedgerCoveredOp op
 
+set_option maxHeartbeats 800000 in
 theorem unlockTokenLedgerConsistent_covered_step
     (s s' : State) (op : Op) (caller : Address)
     (hregistry : RegistryWellIndexed s)
@@ -1301,17 +1302,17 @@ does not contain a total-supply field or finite support, so the connection from
 a concrete public operation to one of these effects remains an explicit
 implementation/specification obligation. -/
 def UsdcLedgerEffect (s s' : State) (holders : List Address) : Prop :=
-  (∃ caller amount,
+  ((∃ caller amount,
     caller ∈ holders ∧
     amount ≤ s.usdcBal caller ∧
-    s'.usdcBal = fun a => if a = caller then s.usdcBal a - amount else s.usdcBal a ∧
-    s'.usdcReserve = s.usdcReserve + amount) ∨
+    (s'.usdcBal = (fun a => if a = caller then s.usdcBal a - amount else s.usdcBal a) ∧
+    s'.usdcReserve = s.usdcReserve + amount)) ∨
   (∃ receiver amount,
     receiver ∈ holders ∧
     amount ≤ s.usdcReserve ∧
-    s'.usdcBal = fun a => if a = receiver then s.usdcBal a + amount else s.usdcBal a ∧
-    s'.usdcReserve = s.usdcReserve - amount) ∨
-  UsdcLedgerFrame s s'
+    (s'.usdcBal = (fun a => if a = receiver then s.usdcBal a + amount else s.usdcBal a) ∧
+    s'.usdcReserve = s.usdcReserve - amount)) ∨
+  UsdcLedgerFrame s s')
 
 theorem usdcLedgerEffect_depositUSDC
     (s : State) (amount : Nat) (caller : Address) (s' : State)
@@ -1339,6 +1340,62 @@ theorem usdcLedgerEffect_mintApxUSD
     simp [emitEvent, mintApxUSD]
   · rw [hpost]
     simp [emitEvent, mintApxUSD]
+
+theorem usdcLedgerEffect_redeemApxUSD
+    (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (holders : List Address) (hmem : caller ∈ holders)
+    (hstep : step s (Op.redeemApxUSD amount) caller = some s') :
+    UsdcLedgerEffect s s' holders := by
+  obtain ⟨-, -, -, hle, -, hpost⟩ :=
+    redeemApxUSDStep_effect s amount caller s' hstep
+  right
+  left
+  let payout := (amount * s.redemptionValue) / ray
+  refine ⟨caller, payout, hmem, hle, ?_, ?_⟩
+  · rw [hpost]
+    simp [payout, emitEvent, burnApxUSD]
+  · rw [hpost]
+    simp [payout, emitEvent, burnApxUSD]
+
+theorem usdcLedgerEffect_executeRFQRedemption
+    (s : State) (user : Address) (amount : Nat) (caller : Address) (s' : State)
+    (holders : List Address) (hmem : user ∈ holders)
+    (hstep : step s (Op.executeRFQRedemption user amount) caller = some s') :
+    UsdcLedgerEffect s s' holders := by
+  obtain ⟨-, -, -, -, -, hle, hpost⟩ :=
+    executeRFQRedemptionStep_effect s user amount caller s' hstep
+  right
+  left
+  let payout := (amount * s.redemptionValue) / ray
+  refine ⟨user, payout, hmem, hle, ?_, ?_⟩
+  · rw [hpost]
+    simp [payout, burnApxUSD]
+  · rw [hpost]
+    simp [payout, burnApxUSD]
+
+theorem usdcLedgerEffect_withdrawReserve
+    (s : State) (amount : Nat) (receiver caller : Address) (s' : State)
+    (holders : List Address) (hmem : receiver ∈ holders)
+    (hstep : step s (Op.withdrawReserve amount receiver) caller = some s') :
+    UsdcLedgerEffect s s' holders := by
+  obtain ⟨-, hle, hpost⟩ := withdrawReserveStep_effect s amount receiver caller s' hstep
+  right
+  left
+  refine ⟨receiver, amount, hmem, hle, ?_, ?_⟩
+  · rw [hpost]
+  · rw [hpost]
+
+theorem usdcLedgerEffect_poolRedeem
+    (s : State) (amount : Nat) (receiver : Address) (minOut : Nat) (caller : Address) (s' : State)
+    (holders : List Address) (hmem : receiver ∈ holders)
+    (hstep : step s (Op.poolRedeem amount receiver minOut) caller = some s') :
+    UsdcLedgerEffect s s' holders := by
+  obtain ⟨hle, hpost⟩ := poolRedeemStep_effect s amount receiver minOut caller s' hstep
+  right
+  left
+  refine ⟨receiver, (amount * s.redemptionValue) / ray, hmem, hle, ?_, ?_⟩
+  · rw [hpost]
+  · rw [hpost]
 
 theorem usdcLedgerConsistent_effect
     (s s' : State) (holders : List Address) (totalSupply : Nat)

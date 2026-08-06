@@ -245,11 +245,24 @@ unaffected operations. `UsdcLedgerEffect` and
 `usdcLedgerConsistent_effect` compose those cases without pretending that the
 current dispatcher has supplied the missing finite support or total supply.
 These remain interface lemmas, not a reachable-state USDC invariant: tying a
-concrete `Op` to one of the effects is now closed for `depositUSDC` and
-`mintApxUSD` by `depositUSDCStep_effect`, `mintApxUSDStep_effect`,
-`usdcLedgerEffect_depositUSDC`, and `usdcLedgerEffect_mintApxUSD`. The
-remaining redemption/RFQ/backstop mapping, fee-wallet treatment, and decimal
-scaling still belong to the deployment/SPECA model.
+concrete `Op` to one of the effects is now closed for `depositUSDC`,
+`mintApxUSD`, `redeemApxUSD`, `executeRFQRedemption`, `withdrawReserve`, and
+`poolRedeem` by `depositUSDCStep_effect`, `mintApxUSDStep_effect`,
+`redeemApxUSDStep_effect`, `executeRFQRedemptionStep_effect`,
+`withdrawReserveStep_effect`, `poolRedeemStep_effect` and their
+`usdcLedgerEffect_depositUSDC`, `usdcLedgerEffect_mintApxUSD`,
+`usdcLedgerEffect_redeemApxUSD`, `usdcLedgerEffect_executeRFQRedemption`,
+`usdcLedgerEffect_withdrawReserve`, and `usdcLedgerEffect_poolRedeem`
+theorems in `Apyx.lean` and `HolderValue.lean`. Regression §R24 pins the
+support rule with a counterparty that burns its own apxUSD while a different
+address receives the USDC. The receiver or requested user, rather than an
+executing counterparty, must be in the external support set.
+`catastrophicBackstop` remains outside this exact effect for two reasons: it
+distributes to many addresses, while the effect has a single-receiver payout
+arm, and its per-holder Nat division can leave a rounding remainder. Its
+conservation statement therefore belongs in a separate deployment/SPECA
+model; the zero-supply division corner must be handled there as well. The
+fee-wallet treatment and decimal scaling also remain there.
 
 The next internal boundary is `apxUSDFlow`: vault custody plus
 `outstandingApxUSD`. Projection lemmas
@@ -434,7 +447,9 @@ proves the per-address floor-divided credit, while
 `pro_rata_floor_underpays_witness` shows that those credits need not sum to the
 reserve even when a finite holder list accounts for the entire supply. A future
 model that claims "entire reserve" therefore needs an explicit remainder rule,
-not only a finite-support summation.
+not only a finite-support summation. The zero-supply case also needs an
+explicit policy, because Nat division credits every holder with zero while the
+modeled step still sets the reserve to zero.
 
 ## 6. Define reachability and prove an inductive invariant
 

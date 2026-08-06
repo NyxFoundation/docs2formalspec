@@ -1770,6 +1770,96 @@ private theorem step_executeRFQRedemption_some (s : State) (user : Address) (amo
             · exact ⟨by simp_all, by simp_all, by simp_all, by omega, by omega, by omega,
                 (Option.some.inj h).symm⟩
 
+/-- Public effect boundary for a successful apxUSD redemption. The payout is
+the exact fixed-point amount removed from the reserve and credited to caller.
+The theorem exposes the reserve bound needed by the external USDC ledger. -/
+theorem redeemApxUSDStep_effect (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.redeemApxUSD amount) caller = some s') :
+    s.globalPause = false ∧ s.whitelist caller = true ∧
+    amount ≤ s.apxUSDBal caller ∧
+    (amount * s.redemptionValue) / ray ≤ s.usdcReserve ∧
+    s.apxUSDMarketPrice < ray ∧
+    s' = emitEvent { burnApxUSD s caller amount with
+        usdcReserve := (burnApxUSD s caller amount).usdcReserve -
+          (amount * s.redemptionValue) / ray
+        usdcBal := fun a => if a = caller then
+          (burnApxUSD s caller amount).usdcBal a +
+            (amount * s.redemptionValue) / ray
+          else (burnApxUSD s caller amount).usdcBal a }
+      "Redeem" [caller, amount, (amount * s.redemptionValue) / ray] := by
+  exact step_redeemApxUSD_some s amount caller s' h
+
+/-- Public effect boundary for RFQ redemption. The USDC payout is credited to
+the requested user, not to the counterparty caller; the support premise must
+therefore contain `user`. -/
+theorem executeRFQRedemptionStep_effect
+    (s : State) (user : Address) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.executeRFQRedemption user amount) caller = some s') :
+    s.globalPause = false ∧ s.rfqCounterparties.contains caller = true ∧
+    s.whitelist user = true ∧ amount ≤ s.rfqRequests user ∧
+    amount ≤ s.apxUSDBal user ∧
+    (amount * s.redemptionValue) / ray ≤ s.usdcReserve ∧
+    s' = { burnApxUSD s user amount with
+        rfqRequests := fun a => if a = user then
+          (burnApxUSD s user amount).rfqRequests a - amount else
+          (burnApxUSD s user amount).rfqRequests a
+        usdcReserve := (burnApxUSD s user amount).usdcReserve -
+          (amount * s.redemptionValue) / ray
+        usdcBal := fun a => if a = user then
+          (burnApxUSD s user amount).usdcBal a +
+            (amount * s.redemptionValue) / ray
+          else (burnApxUSD s user amount).usdcBal a } := by
+  exact step_executeRFQRedemption_some s user amount caller s' h
+
+/-- Public effect boundary for the admin reserve withdrawal. This is a direct
+USDC payout; unlike redemption, it has no apxUSD burn or fixed-point amount. -/
+theorem withdrawReserveStep_effect
+    (s : State) (amount : Nat) (receiver caller : Address) (s' : State)
+    (h : step s (Op.withdrawReserve amount receiver) caller = some s') :
+    caller = s.admin ∧ amount ≤ s.usdcReserve ∧
+    s' = { s with
+      usdcReserve := s.usdcReserve - amount
+      usdcBal := fun a => if a = receiver then s.usdcBal a + amount else s.usdcBal a } := by
+  simp only [step] at h
+  split at h
+  · split at h
+    · exact absurd h (by simp)
+    · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+  · exact absurd h (by simp)
+
+/-- Public effect boundary for the on-chain pool redemption leg. The caller
+burns apxUSD, while the named receiver receives the exact fixed-point payout.
+The receiver, rather than the counterparty caller, is the address that must
+be included in an external USDC support set. -/
+theorem poolRedeemStep_effect
+    (s : State) (amount : Nat) (receiver : Address) (minOut : Nat)
+    (caller : Address) (s' : State)
+    (h : step s (Op.poolRedeem amount receiver minOut) caller = some s') :
+    (amount * s.redemptionValue) / ray ≤ s.usdcReserve ∧
+    s' = { burnApxUSD s caller amount with
+      usdcReserve := s.usdcReserve - (amount * s.redemptionValue) / ray
+      usdcBal := fun a => if a = receiver
+        then s.usdcBal a + (amount * s.redemptionValue) / ray
+        else s.usdcBal a } := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · exact absurd h (by simp)
+        · split at h
+          · exact absurd h (by simp)
+          · split at h
+            · exact absurd h (by simp)
+            · split at h
+              · exact absurd h (by simp)
+              · split at h
+                · exact absurd h (by simp)
+                · exact ⟨by omega, (Option.some.inj h).symm⟩
+
 /- ================= requirement theorems ================= -/
 
 /-- Helper: every operation other than the explicit share-minting (`lockApxUSD`) and

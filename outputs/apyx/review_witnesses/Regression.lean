@@ -1,4 +1,5 @@
 import D2fsSpecs.HolderValue
+import D2fsSpecs.Invariant
 
 /-!
 # Regression tests for the ERC-4626 pricing fix
@@ -812,5 +813,98 @@ example : UsdcLedgerConsistent usdcDepositPost [1] 100 := by
   exact usdcLedgerEffect_depositUSDC usdcDepositStart 50 1 usdcDepositPost [1]
     (by simp) (by simp [usdcDepositPost, execTrace, step, usdcDepositStart,
       usdcLedger0, default, emitEvent, mintApxUSD])
+
+/-! ## R21 — a fixed-point redemption enters the payout boundary
+
+This state makes the post-burn overcollateralization buffer non-decreasing,
+so the public redemption succeeds and pays 50 USDC from a 100-USDC reserve. -/
+
+def usdcRedeemStart : State :=
+  { (default : State) with
+      globalPause := false
+      whitelist := fun a => a = 1
+      apxUSDBal := fun a => if a = 1 then 50 else 0
+      totalSupply_apxUSD := 50
+      apxUSDMarketPrice := 0
+      redemptionValue := ray
+      totalCollateralValue := 50
+      usdcReserve := 100 }
+
+def usdcRedeemPost : State :=
+  execTrace usdcRedeemStart [(Op.redeemApxUSD 50, 1)]
+
+example : UsdcLedgerConsistent usdcRedeemPost [1] 100 := by
+  apply usdcLedgerConsistent_effect usdcRedeemStart usdcRedeemPost [1] 100
+    (by simp [UsdcLedgerConsistent, usdcRedeemStart, default, sumOver])
+  exact usdcLedgerEffect_redeemApxUSD usdcRedeemStart 50 1 usdcRedeemPost [1]
+    (by simp) (by simp [usdcRedeemPost, execTrace, step, usdcRedeemStart,
+      default, emitEvent, burnApxUSD, overcollateralizationBuffer, ray])
+
+/-! ## R22 — RFQ payout uses the requested user's support entry
+
+The counterparty is address 2, but the USDC credit belongs to user 1. The
+external support therefore contains user 1; adding only the counterparty would
+not justify the ledger coverage theorem. -/
+
+def usdcRfqStart : State :=
+  { (default : State) with
+      globalPause := false
+      rfqCounterparties := [2]
+      whitelist := fun a => a = 1
+      rfqRequests := fun a => if a = 1 then 50 else 0
+      apxUSDBal := fun a => if a = 1 then 50 else 0
+      totalSupply_apxUSD := 50
+      redemptionValue := ray
+      usdcReserve := 100 }
+
+def usdcRfqPost : State :=
+  execTrace usdcRfqStart [(Op.executeRFQRedemption 1 50, 2)]
+
+example : UsdcLedgerConsistent usdcRfqPost [1] 100 := by
+  apply usdcLedgerConsistent_effect usdcRfqStart usdcRfqPost [1] 100
+    (by simp [UsdcLedgerConsistent, usdcRfqStart, default, sumOver])
+  exact usdcLedgerEffect_executeRFQRedemption usdcRfqStart 1 50 2 usdcRfqPost [1]
+    (by simp) (by simp [usdcRfqPost, execTrace, step, usdcRfqStart,
+      default, burnApxUSD, ray])
+
+/-! ## R23 — the admin reserve payout uses the receiver's support entry -/
+
+def usdcWithdrawReserveStart : State :=
+  { (default : State) with usdcReserve := 100 }
+
+def usdcWithdrawReservePost : State :=
+  execTrace usdcWithdrawReserveStart [(Op.withdrawReserve 50 1, 0)]
+
+example : UsdcLedgerConsistent usdcWithdrawReservePost [1] 100 := by
+  apply usdcLedgerConsistent_effect usdcWithdrawReserveStart usdcWithdrawReservePost [1] 100
+    (by simp [UsdcLedgerConsistent, usdcWithdrawReserveStart, default, sumOver])
+  exact usdcLedgerEffect_withdrawReserve usdcWithdrawReserveStart 50 1 0
+    usdcWithdrawReservePost [1] (by simp)
+    (by simp [usdcWithdrawReservePost, execTrace, step, usdcWithdrawReserveStart,
+         default])
+
+/-! ## R24 — pool settlement pays the named receiver
+
+The approved counterparty (address 2) burns its own apxUSD, while address 1
+receives the USDC. The support set follows the USDC credit, not the caller. -/
+
+def usdcPoolRedeemStart : State :=
+  { (default : State) with
+      globalPause := false
+      rfqCounterparties := [2]
+      apxUSDBal := fun a => if a = 2 then 50 else 0
+      totalSupply_apxUSD := 50
+      redemptionValue := ray
+      usdcReserve := 100 }
+
+def usdcPoolRedeemPost : State :=
+  execTrace usdcPoolRedeemStart [(Op.poolRedeem 50 1 50, 2)]
+
+example : UsdcLedgerConsistent usdcPoolRedeemPost [1] 100 := by
+  apply usdcLedgerConsistent_effect usdcPoolRedeemStart usdcPoolRedeemPost [1] 100
+    (by simp [UsdcLedgerConsistent, usdcPoolRedeemStart, default, sumOver])
+  exact usdcLedgerEffect_poolRedeem usdcPoolRedeemStart 50 1 50 2 usdcPoolRedeemPost [1]
+    (by simp) (by simp [usdcPoolRedeemPost, execTrace, step, usdcPoolRedeemStart,
+      default, burnApxUSD, ray])
 
 end Apyx
