@@ -553,6 +553,19 @@ def holderValueAt (R : Nat) (s : State) (a : Address) : Nat :=
 theorem holderValueAt_live (s : State) (a : Address) :
     holderValueAt (computeExchangeRate s) s a = holderValue s a := rfl
 
+/-- The fixed-rate ledger is monotone in its pricing parameter. This is the
+bridge needed when a later state is priced at a lower rate than the rate used
+by an earlier vault-exit step; it is not a conservation law for a rate rise. -/
+theorem holderValueAt_mono_rate (s : State) (a : Address) (R₁ R₂ : Nat)
+    (h_rate : R₁ ≤ R₂) :
+    holderValueAt R₁ s a ≤ holderValueAt R₂ s a := by
+  unfold holderValueAt valueAt
+  have hshares : redeemAssets (s.apyUSDBal a) R₁ ≤
+      redeemAssets (s.apyUSDBal a) R₂ := by
+    unfold redeemAssets
+    exact Nat.div_le_div_right (Nat.mul_le_mul_left _ h_rate)
+  omega
+
 /-- A standard request is neutral at any externally chosen pricing rate. This
 is the fixed-rate form used by timed traces: advancing the clock may change
 the live exchange rate through vesting, but the request itself only moves

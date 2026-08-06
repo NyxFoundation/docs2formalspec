@@ -214,6 +214,9 @@ There is also a live-rate mixed sublanguage, `StableHolderValueOp`, whose
 trace theorem `holderValue_stable_trace_nonincreasing` composes
 `depositUSDC`, `redeemApxUSD`, and both unlock channels. It deliberately
 excludes vault exits and clock steps because those change the pricing context.
+The supporting lemma `holderValueAt_mono_rate` makes that boundary explicit:
+the fixed-rate measure is monotone when the pricing rate falls, but a rate rise
+is not free conservation and needs an additional economic argument.
 
 ### 5.3 Clock consistency
 
