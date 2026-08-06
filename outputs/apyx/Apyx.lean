@@ -369,12 +369,14 @@ def burnApyUSD (s : State) (fromAddr : Address) (shares : Nat) : State :=
   }
 
 def transferApxUSD (s : State) (fromAddr toAddr : Address) (amount : Nat) : State :=
-  { s with
-      apxUSDBal := fun a =>
-        if a = fromAddr then s.apxUSDBal a - amount
-        else if a = toAddr then s.apxUSDBal a + amount
-        else s.apxUSDBal a
-  }
+  if fromAddr = toAddr then s
+  else
+    { s with
+        apxUSDBal := fun a =>
+          if a = fromAddr then s.apxUSDBal a - amount
+          else if a = toAddr then s.apxUSDBal a + amount
+          else s.apxUSDBal a
+    }
 
 def mem (a : Address) (l : List Address) : Bool :=
   l.elem a

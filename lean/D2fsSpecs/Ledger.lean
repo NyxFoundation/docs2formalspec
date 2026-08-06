@@ -47,7 +47,8 @@ The per-writer programme is now complete for the current `Op` datatype. The
 `apxUSDLedgerConsistent_burn` prove exactly the support-inclusion / sum-delta
 facts for the two *primitive* single-address writers, applied in isolation;
 `apxUSDLedgerConsistent_transfer` covers the distinct-address primitive
-two-address writer and records the self-transfer model defect. The **second
+two-address writer. Self-transfer is handled as an ERC-20 no-op by the model.
+The **second
 slice** composes those primitives with the public transition
 function for the five simplest `step` branches:
 `apxUSDLedgerConsistent_basic_step` (see "Scoped public-step slice" below)
@@ -190,7 +191,8 @@ This primitive slice does not itself state a *universal* `step` theorem: its
 scope is deliberately limited to the two raw writers. The primitive
 `transferApxUSD` is now covered by
 `apxUSDLedgerConsistent_transfer`, with an explicit distinct-address
-hypothesis because the current writer mishandles self-transfer. The five
+hypothesis because the two-address sum proof needs separate source and
+destination positions. The five
 simplest `step` branches — the deposit-path mints and the three
 guard-protected single-burn paths, `requestUnlockStep` included — are now
 composed per branch in `apxUSDLedgerConsistent_basic_step` below (the
@@ -367,14 +369,11 @@ theorem apxUSDLedgerConsistent_burn (s : State) (fromAddr : Address) (amount : N
 
 `transferApxUSD` is a state writer used by the protocol model's transfer
 surface, but it is not currently one of the constructors of `Op`. It therefore
-gets its own theorem rather than being smuggled into the public-step theorem.
+gets its own theorems rather than being smuggled into the public-step theorem.
 The transfer preserves supply and moves one balance from `fromAddr` to
 `toAddr`; the proof below covers both an existing receiver and a fresh one.
 The balance bound is required because the writer uses truncated `Nat`
-subtraction. The distinct-address hypothesis is intentional: the current
-primitive checks `a = fromAddr` before `a = toAddr`, so a self-transfer is
-modelled as a burn rather than an ERC-20 no-op. That is a model defect to fix
-before claiming self-transfer semantics. -/
+subtraction. Self-transfer is handled separately as the ERC-20 no-op case. -/
 
 private theorem sumOver_update_transfer_mem (f : Address → Nat)
     (fromAddr toAddr : Address) (amount : Nat)
@@ -402,17 +401,23 @@ private theorem sumOver_update_transfer_mem (f : Address → Nat)
   rw [hsum]
   exact hadd.trans hsub
 
-/-- Regression fact for the transfer model: because the `fromAddr` test comes
-first, a self-transfer subtracts the amount instead of being a no-op. -/
-theorem transferApxUSD_self_balance (s : State) (a : Address) (amount : Nat) :
-    (transferApxUSD s a a amount).apxUSDBal a = s.apxUSDBal a - amount := by
+/-- Regression fact for the transfer model: self-transfer is a no-op. -/
+theorem transferApxUSD_self (s : State) (a : Address) (amount : Nat) :
+    transferApxUSD s a a amount = s := by
   simp [transferApxUSD]
 
+/-- A self-transfer also preserves the explicit ledger identity, by the
+no-op state theorem above. -/
+theorem apxUSDLedgerConsistent_transfer_self (s : State) (a : Address) (amount : Nat)
+    (h : ApxUSDLedgerConsistent s) :
+    ApxUSDLedgerConsistent (transferApxUSD s a a amount) := by
+  rw [transferApxUSD_self]
+  exact h
+
 /-- **Primitive transfer preserves the finite ledger identity.** The pre-state
-must satisfy `amount ≤ s.apxUSDBal fromAddr`, because `transferApxUSD` uses
-truncated subtraction, and the addresses must be distinct. The latter exposes
-a model defect: the current primitive's ordered condition makes self-transfer
-burn the amount instead of leaving balances unchanged. The theorem is
+must satisfy `amount ≤ s.apxUSDBal fromAddr`, because the distinct-address
+branch of `transferApxUSD` uses truncated subtraction, and the addresses must
+be distinct. Self-transfer is covered by `transferApxUSD_self`. The theorem is
 deliberately about the primitive writer: the current `Op` type has no public
 transfer constructor. -/
 theorem apxUSDLedgerConsistent_transfer (s : State) (fromAddr toAddr : Address)
@@ -421,6 +426,7 @@ theorem apxUSDLedgerConsistent_transfer (s : State) (fromAddr toAddr : Address)
     (h : ApxUSDLedgerConsistent s) :
     ApxUSDLedgerConsistent (transferApxUSD s fromAddr toAddr amount) := by
   obtain ⟨holders, hnd, hcov, hsum⟩ := h
+  simp only [transferApxUSD, if_neg hne]
   by_cases hzero : amount = 0
   · subst amount
     refine ⟨holders, hnd, ?_, ?_⟩
@@ -443,7 +449,7 @@ theorem apxUSDLedgerConsistent_transfer (s : State) (fromAddr toAddr : Address)
         by_cases haf : a = fromAddr
         · subst a
           refine hcov fromAddr (fun hz => ha ?_)
-          simp [transferApxUSD, hz]
+          simp [hz]
         · by_cases hat : a = toAddr
           · subst a
             exact hto

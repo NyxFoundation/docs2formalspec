@@ -144,7 +144,10 @@ initialization, `apxUSDLedgerConsistent_step` proves preservation for every
 current `Op`, and `LedgerCoveredOp`/`ledgerCoveredOp_all` make operation
 coverage reviewable. `ledgerGapWitness` and
 `wellFormed_solvent_not_imply_ledgerConsistent` intentionally record that the
-aggregate predicates alone do not imply this finite identity.
+aggregate predicates alone do not imply this finite identity. The primitive
+transfer layer covers both cases: `apxUSDLedgerConsistent_transfer` handles
+distinct addresses under the balance bound, while `transferApxUSD_self` and
+`apxUSDLedgerConsistent_transfer_self` make self-transfer an explicit no-op.
 
 ### 5.2 Registry consistency
 
