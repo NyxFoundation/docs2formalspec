@@ -319,6 +319,147 @@ private theorem sum_range_replace (n id amount : Nat) (f g : Nat → Nat)
         rw [hother n (by omega) (by omega)]
         omega
 
+/-- The top-up branch changes one existing standard record in place. This is
+the sum-level counterpart of `updateStandardUnlock_unlockRequests_eq`: once
+the target record is known to be the caller's record, the caller's finite
+position total grows by exactly the added amount. -/
+theorem stdPositions_updateStandardUnlock (s : State) (id : Nat) (owner : Address)
+    (oldAmount oldEnd addAmount : Nat)
+    (hid : id < s.nextUnlockId)
+    (hreq : s.unlockRequests id = some (owner, oldAmount, oldEnd)) :
+    stdPositions (updateStandardUnlock s id owner addAmount) owner
+      = stdPositions s owner + addAmount := by
+  unfold stdPositions
+  have hnext : (updateStandardUnlock s id owner addAmount).nextUnlockId = s.nextUnlockId := by
+    simp [updateStandardUnlock, hreq]
+  rw [hnext]
+  have htarget : stdAmt (updateStandardUnlock s id owner addAmount) owner id =
+      stdAmt s owner id + addAmount := by
+    simp [stdAmt, updateStandardUnlock, hreq]
+  apply sum_range_replace s.nextUnlockId id addAmount
+    (stdAmt (updateStandardUnlock s id owner addAmount) owner) (stdAmt s owner)
+    hid htarget
+  intro j hj hne
+  simp [stdAmt, updateStandardUnlock, hreq, hne]
+
+/-- A successful standard request is value-neutral for the caller on both
+    model branches: opening a fresh position and topping up the existing one.
+    `RegistryBounded` is required because the finite position ledger ranges
+    only over ids below `nextUnlockId`; without it, a pointer could name an
+    uncounted record and the top-up would not be represented in `stdPositions`.
+    No pointer-ownership invariant is needed here: the request branch itself
+    checks that the recorded owner equals the caller before it updates. -/
+theorem requestUnlock_holderValueAt_neutral (s : State) (amount : Nat) (caller : Address)
+    (s' : State)
+    (h_step : step s (Op.requestUnlock amount) caller = some s')
+    (h_registry : RegistryBounded s) :
+    holderValue s' caller = holderValue s caller := by
+  obtain ⟨_, h_bal, hs'⟩ := requestUnlockStep_effect s amount caller s' h_step
+  subst hs'
+  have h_unalloc_flex : s.flexibleUnlockRequests s.nextUnlockId = none :=
+    flex_unallocated_at_counter s h_registry
+  have h_create :
+      holderValue (createStandardUnlock (burnApxUSD s caller amount) caller amount) caller =
+        holderValue s caller := by
+    unfold holderValue
+    have hbal :
+        (createStandardUnlock (burnApxUSD s caller amount) caller amount).apxUSDBal caller =
+          s.apxUSDBal caller - amount := by
+      simp [createStandardUnlock, burnApxUSD]
+    have hstd :
+        stdPositions (createStandardUnlock (burnApxUSD s caller amount) caller amount) caller =
+          stdPositions s caller + amount := by
+      rw [stdPositions_createStandardUnlock, if_pos rfl]
+      congr 1
+    have hflex :
+        flexPositions (createStandardUnlock (burnApxUSD s caller amount) caller amount) caller =
+          flexPositions s caller := by
+      rw [flexPositions_createStandardUnlock (burnApxUSD s caller amount) caller amount caller
+        h_unalloc_flex]
+      rfl
+    have hshares :
+        (createStandardUnlock (burnApxUSD s caller amount) caller amount).apyUSDBal caller =
+          s.apyUSDBal caller := by simp [createStandardUnlock, burnApxUSD]
+    have husdc :
+        (createStandardUnlock (burnApxUSD s caller amount) caller amount).usdcBal caller =
+          s.usdcBal caller := by simp [createStandardUnlock, burnApxUSD]
+    have hrate :
+        computeExchangeRate (createStandardUnlock (burnApxUSD s caller amount) caller amount) =
+          computeExchangeRate s := by
+      simp [computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount,
+        createStandardUnlock, burnApxUSD]
+    rw [hbal, hstd, hflex, hshares, husdc, hrate]
+    omega
+  unfold requestUnlockStep
+  split
+  · rename_i id hptr
+    split
+    · rename_i recorded oldAmount oldEnd hentry
+      by_cases ho : recorded = caller
+      · subst recorded
+        rw [if_pos rfl]
+        have hptr' : s.unlockRequestId caller = some id := by
+          simpa [burnApxUSD] using hptr
+        have hentry' : s.unlockRequests id = some (caller, oldAmount, oldEnd) := by
+          simpa [burnApxUSD] using hentry
+        have hid : id < s.nextUnlockId := by
+          by_cases hgood : id < s.nextUnlockId
+          · exact hgood
+          · have hge : s.nextUnlockId ≤ id := by omega
+            have hnone := h_registry.1 id hge
+            rw [hentry'] at hnone
+            simp at hnone
+        have hstd := stdPositions_updateStandardUnlock (burnApxUSD s caller amount) id caller
+          oldAmount oldEnd amount hid hentry'
+        have hbal' :
+            (updateStandardUnlock (burnApxUSD s caller amount) id caller amount).apxUSDBal caller =
+              s.apxUSDBal caller - amount := by
+          simp [updateStandardUnlock, burnApxUSD, hentry']
+        have hflex' :
+            flexPositions (updateStandardUnlock (burnApxUSD s caller amount) id caller amount) caller =
+              flexPositions s caller := by
+          calc
+            flexPositions (updateStandardUnlock (burnApxUSD s caller amount) id caller amount) caller =
+                flexPositions (burnApxUSD s caller amount) caller := by
+                  have hnext :
+                      (updateStandardUnlock (burnApxUSD s caller amount) id caller amount).nextUnlockId =
+                        (burnApxUSD s caller amount).nextUnlockId := by
+                    simp [updateStandardUnlock, hentry]
+                  have hflexmap :
+                      (updateStandardUnlock (burnApxUSD s caller amount) id caller amount).flexibleUnlockRequests =
+                        (burnApxUSD s caller amount).flexibleUnlockRequests := by
+                    simp [updateStandardUnlock, hentry]
+                  unfold flexPositions
+                  rw [hnext]
+                  congr 1
+                  apply List.map_congr_left
+                  intro i hi
+                  simp [flexAmt, hflexmap]
+            _ = flexPositions s caller := by rfl
+        have hstd' :
+            stdPositions (updateStandardUnlock (burnApxUSD s caller amount) id caller amount) caller =
+              stdPositions s caller + amount := by
+          rw [hstd]
+          rfl
+        have hshares' :
+            (updateStandardUnlock (burnApxUSD s caller amount) id caller amount).apyUSDBal caller =
+              s.apyUSDBal caller := by simp [updateStandardUnlock, burnApxUSD, hentry']
+        have husdc' :
+            (updateStandardUnlock (burnApxUSD s caller amount) id caller amount).usdcBal caller =
+              s.usdcBal caller := by simp [updateStandardUnlock, burnApxUSD, hentry']
+        have hrate' :
+            computeExchangeRate (updateStandardUnlock (burnApxUSD s caller amount) id caller amount) =
+              computeExchangeRate s := by
+          simp [computeExchangeRate, totalAssets, vestedAmount, newlyVestedAmount,
+            updateStandardUnlock, burnApxUSD, hentry']
+        unfold holderValue
+        rw [hbal', hstd', hflex', hshares', husdc', hrate']
+        omega
+      · rw [if_neg ho]
+        exact h_create
+    · exact h_create
+  · exact h_create
+
 /-- Retiring an in-range standard position removes exactly its recorded amount
 from the owner's finite standard-position sum. Other positions, including any
 additional positions for the same owner, remain accounted for. -/

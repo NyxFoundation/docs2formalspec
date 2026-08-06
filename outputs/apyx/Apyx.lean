@@ -1514,6 +1514,15 @@ private theorem step_requestUnlock_some (s : State) (amount : Nat) (caller : Add
       · exact absurd h (by simp)
       · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
 
+/-- Public effect theorem for a successful standard unlock request. Keeping the
+    inversion of `step` here gives holder-centric proofs a stable boundary without
+    repeating the operation dispatcher decomposition. -/
+theorem requestUnlockStep_effect (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.requestUnlock amount) caller = some s') :
+    s.globalPause = false ∧ amount ≤ s.apxUSDBal caller ∧
+    s' = requestUnlockStep s caller amount := by
+  exact step_requestUnlock_some s amount caller s' h
+
 private theorem step_flexibleRequestUnlock_some (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.flexibleRequestUnlock amount) caller = some s') :
     s.globalPause = false ∧ amount ≤ s.apxUSDBal caller ∧

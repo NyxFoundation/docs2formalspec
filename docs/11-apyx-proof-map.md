@@ -175,7 +175,15 @@ explicit: under the request's balance guard, the caller's burned balance plus
 the amount in its tracked standard position is unchanged. The measure returns
 zero for a missing or mismatched pointer, so this theorem does not silently
 assume a canonical registry. It does not yet account for all pending positions
-or a finite liability ledger. The claim-side local boundary
+or a finite liability ledger. A stronger holder-facing request theorem now
+covers both fresh creation and in-place top-up: `requestUnlockStep_effect`
+exposes the successful transition, `stdPositions_updateStandardUnlock`
+accounts for the one changed finite-sum member, and
+`requestUnlock_holderValueAt_neutral` proves value neutrality under
+`RegistryBounded`. `OwnerPointerSound` is deliberately not required there:
+the top-up branch checks the recorded owner before updating, while
+`RegistryBounded` is the condition that prevents an out-of-range record from
+being omitted by the finite sum. The claim-side local boundary
 is now explicit too: `claimUnlockStep_effect` exposes the exact successful
 post-state, `stdPositions_retireStandardUnlock` removes an in-range recorded
 amount from the finite position sum, and `claimUnlock_holderValueAt_neutral`
@@ -595,7 +603,11 @@ but the proof-map claim now points to the exact theorem. The local accounting
 identity `requestUnlockStep_pending_conservation` is the next layer: it requires
 the same balance guard enforced by the transition and covers both fresh and
 top-up requests, including malformed pointer states. It stops at the request
-boundary. The matching claim-side layer is now `claimUnlock_holderValueAt_neutral`:
+boundary. The complete holder-facing request law is
+`requestUnlock_holderValueAt_neutral`: it covers both branches under
+`RegistryBounded`, with `requestUnlockStep_effect` and
+`stdPositions_updateStandardUnlock` providing the transition and ledger
+steps. The matching claim-side layer is now `claimUnlock_holderValueAt_neutral`:
 given an in-range position and a successful claim, it proves that the owner loses
 the position amount while receiving the same apxUSD amount. A complete
 request-to-claim trace still needs an inductive finite liability ledger and a
