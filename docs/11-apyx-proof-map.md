@@ -169,7 +169,13 @@ The concrete registry layer is `RegistryWellIndexed`, together with
 `registryWellIndexed_reachable`; the constructor-specific lemmas cover fresh
 allocation, top-ups, claims, and vault exits. Registry reachability is kept
 separate from the stricter `ProtocolReach` relation used by the composite
-invariant.
+invariant. At the request boundary, `standardUnlockAmount` and
+`requestUnlockStep_pending_conservation` make the local liability movement
+explicit: under the request's balance guard, the caller's burned balance plus
+the amount in its tracked standard position is unchanged. The measure returns
+zero for a missing or mismatched pointer, so this theorem does not silently
+assume a canonical registry. It does not yet account for a later claim, all
+pending positions, or a finite liability ledger.
 
 ### 5.3 Clock consistency
 
@@ -569,7 +575,12 @@ The standard redemption request is one concrete instance of this pattern:
 delta and splits the registry postcondition into the fresh-position and
 top-up cases. The weaker existential theorem
 `requestUnlock_backs_claim_by_burn` remains as a compatibility projection,
-but the proof-map claim now points to the exact theorem.
+but the proof-map claim now points to the exact theorem. The local accounting
+identity `requestUnlockStep_pending_conservation` is the next layer: it requires
+the same balance guard enforced by the transition and covers both fresh and
+top-up requests, including malformed pointer states. It stops at the request
+boundary; a claim-trace theorem still needs an explicit finite position ledger
+and a proof that the claim consumes the corresponding liability exactly.
 
 The global layer is where the protocol-level claims belong:
 

@@ -440,6 +440,18 @@ def requestUnlockStep (s : State) (caller : Address) (amount : Nat) : State :=
     | none => createStandardUnlock (burnApxUSD s caller amount) caller amount
   | none => createStandardUnlock (burnApxUSD s caller amount) caller amount
 
+/-- The amount represented by the caller's tracked standard unlock position.
+This is deliberately a local measure: it follows the per-owner pointer and
+returns zero for a missing or mismatched registry entry. It is the liability
+that a standard request moves the burned apxUSD into. -/
+def standardUnlockAmount (s : State) (owner : Address) : Nat :=
+  match s.unlockRequestId owner with
+  | some id =>
+      match s.unlockRequests id with
+      | some (recordedOwner, amount, _) => if recordedOwner = owner then amount else 0
+      | none => 0
+  | none => 0
+
 /-- Uniform frame lemmas: `requestUnlockStep` touches only the caller's burned apxUSD
 (`apxUSDBal`, `totalSupply_apxUSD`) and the standard-unlock registry; every other State
 field is left exactly as it was, regardless of which branch (create / top-up) is taken. -/
@@ -617,6 +629,46 @@ theorem requestUnlockStep_exact_position (s : State) (caller amount : Nat) :
       simp [createStandardUnlock, burnApxUSD]
   · right
     simp [createStandardUnlock, burnApxUSD]
+
+/-- A standard request conserves the caller's accounted value at the request
+boundary: burning `amount` from the caller's apxUSD balance adds the same
+amount to the caller's tracked standard-unlock position. The balance bound is
+the transition guard needed because `burnApxUSD` uses truncated `Nat` subtraction.
+The theorem is intentionally about the request boundary only; claim timing and
+the finite ledger of pending positions remain separate obligations. -/
+theorem requestUnlockStep_pending_conservation (s : State) (caller amount : Nat)
+    (hbalance : amount ≤ s.apxUSDBal caller) :
+    s.apxUSDBal caller + standardUnlockAmount s caller =
+      (requestUnlockStep s caller amount).apxUSDBal caller +
+        standardUnlockAmount (requestUnlockStep s caller amount) caller := by
+  unfold requestUnlockStep
+  split
+  · rename_i id hptr
+    split
+    · rename_i recorded oldAmount oldEnd hentry
+      have hptr' : s.unlockRequestId caller = some id := by
+        simpa [burnApxUSD] using hptr
+      have hentry' : s.unlockRequests id = some (recorded, oldAmount, oldEnd) := by
+        simpa [burnApxUSD] using hentry
+      by_cases ho : recorded = caller
+      · simp [standardUnlockAmount, updateStandardUnlock, burnApxUSD,
+          hptr', hentry', ho]
+        omega
+      · simp [standardUnlockAmount, createStandardUnlock, burnApxUSD,
+          hptr', hentry', ho]
+        omega
+    · rename_i hentry
+      have hptr' : s.unlockRequestId caller = some id := by
+        simpa [burnApxUSD] using hptr
+      have hentry' : s.unlockRequests id = none := by
+        simpa [burnApxUSD] using hentry
+      simp [standardUnlockAmount, createStandardUnlock, burnApxUSD, hptr', hentry']
+      omega
+  · rename_i hptr
+    have hptr' : s.unlockRequestId caller = none := by
+      simpa [burnApxUSD] using hptr
+    simp [standardUnlockAmount, createStandardUnlock, burnApxUSD, hptr']
+    omega
 
 /-- When the caller has no pending standard position, `requestUnlockStep` takes the
 create branch and coincides exactly with the fresh-position `createStandardUnlock` path —
