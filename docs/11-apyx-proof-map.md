@@ -300,7 +300,11 @@ flow equation, and `apxUSDFlow_trace` lifts it to `execTrace`. Flexible-claim
 fees are accumulated separately by `apxUSDFlowStepFee`, because the current
 state has no fee-wallet balance. This closes an internal unlock-flow trace,
 not the mixed trace containing vault exits, live vesting inflows, or the
-unmodeled USDC and fee-wallet ledgers.
+unmodeled USDC and fee-wallet ledgers. The model/spec boundary is itself
+formalized in `DeploymentFees.lean`: `model_undercharges_withdraw`,
+`vault_leak_linear`, `liveCurve_bounds_contradict_the_corpus`, and
+`both_fees_bite` show why adding a fee-wallet conservation claim without first
+choosing the deployment-faithful fee specification would be unsound.
 
 ### 5.2 Registry consistency
 
