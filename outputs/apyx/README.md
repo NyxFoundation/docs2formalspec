@@ -229,7 +229,10 @@ The non-custodial headline (`user_assets_immune_to_total_key_compromise`) is the
 operation credits apxUSD without an equal USDC payment or the settlement of the recipient's own
 pre-existing locked position (`apxUSD_credit_is_backed`). The trace form is **open**, and the gap is
 exploitable in-model — §9.3 gives a five-step admin+oracle sequence in which every step satisfies the
-theorem and the sequence extracts 100 USDC.
+theorem and the sequence extracts 100 USDC. A narrower trace slice is now closed by
+`paid_mint_trace_balance_bound`: traces containing only the two paid-mint operations cannot raise a
+holder's balance beyond its initial balance plus attempted USDC input. This does not cover unlock
+claims, flexible claims, or mixed traces, so it is not the missing full trace theorem.
 
 Supporting theorems include the exact per-role effect frames (`admin_frame`, `oracle_frame`,
 `yield_distributor_frame`, and the `step_*_exact` family), the non-custodial lemmas
@@ -293,6 +296,7 @@ extract value using only legitimate operations.
 | No peg-spread round trip | The arbitrage mint (needs price > $1) and arbitrage redeem (needs price < $1) require opposite price regimes, so no single state enables both | `no_same_state_arbitrage_round_trip` |
 | Redemption request is backed | A redemption request burns **exactly** the requested apxUSD and leaves the caller a tracked position with a reset cooldown. A fresh position records exactly that amount; a top-up records the previous position amount plus that amount | `requestUnlock_backs_claim_by_burn`, `requestUnlock_backs_claim_by_burn_exact`, `requestUnlockStep_exact_position` |
 | No free extraction (trace) | Over arbitrary traces, no address's fixed-rate holdings can increase — but the trace must avoid **nine** operation families: `mintApxUSD`, `lockApxUSD`, `withdraw`, `redeem`, `claimUnlock`, `flexibleClaimUnlock`, `catastrophicBackstop`, `withdrawReserve`, `poolRedeem`. That excludes the settlement legs of the redemption channel, so it covers the request/RFQ/arbitrage-redeem operations only. The live-rate closure is also open (§6.2) | `caller_net_nonpositive_trace` |
+| Paid-mint trace bound | On traces containing only `depositUSDC` and `mintApxUSD`, a holder's final apxUSD balance is at most its initial balance plus the total attempted USDC input. Failed attempts count in the bound; unlock claims and other credit channels are excluded | `paid_mint_trace_balance_bound` |
 | Share-price monotonicity | A new deposit never lowers the **live** per-share price, and crediting yield preserves it (raising it only as yield vests over time) — the ERC-4626 dilution invariant | `exchange_rate_monotone_deposit`, `exchange_rate_monotone_creditYield`, `req_exchange_rate_non_decreasing` |
 | Vault pricing is live | Conversions and every `step` branch price off `computeExchangeRate`, never off a stored field — matching the deployment, which has no stored rate | §9.3, `Regression.lean` §R1/R2 |
 

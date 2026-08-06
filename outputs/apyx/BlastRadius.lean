@@ -2299,6 +2299,81 @@ theorem apxUSD_credit_is_backed (s : State) (op : Op) (caller : Address) (s' : S
         | (cases Option.some.inj h_step; exact absurd h_inc (Nat.lt_irrefl _))
         | exact absurd h_step (by simp)
 
+/-! ## Paid-mint trace slice
+
+The full trace form of `apxUSD_credit_is_backed` must account for unlock
+positions settled later.  That is a genuine ledger-design question, not a
+missing induction tactic.  The smaller paid-mint fragment is independent of
+that question: a trace containing only `depositUSDC` and `mintApxUSD` cannot
+raise a holder's balance by more than the USDC amounts attempted by those
+operations. Failed calls are counted too, so the result is deliberately a
+conservative upper bound. -/
+
+/-- The only operations admitted by the paid-mint trace slice. -/
+def PaidMintOp (op : Op) : Prop :=
+  (∃ amount, op = Op.depositUSDC amount) ∨
+  (∃ to amount, op = Op.mintApxUSD to amount)
+
+/-- The USDC amount attempted by one paid-mint operation. -/
+def paidMintAmount : Op → Nat
+  | Op.depositUSDC amount => amount
+  | Op.mintApxUSD _ amount => amount
+  | _ => 0
+
+/-- Sum of attempted paid-mint amounts in a trace. -/
+def tracePaidMintAmount : List (Op × Address) → Nat
+  | [] => 0
+  | (op, _) :: σ => paidMintAmount op + tracePaidMintAmount σ
+
+private theorem paidMint_step_balance_bound (s : State) (op : Op) (caller : Address)
+    (s' : State) (a : Address) (h_op : PaidMintOp op)
+    (h_step : step s op caller = some s') :
+    s'.apxUSDBal a ≤ s.apxUSDBal a + paidMintAmount op := by
+  rcases h_op with ⟨amount, rfl⟩ | ⟨to, amount, rfl⟩
+  · obtain ⟨_, _, _, _, hs'⟩ := inv_depositUSDC s amount caller s' h_step
+    subst s'
+    by_cases h : a = caller <;>
+      simp [emitEvent, mintApxUSD, paidMintAmount, h] <;> omega
+  · obtain ⟨_, _, _, _, _, _, hs'⟩ := inv_mintApxUSD s to amount caller s' h_step
+    subst s'
+    by_cases h : a = to <;>
+      simp [emitEvent, mintApxUSD, paidMintAmount, h] <;> omega
+
+/-- **Paid-mint trace bound.** On a trace made only of `depositUSDC` and
+`mintApxUSD`, a holder's final apxUSD balance is bounded by the initial balance
+plus the total USDC amount attempted by the trace. The theorem includes failed
+attempts in the counter, so it does not claim exact conservation. Unlock claims,
+redemptions, and other credit channels are intentionally outside this slice. -/
+theorem paid_mint_trace_balance_bound (s : State) (σ : List (Op × Address))
+    (a : Address) (h_ops : ∀ p ∈ σ, PaidMintOp p.1) :
+    (execTrace s σ).apxUSDBal a ≤
+      s.apxUSDBal a + tracePaidMintAmount σ := by
+  induction σ generalizing s with
+  | nil => simp [execTrace, tracePaidMintAmount]
+  | cons p σ ih =>
+      obtain ⟨op, caller⟩ := p
+      have h_op : PaidMintOp op := h_ops (op, caller) List.mem_cons_self
+      have h_tail : ∀ q ∈ σ, PaidMintOp q.1 :=
+        fun q hq => h_ops q (List.mem_cons_of_mem _ hq)
+      simp only [execTrace]
+      cases h_step : step s op caller with
+      | none =>
+          have htail := ih s h_tail
+          simpa [tracePaidMintAmount] using
+            (Nat.le_trans htail (by omega :
+              s.apxUSDBal a + tracePaidMintAmount σ ≤
+                s.apxUSDBal a + (paidMintAmount op + tracePaidMintAmount σ)))
+      | some s' =>
+          have hlocal := paidMint_step_balance_bound s op caller s' a h_op h_step
+          have htail := ih s' h_tail
+          calc
+            (execTrace s' σ).apxUSDBal a ≤
+                s'.apxUSDBal a + tracePaidMintAmount σ := htail
+            _ ≤ (s.apxUSDBal a + paidMintAmount op) + tracePaidMintAmount σ :=
+              Nat.add_le_add_right hlocal _
+            _ = s.apxUSDBal a + tracePaidMintAmount ((op, caller) :: σ) := by
+              simp [tracePaidMintAmount, Nat.add_assoc, Nat.add_left_comm, Nat.add_comm]
+
 /-! ## T7 `rate_limit_linear_bound` — a per-window outflow cap makes damage linear in time
 
 **DESIGN theorem** (docs/05-blast-radius.md, Tier 3): this section models the defence

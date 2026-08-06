@@ -314,6 +314,10 @@ solvency/invariant preservation; `holder_value_*` and `netDelta` in
 `HolderValue.lean` for per-holder value; the rounding lemmas named in §5.4;
 `pro_rata_floor_underpays_witness` in `SpecDefects.lean` for the fact that a
 floor-divided pro-rata payout does not automatically conserve a reserve;
+`paid_mint_trace_balance_bound` in `BlastRadius.lean` for the narrower trace
+slice in which only paid mint operations occur. It bounds a holder's final
+apxUSD balance by its initial balance plus attempted USDC input; unlock claims
+and their position ledger remain a separate open accounting problem.
 `redemptionValue_frame`, `redemption_price_writers`, and
 `admin_alone_moves_redemption_price` for price writers; `reserve_outflow_only_via_redemption`
 and the buffer theorems for non-depletion boundaries; and
