@@ -26,6 +26,37 @@ def RegistryDisjoint (s : State) : Prop :=
 def RegistryWellIndexed (s : State) : Prop :=
   RegistryBounded s ∧ OwnerPointerSound s ∧ RegistryDisjoint s
 
+/-- Equality of the five state projections read by `RegistryWellIndexed`. -/
+def RegistryFrame (s s' : State) : Prop :=
+  s'.nextUnlockId = s.nextUnlockId ∧
+  s'.unlockRequestId = s.unlockRequestId ∧
+  s'.unlockRequests = s.unlockRequests ∧
+  s'.flexibleUnlockRequests = s.flexibleUnlockRequests ∧
+  s'.unlockTokenOwner = s.unlockTokenOwner
+
+theorem registryWellIndexed_of_frame (s s' : State) (hframe : RegistryFrame s s')
+    (h : RegistryWellIndexed s) : RegistryWellIndexed s' := by
+  rcases h with ⟨⟨hstd, hflex⟩, hp, hd⟩
+  rcases hframe with ⟨hnext, hptr, hstdReq, hflexReq, htoken⟩
+  refine ⟨?_, ?_, ?_⟩
+  · constructor
+    · intro i hi
+      have hi' : s.nextUnlockId ≤ i := by simpa [hnext] using hi
+      rw [hstdReq]
+      exact hstd i hi'
+    · intro i hi
+      have hi' : s.nextUnlockId ≤ i := by simpa [hnext] using hi
+      rw [hflexReq]
+      exact hflex i hi'
+  · intro a i hi
+    have hi' : s.unlockRequestId a = some i := by simpa [hptr] using hi
+    obtain ⟨howner, amount, cooldownEnd, hentry⟩ := hp a i hi'
+    exact ⟨by simpa [htoken] using howner, amount, cooldownEnd, by
+      simpa [hstdReq] using hentry⟩
+  · intro i
+    rw [hstdReq, hflexReq]
+    exact hd i
+
 theorem registryDisjoint_default : RegistryDisjoint (default : State) := by
   intro i
   exact Or.inl rfl
@@ -443,5 +474,34 @@ theorem registryWellIndexed_flexibleRequestUnlock_step (s : State) (amount : Nat
   rw [hpost]
   exact registryWellIndexed_createFlexibleUnlock _ _ _
     (registryWellIndexed_burnApxUSD s caller amount h)
+
+/-- Operations outside the six registry-writing branches leave all registry projections alone.
+The two vault exit branches are intentionally excluded: they allocate a new standard position. -/
+def RegistryStaticOp (op : Op) : Prop :=
+  (∀ n, op ≠ Op.requestUnlock n) ∧
+  (∀ n, op ≠ Op.claimUnlock n) ∧
+  (∀ n r, op ≠ Op.withdraw n r) ∧
+  (∀ n r, op ≠ Op.redeem n r) ∧
+  (∀ n, op ≠ Op.flexibleRequestUnlock n) ∧
+  (∀ n, op ≠ Op.flexibleClaimUnlock n)
+
+theorem registryWellIndexed_static_step (s : State) (op : Op) (caller : Address) (s' : State)
+    (h : RegistryWellIndexed s) (hop : RegistryStaticOp op)
+    (hstep : step s op caller = some s') :
+    RegistryWellIndexed s' := by
+  cases op
+  case requestUnlock n => exact False.elim (hop.1 n rfl)
+  case claimUnlock n => exact False.elim (hop.2.1 n rfl)
+  case withdraw n r => exact False.elim (hop.2.2.1 n r rfl)
+  case redeem n r => exact False.elim (hop.2.2.2.1 n r rfl)
+  case flexibleRequestUnlock n => exact False.elim (hop.2.2.2.2.1 n rfl)
+  case flexibleClaimUnlock n => exact False.elim (hop.2.2.2.2.2 n rfl)
+  all_goals
+    simp only [step] at hstep
+    (repeat' split at hstep) <;>
+      first
+        | cases Option.some.inj hstep
+          exact registryWellIndexed_of_frame _ _ ⟨rfl, rfl, rfl, rfl, rfl⟩ h
+        | exact absurd hstep (by simp)
 
 end Apyx
