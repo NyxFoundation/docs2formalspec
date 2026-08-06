@@ -186,16 +186,17 @@ the two primitive writers, applied in isolation:
   guard of exactly this shape, but that guard is **not** imported here — the
   hypothesis must be discharged by the caller.
 
-Still uncovered, which is why no *universal* `step`-preservation theorem is
-stated: only the final all-branch composition remains. The primitive `transferApxUSD`
-is now covered by
+This primitive slice does not itself state a *universal* `step` theorem: its
+scope is deliberately limited to the two raw writers. The primitive
+`transferApxUSD` is now covered by
 `apxUSDLedgerConsistent_transfer`, with an explicit distinct-address
 hypothesis because the current writer mishandles self-transfer. The five
 simplest `step` branches — the deposit-path mints and the three
 guard-protected single-burn paths, `requestUnlockStep` included — are now
 composed per branch in `apxUSDLedgerConsistent_basic_step` below (the
-`solvency_step` scoping discipline); extending its explicit disjunction
-branch-by-branch is the remaining work.
+`solvency_step` scoping discipline). The remaining public branches are proved
+by their scoped theorems and composed later by `LedgerCoveredOp` and
+`apxUSDLedgerConsistent_step`.
 
 The `sumOver_*` helpers below are dependency-free `List` lemmas (the project
 carries no Mathlib): congruence on members, and the two single-address
@@ -328,7 +329,8 @@ balance is `0`, forcing `amount = 0` and a no-op burn. Without the bound the
 identity genuinely fails — truncated subtraction would zero the balance while
 the supply drops by the full `amount`. Every burning `step` branch carries a
 guard of exactly this shape; wiring those guards to this hypothesis is a
-future slice. Second half of the first balance-writer slice. -/
+the public-step inversion lemmas below. Second half of the first
+balance-writer slice. -/
 theorem apxUSDLedgerConsistent_burn (s : State) (fromAddr : Address) (amount : Nat)
     (hle : amount ≤ s.apxUSDBal fromAddr)
     (h : ApxUSDLedgerConsistent s) :
@@ -520,8 +522,10 @@ nothing is assumed beyond `ApxUSDLedgerConsistent s` and `step … = some s'`.
 takes an explicit disjunction naming its five operations rather than claiming
 all of `Op`. The balance-writing branches have separate theorems below, and
 the non-writing branches are covered by `apxUSDLedgerConsistent_frame_step`.
-Extending the explicit scope to include every branch — the `solvency_step`
-scoping discipline — is the remaining work named in the module docstring.
+The all-operation composition below combines these scoped facts into a
+universal theorem for the current `Op`; keeping this theorem scoped makes the
+local proof dependencies visible rather than hiding them behind a giant case
+split.
 
 The `step_*_ledgerProj` inversion lemmas are local re-derivations trimmed to
 the two projections `ApxUSDLedgerConsistent` reads: the full inversion lemmas
@@ -651,7 +655,8 @@ A successful `step` of one of the five simple apxUSD balance paths —
 `apxUSDLedgerConsistent_mint`; the three burn paths discharge
 `apxUSDLedgerConsistent_burn`'s underflow bound from their own branch guard,
 surfaced by the inversion lemmas above. **Not** a claim about all of `Op` —
-see the section docstring for the branches that remain open. -/
+the universal current-operation theorem is `apxUSDLedgerConsistent_step` below.
+-/
 theorem apxUSDLedgerConsistent_basic_step (s s' : State) (op : Op) (caller : Address)
     (h : ApxUSDLedgerConsistent s)
     (hstep : step s op caller = some s')
