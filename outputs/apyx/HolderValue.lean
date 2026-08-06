@@ -566,6 +566,21 @@ theorem holderValueAt_mono_rate (s : State) (a : Address) (R₁ R₂ : Nat)
     exact Nat.div_le_div_right (Nat.mul_le_mul_left _ h_rate)
   omega
 
+/-- The signed change in a holder's apyUSD component caused solely by changing
+the pricing rate from `R₁` to `R₂`. This is deliberately separate from the
+effect of a protocol operation. -/
+def holderRateDelta (s : State) (a : Address) (R₁ R₂ : Nat) : Int :=
+  (redeemAssets (s.apyUSDBal a) R₂ : Int) -
+    (redeemAssets (s.apyUSDBal a) R₁ : Int)
+
+/-- Changing only the pricing rate changes the complete fixed-rate ledger by
+exactly `holderRateDelta`; all balance and pending-position terms cancel. -/
+theorem holderValueAt_rateDelta (s : State) (a : Address) (R₁ R₂ : Nat) :
+    (holderValueAt R₂ s a : Int) - (holderValueAt R₁ s a : Int) =
+      holderRateDelta s a R₁ R₂ := by
+  unfold holderValueAt holderRateDelta valueAt
+  omega
+
 /-- A standard request is neutral at any externally chosen pricing rate. This
 is the fixed-rate form used by timed traces: advancing the clock may change
 the live exchange rate through vesting, but the request itself only moves
@@ -2393,6 +2408,22 @@ def RateAwareSideCondition (s : State) : List (Op × Address) → Prop
       s.redemptionValue ≤ ray ∧
         RateAwareSideCondition (traceNextState s p) σ
 
+/-! Rate adjustments between consecutive execution prices. For a singleton
+trace this records the final live-rate revaluation; for a longer trace it
+records the revaluation from one operation's execution rate to the next
+operation's execution rate. -/
+def traceRateAdjustments (s : State) (a : Address) : List (Op × Address) → List Int
+  | [] => []
+  | [p] =>
+      [holderRateDelta (traceNextState s p) a
+        (holderValueExecutionRate s p.1)
+        (computeExchangeRate (traceNextState s p))]
+  | p :: q :: σ =>
+      holderRateDelta (traceNextState s p) a
+        (holderValueExecutionRate s p.1)
+        (holderValueExecutionRate (traceNextState s p) q.1) ::
+        traceRateAdjustments (traceNextState s p) a (q :: σ)
+
 private theorem holderValueAt_executionRate_step
     (s : State) (op : Op) (caller : Address) (s' : State) (a : Address)
     (h_op : RateAwareHolderValueOp op) (h_caller : caller = a)
@@ -2429,6 +2460,146 @@ private theorem holderValueAt_executionRate_step
   · subst caller
     exact holder_value_redeem s shares receiver a s' h_step
       (flex_unallocated_at_counter s h_registry.1)
+
+/-- One successful step can be separated into two effects: the operation's
+fixed-rate holder-value bound, plus the signed revaluation caused by moving
+from that execution rate to the post-state live rate. This bridge does not
+assume the rate moves downward. -/
+theorem holderValueAt_executionRate_step_with_rateDelta
+    (s : State) (op : Op) (caller : Address) (s' : State) (a : Address)
+    (h_op : RateAwareHolderValueOp op) (h_caller : caller = a)
+    (h_registry : RegistryWellIndexed s) (h_price : s.redemptionValue ≤ ray)
+    (h_step : step s op caller = some s') :
+    (holderValueAt (computeExchangeRate s') s' a : Int) ≤
+      (holderValueAt (holderValueExecutionRate s op) s a : Int) +
+        holderRateDelta s' a (holderValueExecutionRate s op) (computeExchangeRate s') := by
+  have hlocal := holderValueAt_executionRate_step s op caller s' a h_op h_caller
+    h_registry h_price h_step
+  have hlocal_int :
+      (holderValueAt (holderValueExecutionRate s op) s' a : Int) ≤
+        (holderValueAt (holderValueExecutionRate s op) s a : Int) :=
+    Int.ofNat_le.mpr hlocal
+  have hdelta := holderValueAt_rateDelta s' a (holderValueExecutionRate s op)
+    (computeExchangeRate s')
+  omega
+
+set_option maxRecDepth 10000 in
+theorem holderValueAt_rateAware_trace_rateAdjusted
+    (s : State) (σ : List (Op × Address)) (a : Address) (R₀ : Nat)
+    (h_registry : RegistryWellIndexed s)
+    (h_safe : RateAwareSideCondition s σ)
+    (h_own : ∀ p ∈ σ, p.2 = a)
+    (h_ops : ∀ p ∈ σ, RateAwareHolderValueOp p.1)
+    (h_nonempty : σ ≠ [])
+    (h_rate : match σ with
+      | [] => True
+      | p :: _ => R₀ = holderValueExecutionRate s p.1) :
+    (holderValueAt (computeExchangeRate (execTrace s σ)) (execTrace s σ) a : Int) ≤
+      (holderValueAt R₀ s a : Int) + (traceRateAdjustments s a σ).sum := by
+  induction σ generalizing s R₀ with
+  | nil => exact False.elim (h_nonempty rfl)
+  | cons p σ ih =>
+      obtain ⟨op, caller⟩ := p
+      have hcaller : caller = a := h_own (op, caller) List.mem_cons_self
+      have hop : RateAwareHolderValueOp op := h_ops (op, caller) List.mem_cons_self
+      have htail_own : ∀ q ∈ σ, q.2 = a :=
+        fun q hq => h_own q (List.mem_cons_of_mem _ hq)
+      have htail_ops : ∀ q ∈ σ, RateAwareHolderValueOp q.1 :=
+        fun q hq => h_ops q (List.mem_cons_of_mem _ hq)
+      have hrate : R₀ = holderValueExecutionRate s op := by simpa using h_rate
+      subst R₀
+      cases σ with
+      | nil =>
+          cases hstep : step s op caller with
+          | none =>
+              have hdelta := holderValueAt_rateDelta s a
+                (holderValueExecutionRate s op) (computeExchangeRate s)
+              have hbound :
+                  (holderValueAt (computeExchangeRate s) s a : Int) ≤
+                    (holderValueAt (holderValueExecutionRate s op) s a : Int) +
+                      holderRateDelta s a (holderValueExecutionRate s op)
+                        (computeExchangeRate s) := by
+                omega
+              simpa [execTrace, traceNextState, traceRateAdjustments, hstep] using hbound
+          | some s1 =>
+              have hbound := holderValueAt_executionRate_step_with_rateDelta s op caller s1 a
+                hop hcaller h_registry h_safe.1 hstep
+              simpa [execTrace, traceNextState, traceRateAdjustments, hstep] using hbound
+      | cons q σ =>
+          cases hstep : step s op caller with
+          | none =>
+              have hsafe_tail : RateAwareSideCondition s (q :: σ) := by
+                simpa [traceNextState, hstep] using h_safe.2
+              have hbound := ih s (holderValueExecutionRate s q.1) h_registry hsafe_tail
+                htail_own htail_ops (by simp) rfl
+              have hdelta := holderValueAt_rateDelta s a
+                (holderValueExecutionRate s op) (holderValueExecutionRate s q.1)
+              have hcombined :
+                  (holderValueAt (computeExchangeRate (execTrace s (q :: σ)))
+                      (execTrace s (q :: σ)) a : Int) ≤
+                    (holderValueAt (holderValueExecutionRate s op) s a : Int) +
+                      (holderRateDelta s a (holderValueExecutionRate s op)
+                        (holderValueExecutionRate s q.1) +
+                      (traceRateAdjustments s a (q :: σ)).sum) := by
+                omega
+              simpa [execTrace, traceNextState, traceRateAdjustments, hstep] using hcombined
+          | some s1 =>
+              have hsafe_tail : RateAwareSideCondition s1 (q :: σ) := by
+                simpa [traceNextState, hstep] using h_safe.2
+              have h_registry1 : RegistryWellIndexed s1 :=
+                registryWellIndexed_step s op caller s1 h_registry hstep
+              have hbound := ih s1 (holderValueExecutionRate s1 q.1) h_registry1 hsafe_tail
+                htail_own htail_ops (by simp) rfl
+              have hlocal := holderValueAt_executionRate_step s op caller s1 a hop hcaller
+                h_registry h_safe.1 hstep
+              have hdelta := holderValueAt_rateDelta s1 a
+                (holderValueExecutionRate s op) (holderValueExecutionRate s1 q.1)
+              have hlocal_int :
+                  (holderValueAt (holderValueExecutionRate s op) s1 a : Int) ≤
+                    (holderValueAt (holderValueExecutionRate s op) s a : Int) :=
+                Int.ofNat_le.mpr hlocal
+              have hcombined :
+                  (holderValueAt (computeExchangeRate (execTrace s1 (q :: σ)))
+                      (execTrace s1 (q :: σ)) a : Int) ≤
+                    (holderValueAt (holderValueExecutionRate s op) s a : Int) +
+                      (holderRateDelta s1 a (holderValueExecutionRate s op)
+                        (holderValueExecutionRate s1 q.1) +
+                      (traceRateAdjustments s1 a (q :: σ)).sum) := by
+                omega
+              simpa [execTrace, traceNextState, traceRateAdjustments, hstep] using hcombined
+
+set_option maxRecDepth 10000 in
+theorem holderValue_rateAware_trace_rateAdjusted
+    (s : State) (σ : List (Op × Address)) (a : Address) (R₀ : Nat)
+    (h_registry : RegistryWellIndexed s)
+    (h_safe : RateAwareSideCondition s σ)
+    (h_own : ∀ p ∈ σ, p.2 = a)
+    (h_ops : ∀ p ∈ σ, RateAwareHolderValueOp p.1)
+    (h_nonempty : σ ≠ [])
+    (h_rate : match σ with
+      | [] => True
+      | p :: _ => R₀ = holderValueExecutionRate s p.1)
+    (h_period : 0 < s.vestPeriod) :
+    (holderValue (execTrace s σ) a : Int) ≤
+      (holderValue s a : Int) + (traceRateAdjustments s a σ).sum := by
+  cases σ with
+  | nil => exact False.elim (h_nonempty rfl)
+  | cons p σ =>
+      have hfirst_op : RateAwareHolderValueOp p.1 := h_ops p List.mem_cons_self
+      have hfirst_rate := holderValueExecutionRate_eq_live_of_rateAware s p.1 hfirst_op h_period
+      have hR : R₀ = holderValueExecutionRate s p.1 := by simpa using h_rate
+      have hbound := holderValueAt_rateAware_trace_rateAdjusted s (p :: σ) a R₀
+        h_registry h_safe h_own h_ops h_nonempty h_rate
+      calc
+        (holderValue (execTrace s (p :: σ)) a : Int) =
+            (holderValueAt (computeExchangeRate (execTrace s (p :: σ)))
+              (execTrace s (p :: σ)) a : Int) := by
+          rw [holderValueAt_live]
+        _ ≤ (holderValueAt R₀ s a : Int) +
+              (traceRateAdjustments s a (p :: σ)).sum := hbound
+        _ = (holderValue s a : Int) +
+              (traceRateAdjustments s a (p :: σ)).sum := by
+          rw [hR, hfirst_rate, holderValueAt_live]
 
 private theorem liveRateSequence_pairwise_tail (s : State) (p : Op × Address)
     (σ : List (Op × Address))

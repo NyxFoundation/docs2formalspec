@@ -236,6 +236,14 @@ vault-trace theorem, not a blanket closure of the live-rate gap. The witnesses
 `lockApxUSD` trace and a nonzero `withdraw` trace whose terminal live rate
 rises, so the pairwise schedule cannot currently be derived from the model by
 merely banning zero-share deposits.
+The complementary accounting form uses `holderRateDelta` and
+`traceRateAdjustments` instead of hiding those rises behind a schedule premise:
+`holderValueAt_rateDelta` and
+`holderValueAt_executionRate_step_with_rateDelta` separate the local fixed-rate
+bound from signed rate revaluation, and
+`holderValue_rateAware_trace_rateAdjusted` sums that revaluation over a whole
+trace. This is the current model's honest bridge toward a pool-level ledger;
+it does not yet claim that the revaluation sum is protocol-wide conservation.
 
 ### 5.3 Clock consistency
 
