@@ -533,6 +533,27 @@ they are not hidden assumptions. Neither ledger identity is derived from
 `WellFormed` or `Solvent`; each is a separately initialized and trace-preserved
 relation over the current abstract state machine.
 
+Two strengthened layers now sit on top of that base relation in
+`Invariant.lean`. First, the `WellFormed s'` premise is discharged: the
+balance half follows from the preserved finite ledger identity
+(`apxUSDLedgerConsistent_balance_le` in `Ledger.lean`), and the price half is
+traded for the operation-side condition `PriceBoundedOp` (every
+`updateRedemptionValue` in the trace publishes at most par — the model, like
+the deployment, enforces only `newRate != 0`). `ProtocolReachOps` restricts
+operations alone, `protocolInv_reachableOps` is its global theorem, and
+`protocolReachOps_inv_and_reach` embeds the layer into the base relation.
+Second, `SolventOutstanding` upgrades the solvency measure to
+`outstandingApxUSD` — circulating supply plus pending unlock face amounts — so
+the request → wait → claim settlement cycle is *inside* the preserved scope:
+requests and standard claims are neutral, flexible claims shed exactly the
+published fee (`solventOutstanding_step`). The measure strictly dominates the
+old one (`solventOutstanding_implies_solvent`). Its exclusion list trades the
+two claims in for the two vault exits, whose pending positions are funded by
+vault custody that neither side of the inequality measures; that channel stays
+at the `apxUSDFlow` boundary. `ProtocolInvOutstanding` and
+`ProtocolReachOutstanding` lift this to a reachability theorem
+(`protocolInvOutstanding_reachable`) with operation-side conditions only.
+
 Receipt consistency is now composed without changing the meaning of
 `ProtocolInv`: `ProtocolInvWithReceiptLedger` adds
 `UnlockTokenLedgerConsistent`, `protocolInvWithReceiptLedger_step` preserves it,
@@ -681,7 +702,14 @@ Implementation fidelity does not need to be part of the core Lean model.
 
 The Lean model should prove the abstract design claims that are stable and economically meaningful. The implementation assurance pipeline should then check whether the actual Solidity, generated code, or bytecode realizes the relevant properties.
 
-A property manifest is the connection point:
+A property manifest is the connection point. It is no longer only a
+recommendation: `outputs/apyx/property-manifest.csv` implements this table for
+the current Apyx surface — one row per extracted requirement (83) and per
+deployment-derived requirement (25), each with its specification anchor,
+covering Lean theorem(s), and an honest `result` field (`model=proved`,
+`model=partial`, `model=guard-only`, `declined`, `out-of-scope`, with
+`impl=not-run` throughout because no implementation-level tool has been run
+yet). The schema is:
 
 | Field | Purpose |
 | --- | --- |
@@ -795,6 +823,8 @@ The proof map is complete only when the following questions have clear answers:
 - Which properties are local, global, bounded, approximate, or threat-model dependent?
 - Which external calls and privileges are in scope?
 - Does every important property have a stable property ID?
+  (`outputs/apyx/property-manifest.csv` currently answers this for the
+  requirement surface; keep it regenerated when the theorem surface moves.)
 - Are SPECA results recorded as audit candidates rather than treated as automatic proofs?
 - Is a refinement theorem actually proved, or is the model-to-code connection still a review or tool-assisted obligation?
 

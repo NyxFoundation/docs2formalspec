@@ -95,6 +95,18 @@ The requirement inventory and the proof map serve different purposes: `requireme
 safety, accounting, boundary, and implementation hand-off claims that are checked by Lean or assigned
 to another verification method.
 
+The row-level join between the two is
+[`property-manifest.csv`](property-manifest.csv): one row per requirement (the 83 extracted records
+plus the 25 deployment-derived `DR` items of `SPEC.md` §10a), each carrying its specification
+anchor, the Lean theorem(s) that cover it, and a `result` column that states the current assurance
+level honestly — `model=proved` for a named theorem, `model=proved (unnamed mapping)` where the
+behaviour is proved under non-requirement names, `model=partial` with the missing clause recorded
+in the evidence column, `model=guard-only` where the transition enforces the behaviour but no
+theorem states it, `declined`/`out-of-scope` with the documented reason, and `impl=not-run`
+everywhere, because no implementation-level tool (SPECA, Certora, Halmos, fuzzing) has been run
+yet. A row whose result you cannot defend from the cited evidence is a bug in the manifest;
+regenerate or fix it rather than letting the table drift from the sources.
+
 The remaining proofs are organized around a small set of reusable boundaries:
 
 - transition effects and frame conditions for each modeled operation;
@@ -612,6 +624,7 @@ module, not the hand-written proof surface the build checks.
 |---|---|
 | [`SPEC.md`](SPEC.md) | The normative RFC 2119 specification (human-readable) |
 | [`requirements.json`](requirements.json) | The 83 extracted requirements in structured form; not every record has an active standalone theorem |
+| [`property-manifest.csv`](property-manifest.csv) | The requirement-to-theorem join: 108 rows (83 extracted + 25 deployment-derived), each with spec anchor, covering theorem(s), assurance result, and evidence (§3) |
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine |
 | [`Apyx.lean`](Apyx.lean) | The formal model (`State`, `Op`, `step`) and the active proof surface |
 | [`BlastRadius.lean`](BlastRadius.lean) | Key-compromise blast-radius proofs and defense wrappers |
