@@ -339,4 +339,280 @@ theorem protocolInvWithReceiptLedger_reachableOps (s : State)
     (h : ProtocolReachOps s) : ProtocolInvWithReceiptLedger s :=
   protocolInvWithReceiptLedger_reachable s (protocolReachOps_subset s h)
 
+/-! ## Pending-liability solvency: the unlock settlement channel joins the scope
+
+`Solvent` compares only the circulating supply against collateral plus reserve,
+which is why `solvency_step` has to exclude `claimUnlock` and
+`flexibleClaimUnlock`: a claim re-mints apxUSD against an unlock obligation the
+aggregate does not track. `SolventOutstanding` closes exactly that hole by
+charging the pending face amounts (`outstandingApxUSD = supply + pending`)
+against the same backing. Under this measure a request is neutral (burn in,
+pending out), a standard claim is neutral (pending in, mint out), and a
+flexible claim strictly shrinks the obligation by the published fee — so the
+whole request → wait → claim settlement cycle sits *inside* the preserved
+scope, which the plain `Solvent` relation could never chain across.
+
+The trade is the vault exit channel: `Op.withdraw`/`Op.redeem` create pending
+positions against apxUSD that was burned out of the supply at lock time and
+now sits in vault custody, a quantity neither side of this inequality
+measures (and the exit also pulls vested yield into custody). Charging those
+positions here without crediting custody would be an unsupported claim, so the
+two vault exits replace the two claims in the exclusion list; their
+conservation form lives at the `apxUSDFlow` boundary in `HolderValue.lean`.
+`handleStressEvent`, `catastrophicBackstop`, and `withdrawReserve` remain
+excluded for the same reasons as before.
+
+`solventOutstanding_implies_solvent` records that this is a strengthening of
+the measure, not a variant: outstanding dominates supply, so the new predicate
+implies the old one at every state.
+
+Status (proof-map §11): `solventOutstanding_step` is model-local;
+`protocolInvOutstanding_reachable` is reachable-scoped over the restricted
+`ProtocolReachOutstanding` relation. -/
+
+/-- `e ≤ ray → amount * e / ray ≤ amount`: a floor-divided conversion at a
+price at most par never exceeds the face amount. Local restatement of the
+private `div_mul_le_total` in `Apyx.lean`. -/
+private theorem mul_div_ray_le_self {amount e : Nat} (h : e ≤ ray) :
+    amount * e / ray ≤ amount := by
+  have h1 : amount * e ≤ amount * ray := Nat.mul_le_mul_left amount h
+  have h2 : amount * e / ray ≤ amount * ray / ray := Nat.div_le_div_right h1
+  have h3 : amount * ray / ray = amount := Nat.mul_div_cancel amount ray_pos
+  omega
+
+/-- Aggregate collateralization including pending unlock liabilities: the
+circulating supply *plus* every face amount promised by a pending standard or
+flexible unlock is covered by collateral plus reserve. -/
+def SolventOutstanding (s : State) : Prop :=
+  outstandingApxUSD s ≤ s.totalCollateralValue + s.usdcReserve
+
+/-- Outstanding dominates supply, so the pending-aware predicate strengthens
+the plain one. -/
+theorem solventOutstanding_implies_solvent (s : State)
+    (h : SolventOutstanding s) : Solvent s :=
+  Nat.le_trans (Nat.le_add_right _ _) h
+
+/-- The empty state has no supply and no pending positions. -/
+theorem solventOutstanding_default : SolventOutstanding (default : State) := by
+  have h : outstandingApxUSD (default : State) = 0 := rfl
+  unfold SolventOutstanding
+  rw [h]
+  exact Nat.zero_le _
+
+/-- The operation exclusions for the pending-aware measure: the two vault
+exits (which convert unmeasured vault custody into pending positions), the
+exogenous stress loss, the wind-down backstop, and the bare reserve
+withdrawal. The two unlock claims — excluded by `SolvencyScopedOp` — are *in*
+scope here. -/
+def OutstandingScopedOp (op : Op) : Prop :=
+  (∀ assets receiver, op ≠ Op.withdraw assets receiver) ∧
+  (∀ shares receiver, op ≠ Op.redeem shares receiver) ∧
+  (∀ a, op ≠ Op.handleStressEvent a) ∧
+  op ≠ Op.catastrophicBackstop ∧
+  (∀ amt r, op ≠ Op.withdrawReserve amt r)
+
+/-- One successful in-scope step preserves pending-aware solvency. The unlock
+channel is handled by the exact `outstandingApxUSD` lemmas (requests and the
+standard claim are neutral, the flexible claim sheds its fee); the mint,
+redemption, and RFQ paths repeat the `req_overcollateralization_limit`
+arithmetic with the pending registries framed; every other operation touches
+neither the obligation nor its backing. -/
+theorem solventOutstanding_step
+    (s : State) (op : Op) (caller : Address) (s' : State)
+    (h_step : step s op caller = some s')
+    (h_out : SolventOutstanding s)
+    (h_reg : RegistryWellIndexed s)
+    (h_bal : ∀ a, s.apxUSDBal a ≤ s.totalSupply_apxUSD)
+    (h_rv : s.redemptionValue ≤ ray)
+    (hscope : OutstandingScopedOp op) :
+    SolventOutstanding s' := by
+  obtain ⟨h_not_withdraw, h_not_redeem, h_not_stress, h_not_backstop,
+    h_not_wres⟩ := hscope
+  cases op
+  case withdraw assets receiver => exact absurd rfl (h_not_withdraw assets receiver)
+  case redeem shares receiver => exact absurd rfl (h_not_redeem shares receiver)
+  case handleStressEvent a => exact absurd rfl (h_not_stress a)
+  case catastrophicBackstop => exact absurd rfl h_not_backstop
+  case withdrawReserve amt r => exact absurd rfl (h_not_wres amt r)
+  case requestUnlock amount =>
+    obtain ⟨-, hguard, hpost⟩ := requestUnlockStep_effect s amount caller s' h_step
+    have hsupply : amount ≤ s.totalSupply_apxUSD :=
+      Nat.le_trans hguard (h_bal caller)
+    have hout := outstandingApxUSD_requestUnlock s amount caller s' h_reg hsupply h_step
+    have hc : s'.totalCollateralValue = s.totalCollateralValue := by
+      rw [hpost]; exact requestUnlockStep_totalCollateralValue s caller amount
+    have hr : s'.usdcReserve = s.usdcReserve := by
+      rw [hpost]; exact requestUnlockStep_usdcReserve s caller amount
+    unfold SolventOutstanding at h_out ⊢
+    rw [hout, hc, hr]; exact h_out
+  case flexibleRequestUnlock amount =>
+    obtain ⟨-, hguard, hpost⟩ := flexibleRequestUnlockStep_effect s amount caller s' h_step
+    have hsupply : amount ≤ s.totalSupply_apxUSD :=
+      Nat.le_trans hguard (h_bal caller)
+    have hout := outstandingApxUSD_flexibleRequestUnlock_step s amount caller s'
+      h_reg hsupply h_step
+    have hc : s'.totalCollateralValue = s.totalCollateralValue := by rw [hpost]; rfl
+    have hr : s'.usdcReserve = s.usdcReserve := by rw [hpost]; rfl
+    unfold SolventOutstanding at h_out ⊢
+    rw [hout, hc, hr]; exact h_out
+  case claimUnlock id =>
+    obtain ⟨owner, amount, cooldownEnd, hreq, -, -, -, hpost⟩ :=
+      claimUnlockStep_effect s id caller s' h_step
+    have hid : id < s.nextUnlockId := by
+      cases Nat.lt_or_ge id s.nextUnlockId with
+      | inl h => exact h
+      | inr hge =>
+          have hnone := h_reg.1.1 id hge
+          rw [hnone] at hreq
+          simp at hreq
+    have hout := outstandingApxUSD_claimUnlock s id owner amount cooldownEnd
+      caller s' hid hreq h_step
+    have hc : s'.totalCollateralValue = s.totalCollateralValue := by rw [hpost]; rfl
+    have hr : s'.usdcReserve = s.usdcReserve := by rw [hpost]; rfl
+    unfold SolventOutstanding at h_out ⊢
+    rw [hout, hc, hr]; exact h_out
+  case flexibleClaimUnlock id =>
+    obtain ⟨owner, amount, requestTime, cooldownEnd, hreq, -, -, -, hpost⟩ :=
+      flexibleClaimStep_effect s id caller s' h_step
+    have hid : id < s.nextUnlockId := by
+      cases Nat.lt_or_ge id s.nextUnlockId with
+      | inl h => exact h
+      | inr hge =>
+          have hnone := h_reg.1.2 id hge
+          rw [hnone] at hreq
+          simp at hreq
+    have hout := outstandingApxUSD_flexibleClaimUnlock s id owner amount
+      requestTime cooldownEnd caller s' hid hreq h_step
+    have hc : s'.totalCollateralValue = s.totalCollateralValue := by rw [hpost]; rfl
+    have hr : s'.usdcReserve = s.usdcReserve := by rw [hpost]; rfl
+    unfold SolventOutstanding at h_out ⊢
+    rw [hc, hr]
+    omega
+  case depositUSDC amount =>
+    obtain ⟨-, -, -, -, hpost⟩ := depositUSDCStep_effect s amount caller s' h_step
+    subst hpost
+    unfold SolventOutstanding outstandingApxUSD pendingApxUSD
+      standardUnlockTotal flexibleUnlockTotal at h_out ⊢
+    simp only [emitEvent, mintApxUSD]
+    omega
+  case mintApxUSD to amount =>
+    obtain ⟨-, -, -, -, -, -, hpost⟩ := mintApxUSDStep_effect s to amount caller s' h_step
+    subst hpost
+    unfold SolventOutstanding outstandingApxUSD pendingApxUSD
+      standardUnlockTotal flexibleUnlockTotal at h_out ⊢
+    simp only [emitEvent, mintApxUSD]
+    omega
+  case redeemApxUSD amount =>
+    obtain ⟨-, -, hbguard, hrguard, -, hpost⟩ :=
+      redeemApxUSDStep_effect s amount caller s' h_step
+    subst hpost
+    have hle : amount * s.redemptionValue / ray ≤ amount := mul_div_ray_le_self h_rv
+    have hbc := h_bal caller
+    unfold SolventOutstanding outstandingApxUSD pendingApxUSD
+      standardUnlockTotal flexibleUnlockTotal at h_out ⊢
+    simp only [emitEvent, burnApxUSD]
+    omega
+  case executeRFQRedemption user amount =>
+    obtain ⟨-, -, -, -, hbguard, hrguard, hpost⟩ :=
+      executeRFQRedemptionStep_effect s user amount caller s' h_step
+    subst hpost
+    have hle : amount * s.redemptionValue / ray ≤ amount := mul_div_ray_le_self h_rv
+    have hbc := h_bal user
+    unfold SolventOutstanding outstandingApxUSD pendingApxUSD
+      standardUnlockTotal flexibleUnlockTotal at h_out ⊢
+    simp only [burnApxUSD]
+    omega
+  case poolRedeem amount receiver minOut =>
+    simp only [step] at h_step
+    repeat' split at h_step
+    all_goals first
+      | (cases Option.some.inj h_step
+         have hle : amount * s.redemptionValue / ray ≤ amount := mul_div_ray_le_self h_rv
+         have hbc := h_bal caller
+         unfold SolventOutstanding outstandingApxUSD pendingApxUSD
+           standardUnlockTotal flexibleUnlockTotal at h_out ⊢
+         simp only [burnApxUSD]
+         omega)
+      | exact absurd h_step (by simp)
+  case lockApxUSD amount =>
+    simp only [step] at h_step
+    repeat' split at h_step
+    all_goals first
+      | (cases Option.some.inj h_step
+         unfold SolventOutstanding outstandingApxUSD pendingApxUSD
+           standardUnlockTotal flexibleUnlockTotal at h_out ⊢
+         simp only [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+         omega)
+      | exact absurd h_step (by simp)
+  all_goals
+    simp only [step] at h_step
+    (repeat' split at h_step) <;>
+      first
+        | (cases Option.some.inj h_step
+           unfold SolventOutstanding outstandingApxUSD pendingApxUSD
+             standardUnlockTotal flexibleUnlockTotal at h_out ⊢
+           dsimp only
+           omega)
+        | exact absurd h_step (by simp)
+
+/-- The pending-aware composite: `ProtocolInv` with its `Solvent` conjunct
+upgraded to `SolventOutstanding`. By
+`solventOutstanding_implies_solvent` this implies `ProtocolInv` outright. -/
+def ProtocolInvOutstanding (s : State) : Prop :=
+  RegistryWellIndexed s ∧ SolventOutstanding s ∧ WellFormed s ∧
+    ApxUSDLedgerConsistent s ∧ ApyUSDLedgerConsistent s
+
+theorem protocolInvOutstanding_implies_protocolInv (s : State)
+    (h : ProtocolInvOutstanding s) : ProtocolInv s :=
+  ⟨h.1, solventOutstanding_implies_solvent s h.2.1, h.2.2.1, h.2.2.2.1, h.2.2.2.2⟩
+
+theorem protocolInvOutstanding_default : ProtocolInvOutstanding (default : State) :=
+  ⟨registryWellIndexed_default, solventOutstanding_default,
+   protocolInv_default.2.2.1, apxUSDLedgerConsistent_default,
+   apyUSDLedgerConsistent_default⟩
+
+/-- Preservation with operation-side hypotheses only, claims included. The
+well-formedness of the post-state is derived exactly as in the ops-only layer:
+balance bound from the preserved finite ledger, price bound from
+`PriceBoundedOp`. -/
+theorem protocolInvOutstanding_step
+    (s : State) (op : Op) (caller : Address) (s' : State)
+    (h : ProtocolInvOutstanding s) (hstep : step s op caller = some s')
+    (hscope : OutstandingScopedOp op) (hprice : PriceBoundedOp op) :
+    ProtocolInvOutstanding s' := by
+  have hled' : ApxUSDLedgerConsistent s' :=
+    apxUSDLedgerConsistent_step s s' op caller h.2.2.2.1 hstep
+  refine ⟨registryWellIndexed_step s op caller s' h.1 hstep,
+    solventOutstanding_step s op caller s' hstep h.2.1 h.1 h.2.2.1.1 h.2.2.1.2 hscope,
+    ⟨apxUSDLedgerConsistent_balance_le s' hled', ?_⟩,
+    hled',
+    apyUSDLedgerConsistent_step s s' op caller h.2.2.2.2 hstep⟩
+  exact redemptionValue_le_ray_step s op caller s' hstep h.2.2.1.2 hprice
+    hscope.2.2.2.1
+
+/-- Reachability for the pending-aware regime: operation restrictions only —
+the vault-exit/stress/backstop/reserve exclusions plus the at-most-par price
+discipline. The unlock request → wait → claim settlement cycle is inside this
+relation, which the `Solvent`-based `ProtocolReach` cannot express. -/
+inductive ProtocolReachOutstanding : State → Prop
+  | initial : ProtocolReachOutstanding (default : State)
+  | next {s s' : State} {op : Op} {caller : Address} :
+      ProtocolReachOutstanding s →
+      (es : List Event) →
+      stepResult s op caller = .accepted s' es →
+      OutstandingScopedOp op →
+      PriceBoundedOp op →
+      ProtocolReachOutstanding s'
+
+/-- Every pending-aware reachable state carries the upgraded composite
+invariant — in particular, pending unlock liabilities are always covered by
+collateral plus reserve, across full settlement cycles. -/
+theorem protocolInvOutstanding_reachable (s : State)
+    (h : ProtocolReachOutstanding s) : ProtocolInvOutstanding s := by
+  induction h with
+  | initial => exact protocolInvOutstanding_default
+  | next _ es hacc hscope hprice ih =>
+      exact protocolInvOutstanding_step _ _ _ _ ih
+        ((stepResult_accepted_iff _ _ _ _ _).mp hacc).1 hscope hprice
+
 end Apyx
