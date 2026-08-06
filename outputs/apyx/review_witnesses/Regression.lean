@@ -737,4 +737,23 @@ example : UsdcLedgerConsistent usdcLedgerDebit [1] 100 := by
   funext a
   by_cases h : a = 1 <;> simp [usdcLedger0, usdcLedgerDebit, h]
 
+/-! ## R17 — receipt custody consistency crosses the public unlock boundary
+
+The lifecycle lemmas are useful only if the public dispatcher can use them. This
+witness checks the standard claim path on a concrete live position: the receipt,
+registry amount, and retired slot agree before the step, and the relation still
+holds after the public claim succeeds. -/
+
+private theorem c0_unlockTokenLedgerConsistent :
+    UnlockTokenLedgerConsistent c0 := by
+  intro id hid
+  have hid' : id < 1 := by simpa [c0] using hid
+  have hid0 : id = 0 := by omega
+  subst id
+  simp [c0, default]
+
+example : UnlockTokenLedgerConsistent c1 := by
+  apply unlockTokenLedgerConsistent_claimUnlock c0 0 1 c1 c0_unlockTokenLedgerConsistent
+  simp [c1, execTrace, step, c0, retireStandardUnlock, burnUnlockNFT, mintApxUSD]
+
 end Apyx

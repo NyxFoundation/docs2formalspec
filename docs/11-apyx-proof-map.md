@@ -221,9 +221,19 @@ The receipt amount is now tied to that liability ledger by
 standard or flexible registry entry, `unlockTokenOwner`, and
 `unlockTokenAmount` describe the same owner and face amount, or that an empty
 slot has no receipt amount. `unlockTokenLedgerConsistent_default` and the
-create/update/retire lemmas prove the lifecycle preservation boundary. This
-relation is kept separate from `ProtocolInv` until its public-step coverage
-is composed with every request and claim branch.
+create/update/retire lemmas prove the lifecycle preservation boundary. The
+burn and mint frame lemmas, together with
+`unlockTokenLedgerConsistent_requestUnlockStep`,
+`unlockTokenLedgerConsistent_requestUnlock`,
+`unlockTokenLedgerConsistent_flexibleRequestUnlock`,
+`unlockTokenLedgerConsistent_claimUnlock`, and
+`unlockTokenLedgerConsistent_flexibleClaimUnlock`, now compose that relation
+with all four modeled request/claim public branches, including the standard
+top-up branch. It is still kept separate from `ProtocolInv`: these theorems
+establish receipt/registry consistency, but do not add receipt custody,
+fee-wallet custody, or USDC supply to the current state, and the composite
+invariant does not yet cover every state-changing operation under this
+accounting boundary.
 
 The missing USDC side is made explicit without adding an unsupported field to
 `State`: `UsdcLedgerConsistent s holders totalSupply` takes the finite holder

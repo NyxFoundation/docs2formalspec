@@ -822,6 +822,20 @@ theorem unlockTokenLedgerConsistent_default :
   intro id hid
   simp [default] at hid
 
+theorem unlockTokenLedgerConsistent_burnApxUSD
+    (s : State) (caller : Address) (amount : Nat)
+    (h : UnlockTokenLedgerConsistent s) :
+    UnlockTokenLedgerConsistent (burnApxUSD s caller amount) := by
+  intro id hid
+  simpa [burnApxUSD] using h id hid
+
+theorem unlockTokenLedgerConsistent_mintApxUSD
+    (s : State) (to : Address) (amount : Nat)
+    (h : UnlockTokenLedgerConsistent s) :
+    UnlockTokenLedgerConsistent (mintApxUSD s to amount) := by
+  intro id hid
+  simpa [mintApxUSD] using h id hid
+
 theorem unlockTokenLedgerConsistent_createStandardUnlock
     (s : State) (owner : Address) (amount : Nat)
     (hregistry : RegistryWellIndexed s)
@@ -909,6 +923,95 @@ theorem unlockTokenLedgerConsistent_retireFlexibleUnlock
     | some entry =>
         simp [hstd, hreq] at hpre
   · simpa [retireFlexibleUnlock, burnUnlockNFT, heq] using hpre
+
+theorem unlockTokenLedgerConsistent_requestUnlockStep
+    (s : State) (caller : Address) (amount : Nat)
+    (hregistry : RegistryWellIndexed s)
+    (hledger : UnlockTokenLedgerConsistent s) :
+    UnlockTokenLedgerConsistent (requestUnlockStep s caller amount) := by
+  let b := burnApxUSD s caller amount
+  have hb : UnlockTokenLedgerConsistent b := by
+    simpa [b] using unlockTokenLedgerConsistent_burnApxUSD s caller amount hledger
+  have hregb : RegistryWellIndexed b := by
+    simpa [b] using registryWellIndexed_burnApxUSD s caller amount hregistry
+  change UnlockTokenLedgerConsistent (match b.unlockRequestId caller with
+    | some id =>
+      match b.unlockRequests id with
+      | some (o, _, _) =>
+        if o = caller then updateStandardUnlock b id caller amount
+        else createStandardUnlock b caller amount
+      | none => createStandardUnlock b caller amount
+    | none => createStandardUnlock b caller amount)
+  generalize hptr : b.unlockRequestId caller = ptr
+  cases ptr with
+  | none =>
+      simpa using unlockTokenLedgerConsistent_createStandardUnlock b caller amount hregb hb
+  | some id =>
+      generalize hentry : b.unlockRequests id = entry
+      cases entry with
+      | none =>
+          simpa [hentry] using
+            unlockTokenLedgerConsistent_createStandardUnlock b caller amount hregb hb
+      | some triple =>
+          rcases triple with ⟨o, oldAmount, oldEnd⟩
+          by_cases ho : o = caller
+          · subst o
+            have hentry' : b.unlockRequests id = some (caller, oldAmount, oldEnd) := hentry
+            simpa [hentry] using
+              unlockTokenLedgerConsistent_updateStandardUnlock b id caller oldAmount oldEnd
+                amount hentry' hb
+          · simpa [hentry, ho] using
+              unlockTokenLedgerConsistent_createStandardUnlock b caller amount hregb hb
+
+theorem unlockTokenLedgerConsistent_requestUnlock
+    (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (hregistry : RegistryWellIndexed s)
+    (hledger : UnlockTokenLedgerConsistent s)
+    (h_step : step s (Op.requestUnlock amount) caller = some s') :
+    UnlockTokenLedgerConsistent s' := by
+  obtain ⟨-, -, hpost⟩ := requestUnlockStep_effect s amount caller s' h_step
+  subst s'
+  exact unlockTokenLedgerConsistent_requestUnlockStep s caller amount hregistry hledger
+
+theorem unlockTokenLedgerConsistent_flexibleRequestUnlock
+    (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (hregistry : RegistryWellIndexed s)
+    (hledger : UnlockTokenLedgerConsistent s)
+    (h_step : step s (Op.flexibleRequestUnlock amount) caller = some s') :
+    UnlockTokenLedgerConsistent s' := by
+  obtain ⟨-, -, hpost⟩ := flexibleRequestUnlockStep_effect s amount caller s' h_step
+  subst s'
+  have hb := unlockTokenLedgerConsistent_burnApxUSD s caller amount hledger
+  have hregb := registryWellIndexed_burnApxUSD s caller amount hregistry
+  exact unlockTokenLedgerConsistent_createFlexibleUnlock
+    (burnApxUSD s caller amount) caller amount hregb hb
+
+theorem unlockTokenLedgerConsistent_claimUnlock
+    (s : State) (id : Nat) (caller : Address) (s' : State)
+    (hledger : UnlockTokenLedgerConsistent s)
+    (h_step : step s (Op.claimUnlock id) caller = some s') :
+    UnlockTokenLedgerConsistent s' := by
+  obtain ⟨owner, amount, cooldownEnd, hreq, _, _, _, hpost⟩ :=
+    claimUnlockStep_effect s id caller s' h_step
+  subst s'
+  have hret := unlockTokenLedgerConsistent_retireStandardUnlock
+    s id owner amount cooldownEnd hreq hledger
+  exact unlockTokenLedgerConsistent_mintApxUSD
+    (retireStandardUnlock s id owner) owner amount hret
+
+theorem unlockTokenLedgerConsistent_flexibleClaimUnlock
+    (s : State) (id : Nat) (caller : Address) (s' : State)
+    (hledger : UnlockTokenLedgerConsistent s)
+    (h_step : step s (Op.flexibleClaimUnlock id) caller = some s') :
+    UnlockTokenLedgerConsistent s' := by
+  obtain ⟨owner, amount, requestTime, cooldownEnd, hreq, _, _, _, hpost⟩ :=
+    flexibleClaimStep_effect s id caller s' h_step
+  subst s'
+  have hret := unlockTokenLedgerConsistent_retireFlexibleUnlock
+    s id hreq hledger
+  exact unlockTokenLedgerConsistent_mintApxUSD
+    (retireFlexibleUnlock s id) owner
+      (amount - amount * flexibleUnlockFee requestTime s.now / 10000) hret
 
 /-! ## The missing USDC ledger, stated without inventing a State field
 
