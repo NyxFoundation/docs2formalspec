@@ -204,6 +204,18 @@ theorem registryWellIndexed_burnApxUSD (s : State) (caller amount : Nat)
   simpa [burnApxUSD, RegistryWellIndexed, RegistryBounded, OwnerPointerSound,
     RegistryDisjoint] using h
 
+theorem registryWellIndexed_pullVestedYield (s : State) (h : RegistryWellIndexed s) :
+    RegistryWellIndexed (pullVestedYield s) := by
+  unfold pullVestedYield
+  dsimp only
+  split <;> exact h
+
+theorem registryWellIndexed_mintApxUSD (s : State) (to amount : Nat)
+    (h : RegistryWellIndexed s) :
+    RegistryWellIndexed (mintApxUSD s to amount) := by
+  simpa [mintApxUSD, RegistryWellIndexed, RegistryBounded, OwnerPointerSound,
+    RegistryDisjoint] using h
+
 theorem registryWellIndexed_requestUnlockStep (s : State) (caller amount : Nat)
     (h : RegistryWellIndexed s) :
     RegistryWellIndexed (requestUnlockStep s caller amount) := by
@@ -302,5 +314,113 @@ theorem ownerPointerSound_retireFlexibleUnlock (s : State) (id : Nat)
     simp at hstdNone
   exact ⟨by simpa [retireFlexibleUnlock, burnUnlockNFT, hne] using htoken,
     amount, ce, by simpa [retireFlexibleUnlock, burnUnlockNFT, hne] using hentry⟩
+
+theorem registryWellIndexed_retireStandardUnlock (s : State) (id : Nat) (owner : Address)
+    (h : RegistryWellIndexed s)
+    (hentry : ∃ amount ce, s.unlockRequests id = some (owner, amount, ce)) :
+    RegistryWellIndexed (retireStandardUnlock s id owner) := by
+  obtain ⟨hb, hp, hd⟩ := h
+  exact ⟨registryBounded_retireStandardUnlock s id owner hb,
+    ownerPointerSound_retireStandardUnlock s id owner hentry hp,
+    registryDisjoint_retireStandardUnlock s id owner hd⟩
+
+theorem registryWellIndexed_retireFlexibleUnlock (s : State) (id : Nat)
+    (h : RegistryWellIndexed s)
+    (hentry : ∃ owner amount requestTime cooldownEnd,
+      s.flexibleUnlockRequests id = some (owner, amount, requestTime, cooldownEnd)) :
+    RegistryWellIndexed (retireFlexibleUnlock s id) := by
+  obtain ⟨hb, hp, hd⟩ := h
+  exact ⟨registryBounded_retireFlexibleUnlock s id hb,
+    ownerPointerSound_retireFlexibleUnlock s id hentry hd hp,
+    registryDisjoint_retireFlexibleUnlock s id hd⟩
+
+private theorem claimUnlock_post (s : State) (id : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.claimUnlock id) caller = some s') :
+    ∃ owner amount cooldownEnd,
+      s.unlockRequests id = some (owner, amount, cooldownEnd) ∧
+      s.unlockTokenOwner id = some owner ∧
+      (caller = owner ∨ caller = s.unlockTokenOperator) ∧
+      cooldownEnd ≤ s.now ∧
+      s' = mintApxUSD (retireStandardUnlock s id owner) owner amount := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i owner amount cooldownEnd heq
+    split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · split at h
+          · exact absurd h (by simp)
+          · exact ⟨owner, amount, cooldownEnd, heq, by simp_all, by assumption, by omega,
+              (Option.some.inj h).symm⟩
+        · exact absurd h (by simp)
+
+private theorem flexibleClaimUnlock_post (s : State) (id : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.flexibleClaimUnlock id) caller = some s') :
+    ∃ owner amount requestTime cooldownEnd,
+      s.flexibleUnlockRequests id = some (owner, amount, requestTime, cooldownEnd) ∧
+      s.unlockTokenOwner id = some owner ∧
+      (caller = owner ∨ caller = s.unlockTokenOperator) ∧
+      requestTime + minFlexibleClaim ≤ s.now ∧
+      s' = mintApxUSD (retireFlexibleUnlock s id) owner
+        (amount - amount * flexibleUnlockFee requestTime s.now / 10000) := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i owner amount requestTime cooldownEnd heq
+    split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · split at h
+        · split at h
+          · exact absurd h (by simp)
+          · exact ⟨owner, amount, requestTime, cooldownEnd, heq, by simp_all, by assumption,
+              by omega, (Option.some.inj h).symm⟩
+        · exact absurd h (by simp)
+
+theorem registryWellIndexed_claimUnlock_step (s : State) (id : Nat) (caller : Address)
+    (s' : State) (h : RegistryWellIndexed s)
+    (hstep : step s (Op.claimUnlock id) caller = some s') :
+    RegistryWellIndexed s' := by
+  obtain ⟨owner, amount, cooldownEnd, hreq, -, -, -, hpost⟩ := claimUnlock_post s id caller s' hstep
+  rw [hpost]
+  exact registryWellIndexed_mintApxUSD _ _ _
+    (registryWellIndexed_retireStandardUnlock s id owner h ⟨amount, cooldownEnd, hreq⟩)
+
+theorem registryWellIndexed_flexibleClaimUnlock_step (s : State) (id : Nat) (caller : Address)
+    (s' : State) (h : RegistryWellIndexed s)
+    (hstep : step s (Op.flexibleClaimUnlock id) caller = some s') :
+    RegistryWellIndexed s' := by
+  obtain ⟨owner, amount, requestTime, cooldownEnd, hreq, -, -, -, hpost⟩ :=
+    flexibleClaimUnlock_post s id caller s' hstep
+  rw [hpost]
+  exact registryWellIndexed_mintApxUSD _ _ _
+    (registryWellIndexed_retireFlexibleUnlock s id h
+      ⟨owner, amount, requestTime, cooldownEnd, hreq⟩)
+
+private theorem flexibleRequestUnlock_post (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.flexibleRequestUnlock amount) caller = some s') :
+    s.globalPause = false ∧ amount ≤ s.apxUSDBal caller ∧
+    s' = createFlexibleUnlock (burnApxUSD s caller amount) caller amount := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+
+theorem registryWellIndexed_flexibleRequestUnlock_step (s : State) (amount : Nat)
+    (caller : Address) (s' : State) (h : RegistryWellIndexed s)
+    (hstep : step s (Op.flexibleRequestUnlock amount) caller = some s') :
+    RegistryWellIndexed s' := by
+  obtain ⟨-, -, hpost⟩ := flexibleRequestUnlock_post s amount caller s' hstep
+  rw [hpost]
+  exact registryWellIndexed_createFlexibleUnlock _ _ _
+    (registryWellIndexed_burnApxUSD s caller amount h)
 
 end Apyx
