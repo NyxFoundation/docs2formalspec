@@ -964,6 +964,9 @@ def finitePoolRateDelta (s : State) (holders : List Address) (R₁ R₂ : Nat) :
 def finiteApyUSDValueAt (R : Nat) (s : State) (holders : List Address) : Nat :=
   (holders.map (fun a => redeemAssets (s.apyUSDBal a) R)).sum
 
+def finiteApyUSDNumerator (R : Nat) (s : State) (holders : List Address) : Nat :=
+  (holders.map (fun a => s.apyUSDBal a * R)).sum
+
 theorem finitePoolValueAt_rateDelta (s : State) (holders : List Address)
     (R₁ R₂ : Nat) :
     finitePoolValueAt R₂ s holders - finitePoolValueAt R₁ s holders =
@@ -2003,6 +2006,15 @@ theorem finiteApyUSDValueAt_le_redeemAssets_sum (R : Nat) (s : State)
             (div_add_div_le (s.apyUSDBal a * R)
               (sumOver s.apyUSDBal holders * R) ray)
 
+theorem finiteApyUSDNumerator_eq_sum_mul (R : Nat) (s : State)
+    (holders : List Address) :
+    finiteApyUSDNumerator R s holders = sumOver s.apyUSDBal holders * R := by
+  induction holders with
+  | nil => simp [finiteApyUSDNumerator, sumOver]
+  | cons a holders ih =>
+      simp only [finiteApyUSDNumerator, List.map_cons, List.sum_cons, sumOver_cons] at ih ⊢
+      rw [ih, Nat.add_mul]
+
 theorem apyUSDLedgerConsistent_finiteApyUSDValueAt_bound
     (R : Nat) (s : State) (h : ApyUSDLedgerConsistent s) :
     ∃ holders : List Address,
@@ -2013,6 +2025,29 @@ theorem apyUSDLedgerConsistent_finiteApyUSDValueAt_bound
   refine ⟨holders, hnd, hcov, ?_⟩
   rw [← hsum]
   exact finiteApyUSDValueAt_le_redeemAssets_sum R s holders
+
+theorem apyUSDLedgerConsistent_finiteApyUSDNumerator
+    (R : Nat) (s : State) (h : ApyUSDLedgerConsistent s) :
+    ∃ holders : List Address,
+      holders.Pairwise (· ≠ ·) ∧
+      (∀ a, s.apyUSDBal a ≠ 0 → a ∈ holders) ∧
+      finiteApyUSDNumerator R s holders = s.totalSupply_apyUSD * R := by
+  obtain ⟨holders, hnd, hcov, hsum⟩ := h
+  refine ⟨holders, hnd, hcov, ?_⟩
+  rw [finiteApyUSDNumerator_eq_sum_mul, hsum]
+
+theorem apyUSDLedgerConsistent_finiteApyUSDValueAt_single_floor
+    (R : Nat) (s : State) (h : ApyUSDLedgerConsistent s) :
+    ∃ holders : List Address,
+      holders.Pairwise (· ≠ ·) ∧
+      (∀ a, s.apyUSDBal a ≠ 0 → a ∈ holders) ∧
+      finiteApyUSDNumerator R s holders / ray =
+        redeemAssets s.totalSupply_apyUSD R := by
+  obtain ⟨holders, hnd, hcov, hnum⟩ :=
+    apyUSDLedgerConsistent_finiteApyUSDNumerator R s h
+  refine ⟨holders, hnd, hcov, ?_⟩
+  rw [hnum]
+  rfl
 
 def apyUSDValueRoundingGapWitness : State :=
   { (default : State) with

@@ -179,7 +179,13 @@ floor-rounding layer is explicit: `finiteApyUSDValueAt` and
 identity, and `finiteApyUSDValueAt_rounding_gap` shows why the bound is not an
 equality theorem. `apyUSDValueRoundingGapWitness_consistent` proves that this
 strict gap occurs in a state satisfying the finite ledger relation, not only
-in an invalid arbitrary state.
+in an invalid arbitrary state. The exact alternative is the numerator layer:
+`finiteApyUSDNumerator`, `finiteApyUSDNumerator_eq_sum_mul`,
+`apyUSDLedgerConsistent_finiteApyUSDNumerator`, and
+`apyUSDLedgerConsistent_finiteApyUSDValueAt_single_floor` prove that the
+holder products can be summed exactly and divided by `ray` once. This is an
+explicit rational-style accounting convention, not a claim that the deployed
+contract exposes this aggregate numerator.
 
 ### 5.2 Registry consistency
 
