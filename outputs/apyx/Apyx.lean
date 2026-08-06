@@ -1536,6 +1536,13 @@ private theorem step_flexibleRequestUnlock_some (s : State) (amount : Nat) (call
       · exact absurd h (by simp)
       · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
 
+/-- Public effect theorem for a successful flexible unlock request. -/
+theorem flexibleRequestUnlockStep_effect (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.flexibleRequestUnlock amount) caller = some s') :
+    s.globalPause = false ∧ amount ≤ s.apxUSDBal caller ∧
+    s' = createFlexibleUnlock (burnApxUSD s caller amount) caller amount := by
+  exact step_flexibleRequestUnlock_some s amount caller s' h
+
 private theorem step_claimUnlock_some (s : State) (id : Nat) (caller : Address) (s' : State)
     (h : step s (Op.claimUnlock id) caller = some s') :
     ∃ owner amount cooldownEnd,

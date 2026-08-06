@@ -144,6 +144,46 @@ theorem flexPositions_createStandardUnlock (s : State) (owner : Address) (amount
   rw [hagree]
   simp [hlast]
 
+/-- A fresh flexible position adds exactly its amount to the owner's flexible
+position total, provided the shared allocation counter is unoccupied in the
+flexible registry. -/
+theorem flexPositions_createFlexibleUnlock (s : State) (owner : Address) (amount : Nat)
+    (a : Address) :
+    flexPositions (createFlexibleUnlock s owner amount) a =
+      flexPositions s a + (if owner = a then amount else 0) := by
+  have hnext : (createFlexibleUnlock s owner amount).nextUnlockId = s.nextUnlockId + 1 := rfl
+  unfold flexPositions
+  rw [hnext, List.range_succ, List.map_append, List.sum_append]
+  have hagree : ((List.range s.nextUnlockId).map (flexAmt (createFlexibleUnlock s owner amount) a))
+      = (List.range s.nextUnlockId).map (flexAmt s a) := by
+    apply List.map_congr_left
+    intro i hi
+    have hne : i ≠ s.nextUnlockId := Nat.ne_of_lt (List.mem_range.mp hi)
+    simp [flexAmt, createFlexibleUnlock, hne]
+  have hlast : flexAmt (createFlexibleUnlock s owner amount) a s.nextUnlockId =
+      if owner = a then amount else 0 := by
+    simp [flexAmt, createFlexibleUnlock]
+  rw [hagree]
+  simp [hlast]
+
+/-- A flexible allocation leaves the standard-position sum unchanged, provided
+the shared counter is unoccupied in the standard registry. -/
+theorem stdPositions_createFlexibleUnlock (s : State) (owner : Address) (amount : Nat)
+    (a : Address) (h_unalloc : s.unlockRequests s.nextUnlockId = none) :
+    stdPositions (createFlexibleUnlock s owner amount) a = stdPositions s a := by
+  have hnext : (createFlexibleUnlock s owner amount).nextUnlockId = s.nextUnlockId + 1 := rfl
+  unfold stdPositions
+  rw [hnext, List.range_succ, List.map_append, List.sum_append]
+  have hagree : ((List.range s.nextUnlockId).map (stdAmt (createFlexibleUnlock s owner amount) a))
+      = (List.range s.nextUnlockId).map (stdAmt s a) := by
+    apply List.map_congr_left
+    intro i hi
+    simp [stdAmt, createFlexibleUnlock]
+  have hlast : stdAmt (createFlexibleUnlock s owner amount) a s.nextUnlockId = 0 := by
+    simp [stdAmt, createFlexibleUnlock, h_unalloc]
+  rw [hagree]
+  simp [hlast]
+
 /-! ## The invariant the measure's completeness rests on
 
 `stdPositions`/`flexPositions` fold over `List.range s.nextUnlockId`, so they **silently drop**
@@ -577,6 +617,48 @@ theorem requestUnlock_holderValueAt_fixedRate (R : Nat) (s : State) (amount : Na
         exact h_create
     · exact h_create
   · exact h_create
+
+/-- A flexible request is neutral at a fixed rate: the burned apxUSD is added
+to the caller's flexible position total. Unlike a standard request there is no
+top-up branch, so only the shared fresh-id registry frame is needed. -/
+theorem flexibleRequestUnlock_holderValueAt_fixedRate (R : Nat) (s : State) (amount : Nat)
+    (caller : Address) (s' : State)
+    (h_step : step s (Op.flexibleRequestUnlock amount) caller = some s')
+    (h_registry : RegistryWellIndexed s) :
+    holderValueAt R s' caller = holderValueAt R s caller := by
+  obtain ⟨-, h_bal, hpost⟩ := flexibleRequestUnlockStep_effect s amount caller s' h_step
+  subst s'
+  have hstd_unalloc :
+      (burnApxUSD s caller amount).unlockRequests (burnApxUSD s caller amount).nextUnlockId = none := by
+    simpa [burnApxUSD] using std_unallocated_at_counter s h_registry.1
+  have hbal :
+      (createFlexibleUnlock (burnApxUSD s caller amount) caller amount).apxUSDBal caller =
+        s.apxUSDBal caller - amount := by
+    simp [createFlexibleUnlock, burnApxUSD]
+  have hstd :
+      stdPositions (createFlexibleUnlock (burnApxUSD s caller amount) caller amount) caller =
+        stdPositions s caller := by
+    rw [stdPositions_createFlexibleUnlock (burnApxUSD s caller amount) caller amount caller
+      hstd_unalloc]
+    rfl
+  have hflex :
+      flexPositions (createFlexibleUnlock (burnApxUSD s caller amount) caller amount) caller =
+        flexPositions s caller + amount := by
+    rw [flexPositions_createFlexibleUnlock (burnApxUSD s caller amount) caller amount caller]
+    have hflexburn : flexPositions (burnApxUSD s caller amount) caller = flexPositions s caller := by
+      unfold flexPositions
+      congr 1
+    rw [hflexburn]
+    simp
+  have hshares :
+      (createFlexibleUnlock (burnApxUSD s caller amount) caller amount).apyUSDBal caller =
+        s.apyUSDBal caller := by simp [createFlexibleUnlock, burnApxUSD]
+  have husdc :
+      (createFlexibleUnlock (burnApxUSD s caller amount) caller amount).usdcBal caller =
+        s.usdcBal caller := by simp [createFlexibleUnlock, burnApxUSD]
+  unfold holderValueAt valueAt
+  rw [hbal, hstd, hflex, hshares, husdc]
+  omega
 
 /-- Retiring an in-range standard position removes exactly its recorded amount
 from the owner's finite standard-position sum. Other positions, including any
@@ -1763,6 +1845,155 @@ theorem standardUnlock_holderValueAt_trace_witness :
       · exact Or.inl (Or.inl ⟨100, rfl⟩)
       · exact Or.inr ⟨cooldownPeriod, rfl⟩
       · exact Or.inl (Or.inr ⟨0, rfl⟩)
+    · decide
+  · decide
+
+/-! ## Standard and flexible unlock traces
+
+The flexible channel composes with the same fixed-rate ledger, but its claim
+law is an inequality: the explicit early-exit fee leaves the holder no better
+off. The trace theorem below therefore uses `≤`, while the standard-only
+theorem above can use equality. -/
+
+/-- Timed operations in either unlock channel, including waiting. -/
+def UnlockLedgerTimedOp (op : Op) : Prop :=
+  StandardUnlockTimedOp op ∨
+  (∃ amount, op = Op.flexibleRequestUnlock amount) ∨
+  (∃ requestId, op = Op.flexibleClaimUnlock requestId)
+
+private theorem unlockLedgerTimed_operator_frame (s : State) (op : Op) (caller : Address)
+    (s' : State) (h_op : UnlockLedgerTimedOp op)
+    (h_step : step s op caller = some s') :
+    s'.unlockTokenOperator = s.unlockTokenOperator := by
+  rcases h_op with h_standard | ⟨amount, rfl⟩ | ⟨requestId, rfl⟩
+  · exact standardUnlockTimed_operator_frame s op caller s' h_standard h_step
+  · obtain ⟨-, -, hpost⟩ := flexibleRequestUnlockStep_effect s amount caller s' h_step
+    rw [hpost]
+    simp [createFlexibleUnlock, burnApxUSD]
+  · obtain ⟨owner, amount, requestTime, cooldownEnd, hreq, howner, hcaller, htime, hpost⟩ :=
+      flexibleClaimStep_effect s requestId caller s' h_step
+    rw [hpost]
+    simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT]
+
+private theorem flexibleClaim_holderValueAt_nonincreasing
+    (R : Nat) (s : State) (requestId : Nat) (caller : Address) (s' : State) (a : Address)
+    (h_step : step s (Op.flexibleClaimUnlock requestId) caller = some s')
+    (h_registry : RegistryWellIndexed s)
+    (h_not_operator : a ≠ s.unlockTokenOperator)
+    (h_caller : caller = a) :
+    holderValueAt R s' a ≤ holderValueAt R s a := by
+  obtain ⟨owner, amount, requestTime, cooldownEnd, hreq, howner, hcaller, htime, hpost⟩ :=
+    flexibleClaimStep_effect s requestId caller s' h_step
+  have howner_eq : owner = a := by
+    have hchoice : caller = owner ∨ caller = s.unlockTokenOperator := hcaller
+    rcases hchoice with h | h
+    · exact h_caller ▸ h.symm
+    · exact False.elim (h_not_operator (h_caller ▸ h))
+  subst owner
+  have hid : requestId < s.nextUnlockId := by
+    by_cases hlt : requestId < s.nextUnlockId
+    · exact hlt
+    · have hnone := h_registry.1.2 requestId (by omega)
+      rw [hreq] at hnone
+      simp at hnone
+  have hfee := flexibleClaim_holderValueAt_fee s requestId a amount requestTime cooldownEnd caller s'
+    hid hreq h_step R
+  omega
+
+/-- At a fixed rate, a trace over both unlock channels and waits never raises
+the tracked ordinary holder's complete value. Standard requests and claims
+are neutral; a flexible claim may lower value by its explicit fee. -/
+theorem unlockLedger_holderValueAt_trace_nonincreasing
+    (R : Nat) (s : State) (σ : List (Op × Address)) (a : Address)
+    (h_registry : RegistryWellIndexed s)
+    (h_own : ∀ p ∈ σ, p.2 = a)
+    (h_ops : ∀ p ∈ σ, UnlockLedgerTimedOp p.1)
+    (h_not_operator : a ≠ s.unlockTokenOperator) :
+    holderValueAt R (execTrace s σ) a ≤ holderValueAt R s a := by
+  induction σ generalizing s with
+  | nil => exact Nat.le_refl _
+  | cons p σ ih =>
+    obtain ⟨op, caller⟩ := p
+    have hcaller : caller = a := h_own (op, caller) List.mem_cons_self
+    have hop : UnlockLedgerTimedOp op := h_ops (op, caller) List.mem_cons_self
+    have htail_own : ∀ q ∈ σ, q.2 = a :=
+      fun q hq => h_own q (List.mem_cons_of_mem _ hq)
+    have htail_ops : ∀ q ∈ σ, UnlockLedgerTimedOp q.1 :=
+      fun q hq => h_ops q (List.mem_cons_of_mem _ hq)
+    simp only [execTrace]
+    cases hstep : step s op caller with
+    | none =>
+        exact ih s h_registry htail_own htail_ops h_not_operator
+    | some s1 =>
+        have h_inv : RegistryWellIndexed s := h_registry
+        have h_step_bound : holderValueAt R s1 a ≤ holderValueAt R s a := by
+          rcases hop with h_standard | ⟨amount, rfl⟩ | ⟨requestId, rfl⟩
+          · rcases h_standard with h_standard | ⟨dt, rfl⟩
+            · subst caller
+              rcases h_standard with ⟨amount, rfl⟩ | ⟨requestId, rfl⟩
+              · exact Nat.le_of_eq
+                  (requestUnlock_holderValueAt_fixedRate R s amount a s1 hstep h_inv.1)
+              · exact Nat.le_of_eq
+                  (standardUnlock_claim_neutral_fixed R s requestId a s1 a hstep h_inv
+                    h_not_operator rfl)
+            · exact Nat.le_of_eq (by
+                simpa [hcaller] using tick_holderValueAt_frame R s dt caller s1 hstep)
+          · subst caller
+            exact Nat.le_of_eq
+              (flexibleRequestUnlock_holderValueAt_fixedRate R s amount a s1 hstep h_inv)
+          · subst caller
+            exact flexibleClaim_holderValueAt_nonincreasing R s requestId a s1 a hstep h_inv
+              h_not_operator rfl
+        have h_registry1 : RegistryWellIndexed s1 :=
+          registryWellIndexed_step s op caller s1 h_registry hstep
+        have h_operator1 : a ≠ s1.unlockTokenOperator := by
+          have hframe := unlockLedgerTimed_operator_frame s op caller s1 hop hstep
+          intro hbad
+          exact h_not_operator (hbad.trans hframe)
+        exact Nat.le_trans (ih s1 h_registry1 htail_own htail_ops h_operator1) h_step_bound
+
+/-- Non-vacuity witness for the fee-bearing branch: a 1000 apxUSD flexible
+request, cooldown wait, and claim leaves 999 apxUSD because the 10 bps
+post-cooldown fee floors to one unit. -/
+theorem unlockLedger_holderValueAt_trace_witness :
+    let s : State :=
+      { (default : State) with
+          globalPause := false
+          apxUSDBal := fun a => if a = 1 then 1000 else 0
+          totalSupply_apxUSD := 1000 }
+    let σ : List (Op × Address) :=
+      [(Op.flexibleRequestUnlock 1000, 1), (Op.tick cooldownPeriod, 1),
+        (Op.flexibleClaimUnlock 0, 1)]
+    holderValueAt ray (execTrace s σ) 1 ≤ holderValueAt ray s 1 ∧
+    (execTrace s σ).flexibleUnlockRequests 0 = none ∧
+    (execTrace s σ).apxUSDBal 1 = 999 := by
+  dsimp only
+  let s : State :=
+    { (default : State) with
+        globalPause := false
+        apxUSDBal := fun a => if a = 1 then 1000 else 0
+        totalSupply_apxUSD := 1000 }
+  let σ : List (Op × Address) :=
+    [(Op.flexibleRequestUnlock 1000, 1), (Op.tick cooldownPeriod, 1),
+      (Op.flexibleClaimUnlock 0, 1)]
+  have hsreg : RegistryWellIndexed s := by
+    exact registryWellIndexed_of_frame (default : State) s
+      ⟨rfl, rfl, rfl, rfl, rfl⟩ registryWellIndexed_default
+  constructor
+  · apply unlockLedger_holderValueAt_trace_nonincreasing ray s σ 1 hsreg
+    · intro p hp
+      have hp' : p = (Op.flexibleRequestUnlock 1000, 1) ∨
+          p = (Op.tick cooldownPeriod, 1) ∨ p = (Op.flexibleClaimUnlock 0, 1) := by
+        simpa [σ] using hp
+      rcases hp' with rfl | rfl | rfl <;> rfl
+    · intro p hp
+      have hp' : p = (Op.flexibleRequestUnlock 1000, 1) ∨
+          p = (Op.tick cooldownPeriod, 1) ∨ p = (Op.flexibleClaimUnlock 0, 1) := by
+        simpa [σ] using hp
+      rcases hp' with rfl | rfl | rfl
+      · exact Or.inr (Or.inl ⟨1000, rfl⟩)
+      · exact Or.inl (Or.inr ⟨cooldownPeriod, rfl⟩)
+      · exact Or.inr (Or.inr ⟨0, rfl⟩)
     · decide
   · decide
 

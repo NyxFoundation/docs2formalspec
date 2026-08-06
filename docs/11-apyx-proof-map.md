@@ -199,7 +199,12 @@ requests, waits, and claims, and carries `RegistryWellIndexed` through the
 induction. The live-value variant
 `standardUnlock_holderValue_trace_neutral` is intentionally narrower and
 excludes waits, because vesting can change the live rate. Operator-mediated
-claims for another holder remain a separate frame obligation.
+claims for another holder remain a separate frame obligation. The combined
+fixed-rate inequality `unlockLedger_holderValueAt_trace_nonincreasing` now
+adds flexible requests and claims: requests are neutral, while flexible
+claims are non-increasing by the explicit fee. Its witness
+`unlockLedger_holderValueAt_trace_witness` exercises a nonzero post-cooldown
+fee rather than merely a zero-amount or reverted claim.
 
 ### 5.3 Clock consistency
 
@@ -357,8 +362,9 @@ and their position ledger now have local request and claim boundary facts in
 The mixed-operation full-trace liability ledger remains open. The standard
 unlock request-to-claim sublanguage is closed at a fixed rate by
 `standardUnlock_holderValueAt_trace_neutral`; the remaining work is to compose
-that ledger with flexible claims, vault exits, and live-rate changes without
-silently treating price movement as transfer conservation.
+that ledger with vault exits and live-rate changes without silently treating
+price movement as transfer conservation; the flexible channel is now included
+in `unlockLedger_holderValueAt_trace_nonincreasing`.
 `redemptionValue_frame`, `redemption_price_writers`, and
 `admin_alone_moves_redemption_price` for price writers; `reserve_outflow_only_via_redemption`
 and the buffer theorems for non-depletion boundaries; and
@@ -626,9 +632,11 @@ request-to-claim trace now has an inductive fixed-rate theorem,
 language with explicit waits. It starts from `RegistryWellIndexed`, preserves
 that invariant over successful prefixes, and skips reverted calls with the
 model's `execTrace` semantics. It deliberately excludes operator-mediated
-claims for another holder. The mixed-operation trace still needs a ledger
-composition theorem and a live-rate treatment. Flexible claims use the
-corresponding fee law `flexibleClaim_holderValueAt_fee`; treating
+claims for another holder. The standard-plus-flexible fixed-rate trace is now
+covered by `unlockLedger_holderValueAt_trace_nonincreasing`. The mixed trace
+that also includes vault exits still needs a ledger composition theorem and a
+live-rate treatment. Flexible claims use the corresponding fee law
+`flexibleClaim_holderValueAt_fee`; treating
 them as neutral would erase the protocol's explicit early-exit charge.
 
 The global layer is where the protocol-level claims belong:
