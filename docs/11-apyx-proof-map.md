@@ -463,6 +463,14 @@ not only a finite-support summation. The zero-supply case also needs an
 explicit policy, because Nat division credits every holder with zero while the
 modeled step still sets the reserve to zero.
 
+Decimal scaling is a separate fidelity boundary, not an omitted Nat lemma.
+`MulDivFidelity.lean` formalizes the deployment-shaped single-`mulDiv` ray
+conversions and the deviation of the current two-stage rate model. The current
+Lean state uses normalized Nat units; the USDC-6 to token-18 conversion,
+uint256 overflow, and Solidity division-by-zero behavior still belong to the
+implementation/SPECA layer. A theorem over the normalized units must not be
+read as a proof of those raw-token semantics.
+
 ## 6. Define reachability and prove an inductive invariant
 
 A safety theorem should apply to reachable states, not just to arbitrary states that happen to satisfy an invariant.
