@@ -217,6 +217,13 @@ excludes vault exits and clock steps because those change the pricing context.
 The supporting lemma `holderValueAt_mono_rate` makes that boundary explicit:
 the fixed-rate measure is monotone when the pricing rate falls, but a rate rise
 is not free conservation and needs an additional economic argument.
+The rate-aware definitions `RateAwareHolderValueOp`,
+`holderValueExecutionRate`, `RateAwareSideCondition`, and `liveRateSequence`
+make that argument stateable. `holderValueAt_rateAware_trace_bound` proves the
+fixed-to-live bound under a pairwise non-increasing execution-rate schedule;
+`holderValue_rateAware_trace_nonincreasing` adds the explicit first-rate
+condition needed to compare against the initial live value. This is a
+conditional vault-trace theorem, not a blanket closure of the live-rate gap.
 
 ### 5.3 Clock consistency
 

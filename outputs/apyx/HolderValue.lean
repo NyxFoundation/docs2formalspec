@@ -2307,7 +2307,211 @@ private theorem flexibleClaim_holderValueAt_nonincreasing_any
     omega
   · have hframe := flexibleClaim_holderValueAt_fixedRate_frame R s requestId owner amount
       requestTime cooldownEnd caller s' a hreq h_step howner
-    omega
+    exact Nat.le_of_eq hframe
+
+/-! ## Rate-aware traces including vault exits
+
+The live-rate theorem cannot simply add `withdraw` and `redeem`: their local
+no-gain facts are priced at the rate used by that step. The following relation
+records those execution rates and appends the terminal live rate. A pairwise
+non-increasing schedule is the exact condition under which the fixed-rate
+local facts can be telescoped using `holderValueAt_mono_rate`. -/
+
+def RateAwareHolderValueOp (op : Op) : Prop :=
+  StableHolderValueOp op ∨
+  (∃ amount, op = Op.lockApxUSD amount) ∨
+  (∃ assets receiver, op = Op.withdraw assets receiver) ∨
+  (∃ shares receiver, op = Op.redeem shares receiver)
+
+def holderValueExecutionRate (s : State) (op : Op) : Nat :=
+  match op with
+  | Op.withdraw _ _ => computeExchangeRate (pullVestedYield s)
+  | Op.redeem _ _ => computeExchangeRate (pullVestedYield s)
+  | _ => computeExchangeRate s
+
+def traceNextState (s : State) (p : Op × Address) : State :=
+  match step s p.1 p.2 with
+  | none => s
+  | some s' => s'
+
+def liveRateSequence (s : State) : List (Op × Address) → List Nat
+  | [] => [computeExchangeRate s]
+  | p :: σ => holderValueExecutionRate s p.1 ::
+      liveRateSequence (traceNextState s p) σ
+
+def RateAwareSideCondition (s : State) (a : Address) : List (Op × Address) → Prop
+  | [] => s.redemptionValue ≤ ray ∧ a ≠ s.unlockTokenOperator
+  | p :: σ =>
+      s.redemptionValue ≤ ray ∧ a ≠ s.unlockTokenOperator ∧
+        RateAwareSideCondition (traceNextState s p) a σ
+
+private theorem holderValueAt_executionRate_step
+    (s : State) (op : Op) (caller : Address) (s' : State) (a : Address)
+    (h_op : RateAwareHolderValueOp op) (h_caller : caller = a)
+    (h_registry : RegistryWellIndexed s) (h_price : s.redemptionValue ≤ ray)
+    (h_step : step s op caller = some s') :
+    holderValueAt (holderValueExecutionRate s op) s' a ≤
+      holderValueAt (holderValueExecutionRate s op) s a := by
+  rcases h_op with h_stable | ⟨amount, rfl⟩ | ⟨assets, receiver, rfl⟩ | ⟨shares, receiver, rfl⟩
+  · subst caller
+    rcases h_stable with h_rate | h_standard | ⟨amount, rfl⟩ | ⟨requestId, rfl⟩
+    · rcases h_rate with ⟨amount, rfl⟩ | ⟨amount, rfl⟩
+      · exact Nat.le_of_eq (holder_value_depositUSDC s amount a s' h_step)
+      · exact holder_value_redeemApxUSD s amount a s' h_step h_price
+    · rcases h_standard with ⟨amount, rfl⟩ | ⟨requestId, rfl⟩
+      · exact Nat.le_of_eq
+          (requestUnlock_holderValueAt_fixedRate (computeExchangeRate s) s amount a s'
+            h_step h_registry.1)
+      · exact Nat.le_of_eq
+          (standardClaim_holderValueAt_fixedRate_any (computeExchangeRate s) s requestId a s' a
+            h_step h_registry)
+    · exact Nat.le_of_eq
+        (flexibleRequestUnlock_holderValueAt_fixedRate (computeExchangeRate s) s amount a s'
+          h_step h_registry)
+    · exact flexibleClaim_holderValueAt_nonincreasing_any (computeExchangeRate s) s requestId a s' a
+        h_step h_registry
+  · subst caller
+    calc
+      holderValueAt (computeExchangeRate s) s' a ≤ holderValue s a :=
+        holder_value_lockApxUSD_fixedRate s amount a s' h_step
+      _ = holderValueAt (computeExchangeRate s) s a := (holderValueAt_live s a).symm
+  · subst caller
+    exact holder_value_withdraw s assets receiver a s' h_step
+      (flex_unallocated_at_counter s h_registry.1)
+  · subst caller
+    exact holder_value_redeem s shares receiver a s' h_step
+      (flex_unallocated_at_counter s h_registry.1)
+
+private theorem liveRateSequence_pairwise_tail (s : State) (p : Op × Address)
+    (σ : List (Op × Address))
+    (h : List.Pairwise (fun r₁ r₂ => r₂ ≤ r₁) (liveRateSequence s (p :: σ))) :
+    List.Pairwise (fun r₁ r₂ => r₂ ≤ r₁)
+      (liveRateSequence (traceNextState s p) σ) := by
+  change List.Pairwise (fun r₁ r₂ => r₂ ≤ r₁)
+    (holderValueExecutionRate s p.1 :: liveRateSequence (traceNextState s p) σ) at h
+  exact (List.pairwise_cons.mp h).2
+
+private theorem liveRateSequence_head_bound (s : State) (p : Op × Address)
+    (σ : List (Op × Address))
+    (h : List.Pairwise (fun r₁ r₂ => r₂ ≤ r₁) (liveRateSequence s (p :: σ))) :
+    ∀ x ∈ liveRateSequence (traceNextState s p) σ,
+      x ≤ holderValueExecutionRate s p.1 := by
+  change List.Pairwise (fun r₁ r₂ => r₂ ≤ r₁)
+    (holderValueExecutionRate s p.1 :: liveRateSequence (traceNextState s p) σ) at h
+  exact (List.pairwise_cons.mp h).1
+
+set_option maxRecDepth 10000 in
+theorem holderValueAt_rateAware_trace_bound
+    (s : State) (σ : List (Op × Address)) (a : Address) (R₀ : Nat)
+    (h_registry : RegistryWellIndexed s)
+    (h_safe : RateAwareSideCondition s a σ)
+    (h_own : ∀ p ∈ σ, p.2 = a)
+    (h_ops : ∀ p ∈ σ, RateAwareHolderValueOp p.1)
+    (h_nonempty : σ ≠ [])
+    (h_rate : match σ with
+      | [] => True
+      | p :: _ => R₀ = holderValueExecutionRate s p.1)
+    (h_rates : List.Pairwise (fun r₁ r₂ => r₂ ≤ r₁)
+      (liveRateSequence s σ)) :
+    holderValueAt (computeExchangeRate (execTrace s σ)) (execTrace s σ) a ≤
+      holderValueAt R₀ s a := by
+  induction σ generalizing s R₀ with
+  | nil => exact False.elim (h_nonempty rfl)
+  | cons p σ ih =>
+      obtain ⟨op, caller⟩ := p
+      have hcaller : caller = a := h_own (op, caller) List.mem_cons_self
+      have hop : RateAwareHolderValueOp op := h_ops (op, caller) List.mem_cons_self
+      have htail_own : ∀ q ∈ σ, q.2 = a :=
+        fun q hq => h_own q (List.mem_cons_of_mem _ hq)
+      have htail_ops : ∀ q ∈ σ, RateAwareHolderValueOp q.1 :=
+        fun q hq => h_ops q (List.mem_cons_of_mem _ hq)
+      have hrate : R₀ = holderValueExecutionRate s op := by simpa using h_rate
+      subst R₀
+      cases σ with
+      | nil =>
+          have hpair := List.pairwise_cons.mp h_rates
+          have hterminal : computeExchangeRate (traceNextState s (op, caller)) ≤
+              holderValueExecutionRate s op := by
+            apply hpair.1
+            simp [liveRateSequence]
+          cases hstep : step s op caller with
+          | none =>
+              simpa [execTrace, traceNextState, hstep] using
+                holderValueAt_mono_rate s a _ _ hterminal
+          | some s1 =>
+              have hlocal := holderValueAt_executionRate_step s op caller s1 a hop hcaller
+                h_registry h_safe.1 hstep
+              have hterminal' : computeExchangeRate s1 ≤
+                  holderValueExecutionRate s op := by
+                simpa [traceNextState, hstep] using hterminal
+              have hpostrate := holderValueAt_mono_rate s1 a _ _ hterminal'
+              simpa [execTrace, traceNextState, hstep] using Nat.le_trans hpostrate hlocal
+      | cons q σ =>
+          have htail_pair := liveRateSequence_pairwise_tail s (op, caller) (q :: σ) h_rates
+          have hhead := liveRateSequence_head_bound s (op, caller) (q :: σ) h_rates
+          cases hstep : step s op caller with
+          | none =>
+              have hsafe_tail : RateAwareSideCondition s a (q :: σ) := by
+                simpa [traceNextState, hstep] using h_safe.2.2
+              have htail_pair' : List.Pairwise (fun r₁ r₂ => r₂ ≤ r₁)
+                  (liveRateSequence s (q :: σ)) := by
+                simpa only [liveRateSequence, traceNextState, hstep] using htail_pair
+              have hbound := ih s (holderValueExecutionRate s q.1) h_registry hsafe_tail
+                htail_own htail_ops (by simp) rfl htail_pair'
+              have hnext_rate : holderValueExecutionRate s q.1 ≤
+                  holderValueExecutionRate s op := by
+                exact hhead _ (by simp [liveRateSequence, traceNextState, hstep])
+              have hpostrate := holderValueAt_mono_rate s a _ _ hnext_rate
+              simpa [execTrace, traceNextState, hstep] using
+                Nat.le_trans hbound hpostrate
+          | some s1 =>
+              have hsafe_tail : RateAwareSideCondition s1 a (q :: σ) := by
+                simpa [traceNextState, hstep] using h_safe.2.2
+              have h_registry1 : RegistryWellIndexed s1 :=
+                registryWellIndexed_step s op caller s1 h_registry hstep
+              have htail_pair' : List.Pairwise (fun r₁ r₂ => r₂ ≤ r₁)
+                  (liveRateSequence s1 (q :: σ)) := by
+                simpa only [liveRateSequence, traceNextState, hstep] using htail_pair
+              have hbound := ih s1 (holderValueExecutionRate s1 q.1) h_registry1 hsafe_tail
+                htail_own htail_ops (by simp) rfl htail_pair'
+              have hlocal := holderValueAt_executionRate_step s op caller s1 a hop hcaller
+                h_registry h_safe.1 hstep
+              have hnext_rate : holderValueExecutionRate s1 q.1 ≤
+                  holderValueExecutionRate s op := by
+                exact hhead _ (by simp [liveRateSequence, traceNextState, hstep])
+              have hpostrate := holderValueAt_mono_rate s1 a _ _ hnext_rate
+              simpa [execTrace, traceNextState, hstep] using
+                Nat.le_trans hbound (Nat.le_trans hpostrate hlocal)
+
+/-- A live-value corollary is available when the first execution rate is no
+higher than the initial live rate. This premise is intentionally explicit:
+pending vesting can make `computeExchangeRate (pullVestedYield s)` higher than
+`computeExchangeRate s`, and the model does not identify that increase with
+conservation. -/
+theorem holderValue_rateAware_trace_nonincreasing
+    (s : State) (σ : List (Op × Address)) (a : Address) (R₀ : Nat)
+    (h_registry : RegistryWellIndexed s)
+    (h_safe : RateAwareSideCondition s a σ)
+    (h_own : ∀ p ∈ σ, p.2 = a)
+    (h_ops : ∀ p ∈ σ, RateAwareHolderValueOp p.1)
+    (h_nonempty : σ ≠ [])
+    (h_rate : match σ with
+      | [] => True
+      | p :: _ => R₀ = holderValueExecutionRate s p.1)
+    (h_rates : List.Pairwise (fun r₁ r₂ => r₂ ≤ r₁)
+      (liveRateSequence s σ))
+    (h_initial_rate : R₀ ≤ computeExchangeRate s) :
+    holderValue (execTrace s σ) a ≤ holderValue s a := by
+  have hbound := holderValueAt_rateAware_trace_bound s σ a R₀ h_registry h_safe h_own h_ops
+    h_nonempty h_rate h_rates
+  have hmono := holderValueAt_mono_rate s a R₀ (computeExchangeRate s) h_initial_rate
+  calc
+    holderValue (execTrace s σ) a =
+        holderValueAt (computeExchangeRate (execTrace s σ)) (execTrace s σ) a :=
+      (holderValueAt_live (execTrace s σ) a).symm
+    _ ≤ holderValueAt R₀ s a := hbound
+    _ ≤ holderValueAt (computeExchangeRate s) s a := hmono
+    _ = holderValue s a := holderValueAt_live s a
 
 /-- At a fixed pricing rate, a timed trace consisting of the holder's standard
 requests, standard claims, and waits is neutral. This is the honest
