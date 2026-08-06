@@ -535,10 +535,12 @@ than an explicit gap:
   *per-address* pro-rata credit itself — every holder `a` is shown to be credited exactly
   `usdcReserve · apxUSDBal(a) / totalSupply` with the reserve and the buffer both driven to zero
   (`req_catastrophic_backstop` clauses (3)–(4), and the buffer-to-zero effect restated in `SpecDefects`).
-  What remains unformalized is only the *aggregate conservation* of that split — that `Σ_holder` of the
-  credits exactly equals the drained reserve — which needs a `Σ` over the holder set the aggregate
-  `Address → Nat` ledger has no summation structure for; the same
-  limitation that makes `solvency_preserved` take well-formedness as a hypothesis.
+  The aggregate split is not merely unformalized: `pro_rata_floor_underpays_witness` gives a fully
+  accounted finite holder list (`1 + 2 = 3`) where the floor-divided credits for a reserve of `2` sum
+  to `1`. Thus a future finite-support model would still need a remainder-allocation rule (or an exact
+  rational accounting convention) before it could honestly prove "entire reserve". The current
+  `Address → Nat` ledger also has no holder-set summation structure, so the witness is a model/spec
+  arithmetic finding, not a claim about deployed settlement code or a theft/insolvency exploit.
 - **`caller_net_nonpositive`, trace-level closure** — the value-weighted no-free-money property is proved
   single-step at a fixed reference rate; extending it to arbitrary traces under a *moving* exchange rate is a
   distinct, genuinely hard arithmetic problem and is flagged as open rather than claimed.

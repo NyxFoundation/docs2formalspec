@@ -96,6 +96,7 @@ Trail of Bits の **invariant-driven development**[^idd] は、設計欠陥(busi
 - `requirements.json` / `SPEC.md` の `buffer-non-decreasing` を原典どおり「**catastrophic を除き、routine/stress 下で** MUST NOT decrease」に修正済み。
 - Lean モデルの `req_buffer_non_decreasing` は元から routine op 限定で**修正仕様と整合**(モデルは正しかった)。docstring を修正仕様に更新。
 - SpecDefects の定理を `req_catastrophic_backstop_distributes_buffer` に改名し、**catastrophic 例外の肯定的言明**(backstop が buffer を 0 にする=修正済み要件が除外する挙動)として保持。`README` §6.2 の「catastrophic 第2節が未モデル化」ギャップを大きく closing(buffer→0 に加え、**各アドレスへの pro-rata クレジット `usdcReserve·apxUSDBal(a)/totalSupply` 自体を `req_catastrophic_backstop` で証明**。残るのは Σ 総和保存=分配総額と drained reserve の一致のみで、これが集約台帳の表現限界)。なお `catastrophicBackstop` は model.md の "Governance emergency flag set" ガードに忠実に `emergencyFlag == true` 前提で発火する(フラグは stress 経路 `handleStressEvent` が立てる)。
+- **追加の算術境界**: `pro_rata_floor_underpays_witness` は、有限holder集合を仮に追加しても、Natのfloor除算だけで各holderへのcreditsの総和がreserveを下回る具体例を機械検証する。したがって「entire reserve」を将来証明するには、holder集合の表現だけでなく、剰余配分ルールまたは厳密な算術規約も必要になる。これはモデル/仕様のwitnessであり、デプロイ済みsettlement codeの欠陥や盗難を主張するものではない。
 - **Apyx 側の修正は不要。** これはツール(抽出パイプライン)の欠陥だった。
 - `buffer-non-decreasing`: 「overcollateralization buffer は **MUST NOT decrease**」
 - `buffer-growth-stress`: 「ストレス事象では **むしろ増加** すべき(drain されない)」

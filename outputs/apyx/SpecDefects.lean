@@ -23,9 +23,32 @@ retained as the machine-checked statement of that catastrophic *exception*: the 
 backstop step distributes the entire buffer (drives it to zero), which is exactly what
 `catastrophic-backstop` requires and what the corrected `buffer-non-decreasing` now excludes.
 
-This module is additive and leaves `Apyx.lean`/`BlastRadius.lean`/`Safety.lean` untouched. -/
+This module is additive and leaves `Apyx.lean`/`BlastRadius.lean`/`Safety.lean` untouched.
+The rounding witness below is deliberately separate from the per-address
+postcondition: it tests whether that postcondition can satisfy the word
+"entire" once a finite holder set is introduced. -/
 
 namespace Apyx
+
+/-! ## Rounding witness for the backstop's aggregate payout
+
+The transition theorem below gives every address its floor-divided pro-rata
+credit.  Even if the abstract state were extended with a finite holder set so
+that those credits could be summed, the current formula would not in general
+sum to the reserve: Nat division drops the remainder.  The concrete witness
+here separates that arithmetic/specification issue from the independent issue
+that the current `State` has no finite support structure. -/
+
+/-- A finite, fully accounted holder list can still leave reserve dust under the
+model's floor-divided pro-rata formula: balances 1 and 2 cover supply 3, but a
+reserve of 2 credits only `0 + 1`, not the entire reserve.  This is a
+model-level rounding witness, not a claim about the deployed settlement code. -/
+theorem pro_rata_floor_underpays_witness :
+    let balances : List Nat := [1, 2]
+    balances.sum = 3 ∧
+      (balances.map (fun b => 2 * b / 3)).sum = 1 ∧
+      (balances.map (fun b => 2 * b / 3)).sum < 2 := by
+  decide
 
 /-- Witness state for the buffer/backstop contradiction: a positive overcollateralization
 buffer, with `totalSupply_apxUSD = ray` so that the redemption total equals the redemption

@@ -217,6 +217,13 @@ Nat arithmetic. `div_add_div_le`, `redeemAssets_superadd`,
 ceil rounding facts used by the vault holder-value proofs. No real-number
 approximation is used, so there is no hidden real-to-Nat bridge to trust.
 
+The backstop allocation has a separate rounding boundary. `req_catastrophic_backstop`
+proves the per-address floor-divided credit, while
+`pro_rata_floor_underpays_witness` shows that those credits need not sum to the
+reserve even when a finite holder list accounts for the entire supply. A future
+model that claims "entire reserve" therefore needs an explicit remainder rule,
+not only a finite-support summation.
+
 ## 6. Define reachability and prove an inductive invariant
 
 A safety theorem should apply to reachable states, not just to arbitrary states that happen to satisfy an invariant.
@@ -305,6 +312,8 @@ The current economic ladder is distributed across the following source
 families: `solvency_step` and `protocolInv_stepResult_accepted` for conditional
 solvency/invariant preservation; `holder_value_*` and `netDelta` in
 `HolderValue.lean` for per-holder value; the rounding lemmas named in §5.4;
+`pro_rata_floor_underpays_witness` in `SpecDefects.lean` for the fact that a
+floor-divided pro-rata payout does not automatically conserve a reserve;
 `redemptionValue_frame`, `redemption_price_writers`, and
 `admin_alone_moves_redemption_price` for price writers; `reserve_outflow_only_via_redemption`
 and the buffer theorems for non-depletion boundaries; and
