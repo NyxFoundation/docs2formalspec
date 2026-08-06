@@ -779,4 +779,19 @@ example : UnlockTokenLedgerConsistent
     [(Op.tick 1, 0), (Op.requestUnlock 0, 0)] RegistryReach.initial
     unlockTokenLedgerConsistent_default
 
+/-! ## R19 — the USDC ledger is an explicit external effect boundary
+
+The generic effect theorem composes debit, payout, and frame cases without
+claiming that the current State contains the missing finite support or total
+supply. The witness supplies a holder membership proof and a concrete debit
+effect; tying a public Op to this effect remains a separate model/SPECA task. -/
+
+example : UsdcLedgerConsistent usdcLedgerDebit [1] 100 := by
+  apply usdcLedgerConsistent_effect usdcLedger0 usdcLedgerDebit [1] 100
+    (by simp [UsdcLedgerConsistent, usdcLedger0, default, sumOver])
+  left
+  refine ⟨1, 50, by simp, by simp [usdcLedger0], ?_, rfl⟩
+  funext a
+  by_cases h : a = 1 <;> simp [usdcLedger0, usdcLedgerDebit, h]
+
 end Apyx

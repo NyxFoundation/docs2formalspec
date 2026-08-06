@@ -1275,6 +1275,58 @@ theorem usdcLedgerConsistent_reserve_payout
     have hdelta := sumOver_update_add_mem s.usdcBal receiver amount hnd hmem
     omega
 
+/-- A USDC frame changes neither the finite holder balances nor the reserve.
+This is deliberately a projection boundary: it can be discharged by a public
+step-effect theorem without unfolding unrelated State fields. -/
+def UsdcLedgerFrame (s s' : State) : Prop :=
+  s'.usdcBal = s.usdcBal ∧ s'.usdcReserve = s.usdcReserve
+
+theorem usdcLedgerConsistent_of_frame
+    (s s' : State) (holders : List Address) (totalSupply : Nat)
+    (hledger : UsdcLedgerConsistent s holders totalSupply)
+    (hframe : UsdcLedgerFrame s s') :
+    UsdcLedgerConsistent s' holders totalSupply := by
+  rcases hledger with ⟨hnd, hcov, hsum⟩
+  rcases hframe with ⟨hbal, hreserve⟩
+  refine ⟨hnd, ?_, ?_⟩
+  · intro a ha
+    rw [hbal] at ha
+    exact hcov a ha
+  · rw [hbal, hreserve]
+    exact hsum
+
+/-- The USDC accounting cases that a dispatcher or SPECA effect theorem must
+expose. This predicate intentionally does not mention `Op`: the current State
+does not contain a total-supply field or finite support, so the connection from
+a concrete public operation to one of these effects remains an explicit
+implementation/specification obligation. -/
+def UsdcLedgerEffect (s s' : State) (holders : List Address) : Prop :=
+  (∃ caller amount,
+    caller ∈ holders ∧
+    amount ≤ s.usdcBal caller ∧
+    s'.usdcBal = fun a => if a = caller then s.usdcBal a - amount else s.usdcBal a ∧
+    s'.usdcReserve = s.usdcReserve + amount) ∨
+  (∃ receiver amount,
+    receiver ∈ holders ∧
+    amount ≤ s.usdcReserve ∧
+    s'.usdcBal = fun a => if a = receiver then s.usdcBal a + amount else s.usdcBal a ∧
+    s'.usdcReserve = s.usdcReserve - amount) ∨
+  UsdcLedgerFrame s s'
+
+theorem usdcLedgerConsistent_effect
+    (s s' : State) (holders : List Address) (totalSupply : Nat)
+    (hledger : UsdcLedgerConsistent s holders totalSupply)
+    (heffect : UsdcLedgerEffect s s' holders) :
+    UsdcLedgerConsistent s' holders totalSupply := by
+  rcases heffect with hdebit | hpayout | hframe
+  · rcases hdebit with ⟨caller, amount, hmem, hle, hbal, hreserve⟩
+    exact usdcLedgerConsistent_debit_to_reserve s s' holders totalSupply
+      hledger caller amount hmem hle hbal hreserve
+  · rcases hpayout with ⟨receiver, amount, hmem, hle, hbal, hreserve⟩
+    exact usdcLedgerConsistent_reserve_payout s s' holders totalSupply
+      hledger receiver amount hmem hle hbal hreserve
+  · exact usdcLedgerConsistent_of_frame s s' holders totalSupply hledger hframe
+
 /-- Pulling the live vest adds exactly the newly realized amount to custody;
 the circulating and pending obligation ledger is framed. -/
 theorem apxUSDFlow_pullVestedYield (s : State) :

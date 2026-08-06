@@ -238,11 +238,15 @@ accounting boundary.
 The missing USDC side is made explicit without adding an unsupported field to
 `State`: `UsdcLedgerConsistent s holders totalSupply` takes the finite holder
 support and total USDC supply as external accounting parameters. Its default
-witness and `usdcLedgerConsistent_debit_to_reserve` /
-`usdcLedgerConsistent_reserve_payout` lemmas show the exact arithmetic needed
-for deposits and reserve payouts. These are interface lemmas, not yet a
-reachable-state USDC invariant; the holder support, total supply, fee wallet,
-and decimal scaling still have to come from the deployment/SPECA model.
+witness, `usdcLedgerConsistent_debit_to_reserve`,
+`usdcLedgerConsistent_reserve_payout`, and `usdcLedgerConsistent_of_frame`
+lemmas show the exact arithmetic needed for deposits, reserve payouts, and
+unaffected operations. `UsdcLedgerEffect` and
+`usdcLedgerConsistent_effect` compose those cases without pretending that the
+current dispatcher has supplied the missing finite support or total supply.
+These remain interface lemmas, not a reachable-state USDC invariant: tying a
+concrete `Op` to one of the effects, plus fee-wallet treatment and decimal
+scaling, still belongs to the deployment/SPECA model.
 
 The next internal boundary is `apxUSDFlow`: vault custody plus
 `outstandingApxUSD`. Projection lemmas
