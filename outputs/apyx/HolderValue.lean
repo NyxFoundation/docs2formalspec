@@ -2357,6 +2357,19 @@ def liveRateSequence (s : State) : List (Op × Address) → List Nat
   | p :: σ => holderValueExecutionRate s p.1 ::
       liveRateSequence (traceNextState s p) σ
 
+/-- The pairwise schedule is not an invariant of the current model. A dust-sized
+`lockApxUSD` can mint zero shares while adding one asset to the vault, so the
+live rate rises and the terminal rate is not below the execution rate. -/
+theorem rateAware_schedule_not_automatic :
+    let s : State :=
+      { (default : State) with
+          apxUSDBal := fun a => if a = 1 then 1 else 0
+          vaultApxUSDBal := 1
+          totalSupply_apyUSD := 0 }
+    let σ : List (Op × Address) := [(Op.lockApxUSD 1, 1)]
+    ¬ List.Pairwise (fun r₁ r₂ => r₂ ≤ r₁) (liveRateSequence s σ) := by
+  decide
+
 /-! The rate-aware composition needs the no-premium redemption bound at every
 prefix state. It does not need a separate operator exclusion: this trace is
 holder-signed, and the fixed-rate claim frames already cover the successful
