@@ -123,6 +123,130 @@ theorem ownerPointerSound_createFlexibleUnlock (s : State) (owner : Address) (am
   exact ⟨by simp [createFlexibleUnlock, hne, htoken], amt, ce, by
     simp [createFlexibleUnlock, hreq]⟩
 
+theorem registryBounded_updateStandardUnlock_of_entry (s : State) (id : Nat) (owner : Address)
+    (addAmount : Nat) (h : RegistryBounded s) (hid : id < s.nextUnlockId)
+    (hreq : ∃ o oa oe, s.unlockRequests id = some (o, oa, oe)) :
+    RegistryBounded (updateStandardUnlock s id owner addAmount) := by
+  obtain ⟨hstd, hflex⟩ := h
+  obtain ⟨o, oa, oe, hentry⟩ := hreq
+  have hnext : (updateStandardUnlock s id owner addAmount).nextUnlockId = s.nextUnlockId := by
+    simp [updateStandardUnlock, hentry]
+  refine ⟨?_, ?_⟩ <;> intro i hi
+  · have hi' : s.nextUnlockId ≤ i := by simpa [hnext] using hi
+    have hne : i ≠ id := by omega
+    rw [updateStandardUnlock_unlockRequests_eq s id owner addAmount o oa oe hentry i]
+    simp [hne, hstd i hi']
+  · have hi' : s.nextUnlockId ≤ i := by simpa [hnext] using hi
+    simpa [updateStandardUnlock, hentry] using hflex i hi'
+
+theorem registryDisjoint_updateStandardUnlock_of_entry (s : State) (id : Nat) (owner : Address)
+    (addAmount : Nat) (h : RegistryDisjoint s)
+    (hreq : ∃ o oa oe, s.unlockRequests id = some (o, oa, oe)) :
+    RegistryDisjoint (updateStandardUnlock s id owner addAmount) := by
+  obtain ⟨o, oa, oe, hentry⟩ := hreq
+  intro i
+  by_cases hieq : i = id
+  · right
+    have hnone : s.flexibleUnlockRequests id = none := by
+      rcases h id with hstd | hflex
+      · simp [hentry] at hstd
+      · exact hflex
+    simpa [updateStandardUnlock, hentry, hieq] using hnone
+  · simpa [updateStandardUnlock, hentry, hieq] using h i
+
+theorem ownerPointerSound_updateStandardUnlock_of_entry (s : State) (id : Nat)
+    (owner : Address) (addAmount oldAmount oldEnd : Nat) (h : OwnerPointerSound s)
+    (hentry : s.unlockRequests id = some (owner, oldAmount, oldEnd))
+    (htoken : s.unlockTokenOwner id = some owner) :
+    OwnerPointerSound (updateStandardUnlock s id owner addAmount) := by
+  unfold updateStandardUnlock
+  rw [hentry]
+  intro a i hptr
+  by_cases ha : a = owner
+  · subst a
+    by_cases hieq : i = id
+    · subst i
+      exact ⟨htoken, oldAmount + addAmount, s.now + cooldownPeriod, by simp⟩
+    · have hptr' : s.unlockRequestId owner = some i := by simpa [hieq] using hptr
+      obtain ⟨htoken', amount, ce, hentry'⟩ := h owner i hptr'
+      exact ⟨by simpa [hieq] using htoken', amount, ce, by
+        simpa [hieq] using hentry'⟩
+  · have hptr' : s.unlockRequestId a = some i := by simpa [ha] using hptr
+    obtain ⟨htoken', amount, ce, hentry'⟩ := h a i hptr'
+    have hne : i ≠ id := by
+      intro hieq
+      subst i
+      rw [hentry'] at hentry
+      simp at hentry
+      exact ha hentry.1
+    exact ⟨by simpa [hne] using htoken', amount, ce, by
+      simpa [hne] using hentry'⟩
+
+theorem registryWellIndexed_createStandardUnlock (s : State) (owner : Address) (amount : Nat)
+    (h : RegistryWellIndexed s) :
+    RegistryWellIndexed (createStandardUnlock s owner amount) := by
+  obtain ⟨hb, hp, hd⟩ := h
+  exact ⟨registryBounded_createStandardUnlock s owner amount hb,
+    ownerPointerSound_createStandardUnlock s owner amount hb hp,
+    registryDisjoint_createStandardUnlock s owner amount hd hb⟩
+
+theorem registryWellIndexed_createFlexibleUnlock (s : State) (owner : Address) (amount : Nat)
+    (h : RegistryWellIndexed s) :
+    RegistryWellIndexed (createFlexibleUnlock s owner amount) := by
+  obtain ⟨hb, hp, hd⟩ := h
+  exact ⟨registryBounded_createFlexibleUnlock s owner amount hb,
+    ownerPointerSound_createFlexibleUnlock s owner amount hb hp,
+    registryDisjoint_createFlexibleUnlock s owner amount hd hb⟩
+
+theorem registryWellIndexed_burnApxUSD (s : State) (caller amount : Nat)
+    (h : RegistryWellIndexed s) :
+    RegistryWellIndexed (burnApxUSD s caller amount) := by
+  simpa [burnApxUSD, RegistryWellIndexed, RegistryBounded, OwnerPointerSound,
+    RegistryDisjoint] using h
+
+theorem registryWellIndexed_requestUnlockStep (s : State) (caller amount : Nat)
+    (h : RegistryWellIndexed s) :
+    RegistryWellIndexed (requestUnlockStep s caller amount) := by
+  let b := burnApxUSD s caller amount
+  have hb : RegistryWellIndexed b := by
+    simpa [b] using registryWellIndexed_burnApxUSD s caller amount h
+  change RegistryWellIndexed (match b.unlockRequestId caller with
+    | some id =>
+      match b.unlockRequests id with
+      | some (o, _, _) =>
+        if o = caller then updateStandardUnlock b id caller amount
+        else createStandardUnlock b caller amount
+      | none => createStandardUnlock b caller amount
+    | none => createStandardUnlock b caller amount)
+  generalize hptr : b.unlockRequestId caller = ptr
+  cases ptr with
+  | none => simpa using registryWellIndexed_createStandardUnlock b caller amount hb
+  | some id =>
+    generalize hentry : b.unlockRequests id = entry
+    cases entry with
+    | none => simpa [hentry] using registryWellIndexed_createStandardUnlock b caller amount hb
+    | some triple =>
+      rcases triple with ⟨o, oldAmount, oldEnd⟩
+      by_cases ho : o = caller
+      · subst o
+        have hentry' : b.unlockRequests id = some (caller, oldAmount, oldEnd) := hentry
+        have hid : id < b.nextUnlockId := by
+          by_cases hlt : id < b.nextUnlockId
+          · exact hlt
+          · have hnone := hb.1.1 id (by omega)
+            rw [hnone] at hentry'
+            simp at hentry'
+        have htoken : b.unlockTokenOwner id = some caller :=
+          (hb.2.1 caller id hptr).1
+        simpa [hentry] using (show RegistryWellIndexed (updateStandardUnlock b id caller amount) from ⟨
+          registryBounded_updateStandardUnlock_of_entry b id caller amount hb.1 hid
+            ⟨caller, oldAmount, oldEnd, hentry'⟩,
+          ownerPointerSound_updateStandardUnlock_of_entry b id caller amount oldAmount oldEnd
+            hb.2.1 hentry' htoken,
+          registryDisjoint_updateStandardUnlock_of_entry b id caller amount hb.2.2
+            ⟨caller, oldAmount, oldEnd, hentry'⟩⟩)
+      · simpa [hentry, ho] using registryWellIndexed_createStandardUnlock b caller amount hb
+
 theorem ownerPointerSound_retireStandardUnlock (s : State) (id : Nat) (owner : Address)
     (hreq : ∃ amount ce, s.unlockRequests id = some (owner, amount, ce))
     (h : OwnerPointerSound s) :
