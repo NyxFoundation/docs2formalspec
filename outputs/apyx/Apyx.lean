@@ -1352,6 +1352,19 @@ private theorem flexibleUnlockFee_le_start (rt now : Nat) :
     | omega
     | exact Nat.max_le.mpr ⟨Nat.sub_le _ _, by omega⟩
 
+/-- The fee charged by a flexible claim is never larger than the position it
+settles. This public arithmetic boundary lets accounting modules rewrite
+`amount - fee + fee` without importing the private fee-curve proof. -/
+theorem flexibleClaimFee_le_amount (amount requestTime now : Nat) :
+    amount * flexibleUnlockFee requestTime now / 10000 ≤ amount := by
+  have hfee : flexibleUnlockFee requestTime now ≤ 10000 := by
+    exact Nat.le_trans (flexibleUnlockFee_le_start requestTime now) (by decide)
+  have hmul : amount * flexibleUnlockFee requestTime now
+      ≤ amount * 10000 := Nat.mul_le_mul_left amount hfee
+  have hdiv : amount * flexibleUnlockFee requestTime now / 10000
+      ≤ amount * 10000 / 10000 := Nat.div_le_div_right hmul
+  simpa using hdiv
+
 /-- The flexible-unlock fee declines (weakly) as time passes. -/
 private theorem flexibleUnlockFee_antitone (rt : Nat) {t1 t2 : Nat}
     (h0 : rt + minFlexibleClaim ≤ t1) (h : t1 ≤ t2) :
@@ -1575,6 +1588,20 @@ private theorem step_flexibleClaimUnlock_some (s : State) (id : Nat) (caller : A
           · exact ⟨owner, amount, requestTime, cooldownEnd, heq, by simp_all, by assumption,
               by omega, (Option.some.inj h).symm⟩
         · exact absurd h (by simp)
+
+/-- Public transition inversion for a successful flexible claim. The returned
+fee-adjusted mint amount is the exact value used by the transition; the theorem
+does not turn the flexible fee into a neutrality claim. -/
+theorem flexibleClaimStep_effect (s : State) (id : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.flexibleClaimUnlock id) caller = some s') :
+    ∃ owner amount requestTime cooldownEnd,
+      s.flexibleUnlockRequests id = some (owner, amount, requestTime, cooldownEnd) ∧
+      s.unlockTokenOwner id = some owner ∧
+      (caller = owner ∨ caller = s.unlockTokenOperator) ∧
+      requestTime + minFlexibleClaim ≤ s.now ∧
+      s' = mintApxUSD (retireFlexibleUnlock s id) owner
+        (amount - amount * flexibleUnlockFee requestTime s.now / 10000) := by
+  exact step_flexibleClaimUnlock_some s id caller s' h
 
 private theorem step_redeemApxUSD_some (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h : step s (Op.redeemApxUSD amount) caller = some s') :

@@ -646,6 +646,73 @@ theorem claimUnlock_holderValueAt_neutral (s : State) (id : Nat)
   rw [hbalance, hshares, husdc, hflex]
   omega
 
+/-- Retiring an in-range flexible position removes exactly its recorded amount
+from the owner's finite flexible-position sum. -/
+theorem flexPositions_retireFlexibleUnlock (s : State) (id : Nat) (owner : Address)
+    (amount requestTime cooldownEnd : Nat) (hid : id < s.nextUnlockId)
+    (hreq : s.flexibleUnlockRequests id =
+      some (owner, amount, requestTime, cooldownEnd)) :
+    flexPositions (retireFlexibleUnlock s id) owner + amount =
+      flexPositions s owner := by
+  let r := retireFlexibleUnlock s id
+  have hat : flexAmt s owner id = flexAmt r owner id + amount := by
+    simp [r, flexAmt, retireFlexibleUnlock, burnUnlockNFT, hreq]
+  have hother : ∀ j, j < s.nextUnlockId → j ≠ id →
+      flexAmt s owner j = flexAmt r owner j := by
+    intro j hj hji
+    simp [r, flexAmt, retireFlexibleUnlock, burnUnlockNFT, hji]
+  have hsum := sum_range_replace s.nextUnlockId id amount
+    (flexAmt s owner) (flexAmt r owner) hid hat hother
+  exact hsum.symm
+
+/-- A successful flexible claim preserves the owner's complete position value
+up to the explicit early-exit fee. At any fixed rate, the fee is the only value
+that leaves the holder: the net apxUSD mint plus the retired flexible position
+equals the pre-claim position value. This is deliberately a fee-accounting law,
+not a neutrality theorem. -/
+theorem flexibleClaim_holderValueAt_fee (s : State) (id : Nat)
+    (owner : Address) (amount requestTime cooldownEnd : Nat) (caller : Address) (s' : State)
+    (hid : id < s.nextUnlockId)
+    (hreq : s.flexibleUnlockRequests id =
+      some (owner, amount, requestTime, cooldownEnd))
+    (h_step : step s (Op.flexibleClaimUnlock id) caller = some s') :
+    ∀ R, holderValueAt R s' owner +
+      amount * flexibleUnlockFee requestTime s.now / 10000 =
+        holderValueAt R s owner := by
+  intro R
+  obtain ⟨recordedOwner, recordedAmount, recordedRequestTime, recordedCooldownEnd,
+    hentry, _, _, _, hpost⟩ := flexibleClaimStep_effect s id caller s' h_step
+  rw [hreq] at hentry
+  simp only [Option.some.injEq, Prod.mk.injEq] at hentry
+  obtain ⟨rfl, rfl, rfl, rfl⟩ := hentry
+  subst s'
+  let fee := amount * flexibleUnlockFee requestTime s.now / 10000
+  have hfee : fee ≤ amount := by
+    exact flexibleClaimFee_le_amount amount requestTime s.now
+  have hflex := flexPositions_retireFlexibleUnlock s id owner amount requestTime cooldownEnd hid hreq
+  have hflex' : flexPositions
+      (mintApxUSD (retireFlexibleUnlock s id) owner (amount - fee)) owner + amount =
+      flexPositions s owner := by
+    change flexPositions (retireFlexibleUnlock s id) owner + amount = flexPositions s owner
+    exact hflex
+  have hbalance : (mintApxUSD (retireFlexibleUnlock s id) owner (amount - fee)).apxUSDBal owner
+      = s.apxUSDBal owner + (amount - fee) := by
+    simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT, fee]
+  have hshares : (mintApxUSD (retireFlexibleUnlock s id) owner (amount - fee)).apyUSDBal owner
+      = s.apyUSDBal owner := by
+    simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT]
+  have husdc : (mintApxUSD (retireFlexibleUnlock s id) owner (amount - fee)).usdcBal owner
+      = s.usdcBal owner := by
+    simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT]
+  have hstd : stdPositions (mintApxUSD (retireFlexibleUnlock s id) owner (amount - fee)) owner
+      = stdPositions s owner := by
+    change stdPositions (retireFlexibleUnlock s id) owner = stdPositions s owner
+    rfl
+  unfold holderValueAt valueAt
+  rw [hbalance, hshares, husdc, hstd]
+  dsimp [fee] at hfee hflex' ⊢
+  omega
+
 @[simp] private theorem pv_apxUSDBal' (s : State) :
     (pullVestedYield s).apxUSDBal = s.apxUSDBal := by
   unfold pullVestedYield; dsimp only; split <;> rfl

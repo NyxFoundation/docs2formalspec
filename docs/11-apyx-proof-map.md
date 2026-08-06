@@ -180,7 +180,11 @@ is now explicit too: `claimUnlockStep_effect` exposes the exact successful
 post-state, `stdPositions_retireStandardUnlock` removes an in-range recorded
 amount from the finite position sum, and `claimUnlock_holderValueAt_neutral`
 shows that the owner value is unchanged at any fixed rate. These are local
-settlement facts, not reachability or global solvency theorems.
+settlement facts, not reachability or global solvency theorems. The flexible
+counterpart is fee-aware rather than neutral: `flexibleClaimStep_effect`,
+`flexibleClaimFee_le_amount`, `flexPositions_retireFlexibleUnlock`, and
+`flexibleClaim_holderValueAt_fee` show that the owner's value falls by exactly
+the published fee for an in-range successful flexible claim.
 
 ### 5.3 Clock consistency
 
@@ -334,8 +338,8 @@ floor-divided pro-rata payout does not automatically conserve a reserve;
 slice in which only paid mint operations occur. It bounds a holder's final
 apxUSD balance by its initial balance plus attempted USDC input; unlock claims
 and their position ledger now have local request and claim boundary facts in
-`Apyx.lean` and `HolderValue.lean`, but the inductive full-trace liability
-ledger remains open.
+`Apyx.lean` and `HolderValue.lean`, including the fee-bearing flexible claim.
+The inductive full-trace liability ledger remains open.
 `redemptionValue_frame`, `redemption_price_writers`, and
 `admin_alone_moves_redemption_price` for price writers; `reserve_outflow_only_via_redemption`
 and the buffer theorems for non-depletion boundaries; and
@@ -595,7 +599,9 @@ boundary. The matching claim-side layer is now `claimUnlock_holderValueAt_neutra
 given an in-range position and a successful claim, it proves that the owner loses
 the position amount while receiving the same apxUSD amount. A complete
 request-to-claim trace still needs an inductive finite liability ledger and a
-reachability theorem connecting every live position to that ledger.
+reachability theorem connecting every live position to that ledger. Flexible
+claims use the corresponding fee law `flexibleClaim_holderValueAt_fee`; treating
+them as neutral would erase the protocol's explicit early-exit charge.
 
 The global layer is where the protocol-level claims belong:
 
