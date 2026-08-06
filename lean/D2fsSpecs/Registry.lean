@@ -259,6 +259,27 @@ theorem registryWellIndexed_requestUnlockStep (s : State) (caller amount : Nat)
             ⟨caller, oldAmount, oldEnd, hentry'⟩⟩)
       · simpa [hentry, ho] using registryWellIndexed_createStandardUnlock b caller amount hb
 
+private theorem requestUnlock_post (s : State) (amount : Nat) (caller : Address) (s' : State)
+    (h : step s (Op.requestUnlock amount) caller = some s') :
+    s.globalPause = false ∧ amount ≤ s.apxUSDBal caller ∧
+    s' = requestUnlockStep s caller amount := by
+  simp only [step] at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · exact ⟨by simp_all, by omega, (Option.some.inj h).symm⟩
+
+theorem registryWellIndexed_requestUnlock_step (s : State) (amount : Nat) (caller : Address)
+    (s' : State) (h : RegistryWellIndexed s)
+    (hstep : step s (Op.requestUnlock amount) caller = some s') :
+    RegistryWellIndexed s' := by
+  obtain ⟨-, -, hpost⟩ := requestUnlock_post s amount caller s' hstep
+  rw [hpost]
+  exact registryWellIndexed_requestUnlockStep s caller amount h
+
 theorem ownerPointerSound_retireStandardUnlock (s : State) (id : Nat) (owner : Address)
     (hreq : ∃ amount ce, s.unlockRequests id = some (owner, amount, ce))
     (h : OwnerPointerSound s) :
