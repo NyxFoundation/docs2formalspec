@@ -2014,12 +2014,11 @@ private theorem step_unlockTokenAddress_unchanged (s : State) (op : Op) (caller 
         | (cases Option.some.inj h_step; rfl)
         | exact absurd h_step (by simp)
 
-/-- REQ token-no-rebase: The apyUSD token MUST NOT rebase its balances; balances may change
-only via transfers, minting, or burning. (Model: whenever any address's apyUSD balance
-changes across a step, that step was an explicit mint (`lockApxUSD`) or burn
-(`withdraw`/`redeem`) of apyUSD shares — never an implicit rebase. Peer-to-peer apyUSD
-transfers are not modeled as a separate operation, so minting and burning are the model's
-only legitimate balance-changing events.) -/
+/-- REQ token-no-rebase. This is a **model-local closed-world theorem**, not a proof of
+the deployed ERC-20's complete balance-changing surface: `Op` has no peer-to-peer transfer,
+mint, or burn operation beyond the modeled vault paths. It proves only that an accepted
+modeled step cannot change an apyUSD balance through an implicit rebase. The missing
+transfer/interface refinement is recorded as a partial requirement mapping. -/
 theorem req_token_no_rebase (s : State) (op : Op) (caller : Address) (s' : State)
     (h_step : step s op caller = some s')
     (a : Address) (h_changed : s'.apyUSDBal a ≠ s.apyUSDBal a) :
@@ -2845,16 +2844,10 @@ private theorem vaultApxUSDBal_unchanged_of_non_vault_op (s : State) (op : Op) (
         | (cases Option.some.inj h_step; rfl)
         | exact absurd h_step (by simp)
 
-/-- REQ no-rehypothecation: The protocol MUST NOT rehypothecate, lend, or otherwise
-utilize deposited apxUSD for any purpose. (Model: apxUSD deposited by users is held in the
-vault's custody balance `vaultApxUSDBal`. `Op` is a closed inductive enumerating every
-operation of the protocol, and total case analysis over it shows the custody balance can
-only ever change through the user-facing accounting paths themselves: a user's own vault
-deposit (`lockApxUSD`, which adds exactly the deposited amount to custody) or a user's own
-withdrawal (`withdraw`/`redeem`, which — after pulling the vault's own vested yield stream
-into custody — remove exactly the assets returned to that user as an unlock position). No
-lending, rehypothecation, or other utilization path exists: no other operation can move a
-single unit of deposited apxUSD out of custody.) -/
+/-- REQ no-rehypothecation. This is a **model-local custody frame**: under the closed `Op`
+datatype, only lock/withdraw/redeem can change `vaultApxUSDBal`. It does not establish that
+the deployed vault makes no external calls, lends no tokens, or has no unmodeled custody
+path; those require implementation-level refinement and are therefore a partial mapping. -/
 theorem req_no_rehypothecation (s : State) (op : Op) (caller : Address) (s' : State)
     (h_step : step s op caller = some s') :
     (s'.vaultApxUSDBal ≠ s.vaultApxUSDBal →
@@ -2998,19 +2991,10 @@ theorem req_unlock_cannot_be_cancelled (s : State) (op : Op) (caller : Address) 
         | (cases Option.some.inj h_step; simp_all)
         | exact absurd h_step (by simp)
 
-/-- REQ erc4626-compliance: The apyUSD vault contract MUST implement the ERC-4626
-tokenized vault interface. (Model: the interface surface is modeled by
-`convertToShares`/`convertToAssets`, the four `preview*` functions, the four `max*`
-functions, and the deposit/mint/withdraw/redeem flows (`lockApxUSD`, `withdraw`,
-`redeem`, plus the slippage wrappers). This theorem proves the standard's core
-consistency guarantees hold of that surface: (1) each `preview*` function reports exactly
-the conversion the corresponding operation uses; (2) `convertToShares`/`convertToAssets`
-are mutually consistent under the current exchange rate — round-tripping in either
-direction never credits value (ERC-4626's rounding mandate: conversions round against
-the user); (3) `previewWithdraw` rounds up relative to `previewDeposit`'s rounding down,
-so withdrawing never burns fewer shares than an equal-sized deposit mints; and (4) the
-`max*` limits correctly reflect the vault's pause gating — zero while paused, and the
-owner's full balance-derived capacity when live.) -/
+/-- ERC-4626 correspondence fragment. This theorem proves conversion, preview, rounding,
+and pause/max algebra in the abstract model. It does **not** prove that a deployed contract
+implements the complete ERC-4626 ABI, event surface, asset/share getters, or refinement of
+the modeled flows; the manifest therefore records this requirement as partial. -/
 theorem req_erc4626_compliance (s : State) :
     -- (1) previews report exactly the conversions the operations use
     (∀ assets, previewDeposit s assets = convertToShares s assets) ∧
@@ -3071,6 +3055,7 @@ the credit, neither as an upfront lump sum nor over any longer horizon.) -/
 theorem req_yield_distribution_period (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.creditYield amount) caller = some s')
     (h_cfg : s.vestPeriod = 20 * day) :
+    s'.usdcReserve = s.usdcReserve ∧
     s'.vestPeriod = 20 * day ∧
     s'.vestStart = s.now ∧
     s'.vestTotal = (s.vestTotal - newlyVestedAmount s s.now) + amount ∧
@@ -3081,17 +3066,15 @@ theorem req_yield_distribution_period (s : State) (amount : Nat) (caller : Addre
   split at h_step
   · cases Option.some.inj h_step
     have hper : ({ s with
-        usdcReserve := s.usdcReserve + amount
         fullyVestedAmount := s.fullyVestedAmount + newlyVestedAmount s s.now
         vestTotal := (s.vestTotal - newlyVestedAmount s s.now) + amount
         vestStart := s.now } : State).vestPeriod = 20 * day := h_cfg
     have hpos : 0 < ({ s with
-        usdcReserve := s.usdcReserve + amount
         fullyVestedAmount := s.fullyVestedAmount + newlyVestedAmount s s.now
         vestTotal := (s.vestTotal - newlyVestedAmount s s.now) + amount
         vestStart := s.now } : State).vestPeriod := by rw [hper]; decide
     obtain ⟨hz, hfull, hmono, _⟩ := req_continuous_stream _ hpos
-    exact ⟨hper, rfl, rfl, hz, by rw [← h_cfg]; exact hfull, hmono⟩
+    exact ⟨rfl, hper, rfl, rfl, hz, by rw [← h_cfg]; exact hfull, hmono⟩
   · exact absurd h_step (by simp)
 
 /-! ## Registry invariants — turning carried hypotheses into consequences
