@@ -1,7 +1,7 @@
-import D2fsSpecs.PhaseV2
+import D2fsSpecs.Phase
 
 /-!
-# V2-ARITH / V2-TRANS / V2-VALUE: arithmetic safety and claim coverage
+# Arithmetic safety of accepted transitions
 
 Proof Map v2 (life#59) P1 layers on top of the P0 invariants:
 
@@ -24,15 +24,10 @@ Proof Map v2 (life#59) P1 layers on top of the P0 invariants:
   (`admin_frame`, `admin_cannot_touch_balances`, …); the accepted/reverted
   boundary itself is `StepResult` in `Transition.lean`.
 
-* **V2-VALUE** — `pending_standard_claim_covered` /
-  `pending_flexible_claim_covered`: on any state carrying `ProtocolInvV2`
-  (hence on every `ReachInit`-reachable state), each individual recorded
-  unlock position is covered by collateral plus reserve — the claim-level
-  non-depletion corollary, *derived* from the accounting invariant exactly as
-  the v2 ladder requires.
+The claim-coverage corollaries (V2-VALUE) live in `Accounting.lean`, next to
+the measure they are derived from.
 
-Status (proof-map §11): `accepted_arithmetic_safe` and the coverage
-corollaries are model-local; the `ReachInit` wrappers are reachable-scoped.
+Status (proof-map §11): `accepted_arithmetic_safe` is model-local.
 -/
 
 namespace Apyx
@@ -114,93 +109,5 @@ theorem accepted_arithmetic_safe (s : State) (op : Op) (caller : Address)
         redeemStep_effect s shares receiver caller s' hstep
       exact ⟨hshares, hassets⟩
   | _ => exact trivial
-
-/-! ## V2-VALUE: individual claim coverage from the accounting invariant -/
-
-private theorem le_sum_map_of_mem {α : Type} {f : α → Nat} :
-    ∀ {l : List α} {i : α}, i ∈ l → f i ≤ (l.map f).sum := by
-  intro l
-  induction l with
-  | nil => intro i h; cases h
-  | cons a rest ih =>
-      intro i h
-      cases h with
-      | head =>
-          simp only [List.map_cons, List.sum_cons]
-          exact Nat.le_add_right _ _
-      | tail _ hmem =>
-          simp only [List.map_cons, List.sum_cons]
-          exact Nat.le_trans (ih hmem) (Nat.le_add_left _ _)
-
-/-- A recorded standard position's face amount is bounded by the standard
-liability total. -/
-theorem standardUnlockTotal_covers (s : State) (id : Nat)
-    (owner : Address) (amount cooldownEnd : Nat)
-    (hid : id < s.nextUnlockId)
-    (hreq : s.unlockRequests id = some (owner, amount, cooldownEnd)) :
-    amount ≤ standardUnlockTotal s := by
-  unfold standardUnlockTotal
-  have hmem : id ∈ List.range s.nextUnlockId := List.mem_range.mpr hid
-  refine Nat.le_trans ?_ (le_sum_map_of_mem hmem)
-  simp [hreq]
-
-/-- A recorded flexible position's face amount is bounded by the flexible
-liability total. -/
-theorem flexibleUnlockTotal_covers (s : State) (id : Nat)
-    (owner : Address) (amount requestTime cooldownEnd : Nat)
-    (hid : id < s.nextUnlockId)
-    (hreq : s.flexibleUnlockRequests id =
-      some (owner, amount, requestTime, cooldownEnd)) :
-    amount ≤ flexibleUnlockTotal s := by
-  unfold flexibleUnlockTotal
-  have hmem : id ∈ List.range s.nextUnlockId := List.mem_range.mpr hid
-  refine Nat.le_trans ?_ (le_sum_map_of_mem hmem)
-  simp [hreq]
-
-/-- **Claim-level non-depletion, standard channel**: on any state carrying the
-v2 invariant, each individual recorded standard unlock is covered by
-collateral plus reserve. Derived from `SolventOutstanding` through the
-liability totals, exactly the v2 economic ladder. -/
-theorem pending_standard_claim_covered (s : State) (hinv : ProtocolInvV2 s)
-    (id : Nat) (owner : Address) (amount cooldownEnd : Nat)
-    (hid : id < s.nextUnlockId)
-    (hreq : s.unlockRequests id = some (owner, amount, cooldownEnd)) :
-    amount ≤ s.totalCollateralValue + s.usdcReserve := by
-  have hsol : SolventOutstanding s := hinv.1.2.1
-  have h1 := standardUnlockTotal_covers s id owner amount cooldownEnd hid hreq
-  unfold SolventOutstanding outstandingApxUSD pendingApxUSD at hsol
-  omega
-
-/-- **Claim-level non-depletion, flexible channel.** -/
-theorem pending_flexible_claim_covered (s : State) (hinv : ProtocolInvV2 s)
-    (id : Nat) (owner : Address) (amount requestTime cooldownEnd : Nat)
-    (hid : id < s.nextUnlockId)
-    (hreq : s.flexibleUnlockRequests id =
-      some (owner, amount, requestTime, cooldownEnd)) :
-    amount ≤ s.totalCollateralValue + s.usdcReserve := by
-  have hsol : SolventOutstanding s := hinv.1.2.1
-  have h1 := flexibleUnlockTotal_covers s id owner amount requestTime cooldownEnd hid hreq
-  unfold SolventOutstanding outstandingApxUSD pendingApxUSD at hsol
-  omega
-
-/-- The reachable-state form: every recorded standard claim on a
-`ReachInit`-reachable state is covered. -/
-theorem pending_standard_claim_covered_reachable (s : State) (h : ReachInit s)
-    (id : Nat) (owner : Address) (amount cooldownEnd : Nat)
-    (hid : id < s.nextUnlockId)
-    (hreq : s.unlockRequests id = some (owner, amount, cooldownEnd)) :
-    amount ≤ s.totalCollateralValue + s.usdcReserve :=
-  pending_standard_claim_covered s (protocolInvV2_reachable s h)
-    id owner amount cooldownEnd hid hreq
-
-/-- The reachable-state form, flexible channel. -/
-theorem pending_flexible_claim_covered_reachable (s : State) (h : ReachInit s)
-    (id : Nat) (owner : Address) (amount requestTime cooldownEnd : Nat)
-    (hid : id < s.nextUnlockId)
-    (hreq : s.flexibleUnlockRequests id =
-      some (owner, amount, requestTime, cooldownEnd)) :
-    amount ≤ s.totalCollateralValue + s.usdcReserve :=
-  pending_flexible_claim_covered s (protocolInvV2_reachable s h)
-    id owner amount requestTime cooldownEnd hid hreq
 
 end Apyx

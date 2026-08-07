@@ -18,8 +18,8 @@ import D2fsSpecs.Regression
 import D2fsSpecs.MulDivFidelity
 import D2fsSpecs.DeploymentFees
 import D2fsSpecs.DeploymentGaps
-import D2fsSpecs.InitV2
-import D2fsSpecs.AccountingV2
-import D2fsSpecs.PhaseV2
-import D2fsSpecs.SafetyV2
-import D2fsSpecs.VaultV2
+import D2fsSpecs.Init
+import D2fsSpecs.Accounting
+import D2fsSpecs.Phase
+import D2fsSpecs.Arithmetic
+import D2fsSpecs.Vault

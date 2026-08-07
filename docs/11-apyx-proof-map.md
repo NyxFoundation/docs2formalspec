@@ -552,13 +552,12 @@ new predicate implies `Solvent` (`solventOutstanding_implies_solvent`). Its
 exclusion list trades the
 two claims in for the two vault exits, whose pending positions are funded by
 vault custody that neither side of the inequality measures; that channel stays
-at the `apxUSDFlow` boundary. `ProtocolInvOutstanding` and
-`ProtocolReachOutstanding` lift this to a reachability theorem
-(`protocolInvOutstanding_reachable`) with operation-side conditions only. The
-relation is anchored at the empty `default` state, and no in-scope operation
-can seed a positive USDC balance from it, so funded settlement scenarios are
-covered by the step theorem applied to a funded state, not exhibited as a
-nonzero trace from `default`.
+at the `apxUSDFlow` boundary. `ProtocolInvOutstanding` lifts to a reachability theorem with operation-side
+conditions only via `ReachInit` in `Init.lean` (Proof Map v2): the relation is
+anchored at any legitimate `Init` state — the empty `default` qualifies, and
+so does the funded witness `fundedInit`, from which a full settlement trace is
+exhibited (`fundedInit_settlement_trace`). The composite delivered on every
+reachable state is `ProtocolInvFull` (`protocolInvFull_reachable`).
 
 Receipt consistency is now composed without changing the meaning of
 `ProtocolInv`: `ProtocolInvWithReceiptLedger` adds

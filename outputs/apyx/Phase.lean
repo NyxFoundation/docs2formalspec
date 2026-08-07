@@ -1,4 +1,4 @@
-import D2fsSpecs.AccountingV2
+import D2fsSpecs.Accounting
 
 /-!
 # V2-INV: phase structure and the total operation classification
@@ -28,12 +28,12 @@ Layers:
   `ReserveOutflowContract` (admin-only, guarded by the reserve balance, exact
   reserve/receiver deltas, obligation ledger framed).
 
-* **`opCoverageV2` + `stepContractV2`** — the totality theorems: every `Op`
+* **`opCoverage` + `stepContract`** — the totality theorems: every `Op`
   is either `OutstandingScopedOp` (the preserving class of
-  `protocolInvV2_step`) or one of the five named exceptions, and one theorem
+  `protocolInvFull_step`) or one of the five named exceptions, and one theorem
   delivers the applicable rule for *every* operation with no silent gaps.
 
-Status (proof-map §11): all contracts are model-local; `stepContractV2` is
+Status (proof-map §11): all contracts are model-local; `stepContract` is
 the total per-step classification; phase absorption is model-local. The
 vault exits appear here through their V2-ACC conservation equations — under
 `apxUSDObligations` they are conservation, not exclusion.
@@ -41,17 +41,14 @@ vault exits appear here through their V2-ACC conservation equations — under
 
 namespace Apyx
 
-/-! ## Phases -/
+/-! ## Phases
 
-/-- Normal operation: the emergency flag is down. Definitionally `PhaseValid`. -/
-def NormalPhase (s : State) : Prop := s.emergencyFlag = false
+`NormalPhase` is defined in `Init.lean` (it is a conjunct of `Init`); this
+module adds its stress-side counterpart and the phase-order facts. -/
 
 /-- Stress operation: the emergency flag is up. Entered by a successful
 `handleStressEvent`; the backstop's guard requires this phase. -/
 def StressPhase (s : State) : Prop := s.emergencyFlag = true
-
-theorem normalPhase_iff_phaseValid (s : State) : NormalPhase s ↔ PhaseValid s :=
-  Iff.rfl
 
 /-- **The stress phase is absorbing**: no operation clears the emergency flag.
 Once the protocol has entered stress, every successful step stays there. -/
@@ -168,9 +165,9 @@ theorem withdrawReserve_contract (s : State) (amount : Nat)
 /-! ## Totality: every operation is classified, nothing is silently excluded -/
 
 /-- **Operation coverage**: every `Op` is either in the preserving scope of
-`protocolInvV2_step` or is one of the five named exceptions. This is the v2
+`protocolInvFull_step` or is one of the five named exceptions. This is the v2
 "no implicit exclusion" declaration, checkable by case analysis. -/
-theorem opCoverageV2 (op : Op) :
+theorem opCoverage (op : Op) :
     OutstandingScopedOp op ∨
     (∃ assets receiver, op = Op.withdraw assets receiver) ∨
     (∃ shares receiver, op = Op.redeem shares receiver) ∨
@@ -192,9 +189,9 @@ theorem opCoverageV2 (op : Op) :
 with no exclusions, the rule that governs it — invariant preservation for the
 scoped class, conservation for the vault exits, and the named phase/outflow
 contracts for the three remaining exceptions. -/
-theorem stepContractV2 (s : State) (op : Op) (caller : Address) (s' : State)
+theorem stepContract (s : State) (op : Op) (caller : Address) (s' : State)
     (hstep : step s op caller = some s') :
-    (OutstandingScopedOp op → PriceBoundedOp op → ProtocolInvV2 s → ProtocolInvV2 s') ∧
+    (OutstandingScopedOp op → PriceBoundedOp op → ProtocolInvFull s → ProtocolInvFull s') ∧
     (∀ assets receiver, op = Op.withdraw assets receiver → RegistryWellIndexed s →
       apxUSDObligations s' = apxUSDObligations s) ∧
     (∀ shares receiver, op = Op.redeem shares receiver → RegistryWellIndexed s →
@@ -203,7 +200,7 @@ theorem stepContractV2 (s : State) (op : Op) (caller : Address) (s' : State)
     (op = Op.catastrophicBackstop → BackstopContract s s') ∧
     (∀ amount receiver, op = Op.withdrawReserve amount receiver →
       ReserveOutflowContract s s' amount receiver) := by
-  refine ⟨fun hscope hprice hinv => protocolInvV2_step s op caller s' hinv hstep hscope hprice,
+  refine ⟨fun hscope hprice hinv => protocolInvFull_step s op caller s' hinv hstep hscope hprice,
     ?_, ?_, ?_, ?_, ?_⟩
   · rintro assets receiver rfl hreg
     exact apxUSDObligations_withdraw s assets receiver caller s' hreg hstep

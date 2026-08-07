@@ -132,7 +132,7 @@ guarantees:
 | Token ledgers | `apxUSDLedgerConsistent_trace` and `apyUSDLedgerConsistent_trace` preserve finite-support balance/supply identities across revert-skip traces. |
 | Registry and receipts | `RegistryWellIndexed`, `RegistryBounded`, `OwnerPointerSound`, and `unlockTokenLedgerConsistent_trace` preserve allocation, owner-pointer, and receipt face-value consistency. |
 | Composite invariant | `ProtocolInv` carries registry indexing, solvency, `WellFormed`, and both finite token ledgers; `ProtocolInvWithReceiptLedger` adds the receipt relation. `protocolInv_reachableOps` derives post-state `WellFormed` under the explicit at-most-par price regime. |
-| Pending liabilities | `SolventOutstanding` and `protocolInvOutstanding_reachable` include pending standard/flexible unlock face amounts; claims are in scope, while vault exits, stress, backstop, and bare reserve withdrawal remain explicit exclusions. |
+| Pending liabilities | `SolventOutstanding` and `protocolInvFull_reachable` (over `ReachInit`, `Init.lean`) include pending standard/flexible unlock face amounts; claims are in scope, while vault exits, stress, backstop, and bare reserve withdrawal remain explicit exclusions. |
 | USDC boundary | `UsdcLedgerConsistent` / `usdcLedgerConsistent_trace` preserve an external-parameterized USDC ledger under explicit holder-support and non-backstop premises. This is not a `State`-internal total-supply theorem. |
 | Holder value | `holderValue` includes pending positions; `holderValueAt_rateAware_trace_rateAdjusted` accounts for signed rate revaluation, while `holderValue_rateAware_trace_nonincreasing` remains conditional on a non-increasing execution-rate schedule. |
 

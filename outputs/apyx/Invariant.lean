@@ -372,9 +372,9 @@ excluded for the same reasons as before.
 the measure, not a variant: outstanding dominates supply, so the new predicate
 implies the old one at every state.
 
-Status (proof-map §11): `solventOutstanding_step` is model-local;
-`protocolInvOutstanding_reachable` is reachable-scoped over the restricted
-`ProtocolReachOutstanding` relation. -/
+Status (proof-map §11): `solventOutstanding_step` is model-local; the
+reachable form is `protocolInvFull_reachable` over `ReachInit` in
+`Init.lean`, which subsumes the former `default`-anchored relation. -/
 
 /-- `e ≤ ray → amount * e / ray ≤ amount`: a floor-divided conversion at a
 price at most par never exceeds the face amount. Local restatement of the
@@ -596,32 +596,13 @@ theorem protocolInvOutstanding_step
   exact redemptionValue_le_ray_step s op caller s' hstep h.2.2.1.2 hprice
     hscope.2.2.2.1
 
-/-- Reachability for the pending-aware regime: operation restrictions only —
-the vault-exit/stress/backstop/reserve exclusions plus the at-most-par price
-discipline. Requests and claims are in scope for this relation's steps, which
-the `Solvent`-based `ProtocolReach` cannot express. Anchored at the empty
-`default`: no in-scope operation seeds a positive USDC balance from it, so a
-funded settlement trace is not exhibitable from this base — the preservation
-content lives in `solventOutstanding_step` applied to funded states. -/
-inductive ProtocolReachOutstanding : State → Prop
-  | initial : ProtocolReachOutstanding (default : State)
-  | next {s s' : State} {op : Op} {caller : Address} :
-      ProtocolReachOutstanding s →
-      (es : List Event) →
-      stepResult s op caller = .accepted s' es →
-      OutstandingScopedOp op →
-      PriceBoundedOp op →
-      ProtocolReachOutstanding s'
-
-/-- Every pending-aware reachable state carries the upgraded composite
-invariant — in particular, pending unlock liabilities are always covered by
-collateral plus reserve, across full settlement cycles. -/
-theorem protocolInvOutstanding_reachable (s : State)
-    (h : ProtocolReachOutstanding s) : ProtocolInvOutstanding s := by
-  induction h with
-  | initial => exact protocolInvOutstanding_default
-  | next _ es hacc hscope hprice ih =>
-      exact protocolInvOutstanding_step _ _ _ _ ih
-        ((stepResult_accepted_iff _ _ _ _ _).mp hacc).1 hscope hprice
+/-!
+The pending-aware reachability relation lives in `Init.lean`: `ReachInit`
+anchors at any legitimate `Init` state (the empty `default` qualifies via
+`init_default`) and carries the same `OutstandingScopedOp`/`PriceBoundedOp`
+step conditions, so the former `default`-anchored relation is subsumed —
+`protocolInvFull_reachable` there delivers this composite plus the receipt
+ledger and the phase discipline on every reachable state.
+-/
 
 end Apyx

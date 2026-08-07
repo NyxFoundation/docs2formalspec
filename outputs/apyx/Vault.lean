@@ -1,4 +1,4 @@
-import D2fsSpecs.SafetyV2
+import D2fsSpecs.Arithmetic
 
 /-!
 # V2-VAULT: ERC-4626 decomposed into vault accounting safety
