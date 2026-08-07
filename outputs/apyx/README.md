@@ -106,7 +106,12 @@ theorem states it, `model=formalized (deployment-derived)` for the `DR` rows who
 formalization is named in `SPEC.md` §10a, `declined`/`out-of-scope` with the documented reason,
 and `impl=not-run`
 everywhere, because no implementation-level tool (SPECA, Certora, Halmos, fuzzing) has been run
-yet. A row whose result you cannot defend from the cited evidence is a bug in the manifest;
+yet. Since Proof Map v2 (life#59) the table also carries a `scope` column implementing the
+proof-map §11 status tags — `model-local` (one transition or component), `reachable` (requires a
+Reach relation), `trace` (about operation sequences), `witness` (a counterexample or regression
+case), with `out-of-scope`/`declined` and `model-local (deployment-derived)` for the DR rows —
+so a reader can tell a local model theorem from a reachable-state guarantee without opening the
+source. A row whose result you cannot defend from the cited evidence is a bug in the manifest;
 regenerate or fix it rather than letting the table drift from the sources.
 
 The remaining proofs are organized around a small set of reusable boundaries:
