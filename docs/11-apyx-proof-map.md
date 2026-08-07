@@ -2,6 +2,17 @@
 
 This document is a working map for proving the safety of Apyx. It separates the claims that belong in Lean from the claims that require analysis of the deployed implementation, and gives the proof order that keeps the model understandable.
 
+> **Status.** The plan phase of this map (v1) and its deepening (Proof Map v2,
+> [life#59](https://github.com/grandchildrice/life/issues/59)) are implemented.
+> The current source realizes every layer described below: the funded `Init`
+> anchor and `ReachInit` relation (`Init.lean`), the unified obligation ledger
+> with the explicit backstop residual (`Accounting.lean`), the phase structure
+> and total operation classification (`Phase.lean`), per-step arithmetic
+> safety (`Arithmetic.lean`), and the ERC-4626 decomposition (`Vault.lean`) —
+> all under `outputs/apyx/`, with `lake build D2fsSpecs` green and zero
+> `sorry`. Sections below describe both the method and the current source; the
+> remaining gaps are recorded inline rather than hidden.
+
 The central idea is simple:
 
 > Prove what one action changes, prove what it cannot change, and then lift those local facts into the accounting and safety properties of the whole protocol.
@@ -554,10 +565,22 @@ two claims in for the two vault exits, whose pending positions are funded by
 vault custody that neither side of the inequality measures; that channel stays
 at the `apxUSDFlow` boundary. `ProtocolInvOutstanding` lifts to a reachability theorem with operation-side
 conditions only via `ReachInit` in `Init.lean` (Proof Map v2): the relation is
-anchored at any legitimate `Init` state — the empty `default` qualifies, and
-so does the funded witness `fundedInit`, from which a full settlement trace is
-exhibited (`fundedInit_settlement_trace`). The composite delivered on every
-reachable state is `ProtocolInvFull` (`protocolInvFull_reachable`).
+anchored at any legitimate `Init` state — the empty `default` qualifies
+(`init_default`), and so does the funded witness `fundedInit` (one holder,
+1000 apxUSD, collateral 1200, reserve 300, price at par), from which a full
+request → cooldown → claim settlement trace is exhibited
+(`fundedInit_settlement_trace`, `fundedInit_settlement_reachInit`).
+
+The top composite is `ProtocolInvFull = ProtocolInvOutstanding ∧
+UnlockTokenLedgerConsistent ∧ NormalPhase`, and `Init` is exactly the data its
+induction needs, so the main series is three theorems with operation-side
+hypotheses only: `init_inv`, `protocolInvFull_step`, and
+`protocolInvFull_reachable`. The phase conjunct is a frame fact under the
+outstanding scope because `handleStressEvent` is the emergency flag's only
+writer (`emergencyFlag_frame`, `normalPhase_step`). The USDC holder ledger
+stays outside `Init` by recorded decision (v2 §V2-A option 2):
+`UsdcLedgerConsistent` takes its finite support and total supply as external
+parameters because `State` has no USDC total-supply field.
 
 Receipt consistency is now composed without changing the meaning of
 `ProtocolInv`: `ProtocolInvWithReceiptLedger` adds
@@ -634,6 +657,29 @@ bounded extraction scenarios. The source statements, rather than theorem
 counts, determine whether each result is local, reachable, trace-scoped,
 conditional, or a witness.
 
+Proof Map v2 closed the ladder's remaining per-operation rungs. `apxUSDObligations`
+(`Accounting.lean`) unifies vault custody, circulating supply, pending unlock
+face amounts, and the credited-but-unpulled yield stream in one measure with
+exact per-operation deltas: requests, standard claims, `lockApxUSD`, and both
+vault exits are neutral (the channel `SolventOutstanding` had to exclude
+becomes conservation), the flexible claim sheds exactly its fee, `creditYield`
+adds exactly the credited amount, and the vest pull is internal motion. The
+backstop's conservation is stated with its floor-division remainder explicit:
+`backstopPayout_sum_le_reserve` bounds the pro-rata payouts by the reserve
+over any supply-bounded holder support (zero-supply corner pays zero), and
+`backstop_reserve_conservation` / `catastrophicBackstop_accounting` prove
+payouts plus the named `backstopResidual` equal the pre-state reserve —
+`pro_rata_floor_underpays_witness` shows the residual-free equality would be
+false. On top of the invariant, the claim-level non-depletion corollaries
+`pending_standard_claim_covered_reachable` and
+`pending_flexible_claim_covered_reachable` derive, for every reachable state,
+that each individually recorded unlock position is covered by collateral plus
+reserve. Per-step arithmetic safety is `accepted_arithmetic_safe`
+(`Arithmetic.lean`): every `Nat` subtraction an accepted step performs is
+guard-covered, packaged per operation as `ArithmeticSafe`. The trace-level
+composition of `apxUSDObligations` over mixed operation sequences remains
+future work; the per-operation deltas are the inductive material for it.
+
 ## 8. Compose the protocol components explicitly
 
 Apyx should be modeled as interacting components rather than as one opaque balance map. The composition boundary should identify at least:
@@ -701,6 +747,19 @@ These theorem names are deliberately not presented as unconditional deployed
 protocol guarantees: their source statements carry the relevant caller,
 state, trace, time, and funding assumptions.
 
+Proof Map v2 added the phase structure and the totality declaration
+(`Phase.lean`). `NormalPhase`/`StressPhase` are derived from `emergencyFlag`,
+the model's single phase bit; `stressPhase_absorbing` proves the phase order
+is one-way, and the backstop's guard requires the stress phase. Operations
+that cannot satisfy the conservation invariant by design carry named
+contracts instead of silent exclusions: `StressContract` (collateral falls by
+exactly the stress amount and pending-aware solvency degrades by at most that
+amount), `BackstopContract` (repricing, pro-rata credits, reserve zeroing,
+obligation-ledger frame), and `ReserveOutflowContract` (exact admin-outflow
+deltas). `opCoverage` proves every `Op` is either in the preserving scope or
+one of the five named exceptions, and `stepContract` delivers the governing
+rule for every operation in one statement — no exclusion remains implicit.
+
 ## 10. Keep implementation fidelity at the hand-off boundary
 
 Implementation fidelity does not need to be part of the core Lean model.
@@ -725,6 +784,7 @@ yet). The schema is:
 | implementation_tool | SPECA, Certora, Halmos, SMT, fuzzing, or other tool |
 | result | Proved, disproved, bounded, inconclusive, or not run |
 | evidence | Query, trace, counterexample, test, or review record |
+| scope | Proof-map §11 status tag: model-local, reachable, trace, witness, … |
 
 SPECA is useful for turning natural-language requirements into typed properties such as invariants, preconditions, postconditions, and assumptions, then checking property reachability and the relevant program subgraph. Its output is an audit aid and a source of candidates for proof; a generated finding still requires human validation.
 
@@ -762,37 +822,46 @@ Every theorem should carry a status tag or an equivalent record. Suggested tags 
 
 The status should appear in the source or generated report so that a reader cannot mistake a local model theorem for a deployed-contract guarantee.
 
+These tags are implemented: `outputs/apyx/property-manifest.csv` carries a
+`scope` column classifying every row (`model-local`, `reachable`, `trace`,
+`witness`, with `out-of-scope`/`declined` and `model-local
+(deployment-derived)` for the DR rows), and the module docstrings carry
+`Status (proof-map §11): …` lines naming the scope of each main theorem.
+
 ## 12. Suggested file organization
 
 The current Apyx material can be organized around proof responsibilities:
 
 ~~~text
-outputs/apyx/
-  Apyx.lean
-  README.md
-  SPEC.md
-  requirements.json
-  model.md
-  leancheck.json
-  review.json
+outputs/apyx/            -- single home of the formalization and its evidence
+  Apyx.lean              -- state, transition, requirement theorems
+  Transition.lean        -- StepResult: the accepted/reverted boundary
+  Ledger.lean            -- finite apxUSD holder ledger
+  Registry.lean          -- unlock registry well-indexedness
+  Safety.lean            -- Solvent, WellFormed, solvency_step
+  HolderValue.lean       -- apyUSD ledger, holder value, apxUSDFlow, USDC boundary
+  Invariant.lean         -- ProtocolInv / ProtocolInvOutstanding composites
+  Init.lean              -- funded Init, ReachInit, ProtocolInvFull main series
+  Accounting.lean        -- apxUSDObligations, backstop residual, claim coverage
+  Phase.lean             -- Normal/Stress phases, exception contracts, stepContract
+  Arithmetic.lean        -- ArithmeticSafe, accepted_arithmetic_safe
+  Vault.lean             -- ERC-4626 decomposition, burn/pending agreement
+  BlastRadius.lean       -- per-role capability frames and trace blast radii
+  SpecDefects.lean, Regression.lean, MulDivFidelity.lean,
+  DeploymentFees.lean, DeploymentGaps.lean,
+  CommitToken.lean, MinterRateLimit.lean,
+  RedemptionOracle.lean, LiquidationBatcher.lean
+  property-manifest.csv  -- property IDs, results, and scope tags
+  README.md, SPEC.md, model.md, corpus.md, requirements.json, …
 
-formalization/
-  Safety.lean
-  HolderValue.lean
-  BlastRadius.lean
-  Registry.lean
-  Accounting.lean
-  Time.lean
-  Composition.lean
-
-assurance/
-  property-manifest.csv
-  speca/
-  implementation-checks/
-  gaps.md
+lean/D2fsSpecs/          -- Lake package; every module is a symlink into
+                         -- outputs/apyx/, so the deliverable and the build
+                         -- see one set of files
 ~~~
 
-The exact directory names are not important. The important distinction is between:
+This is the current layout: the bodies live in `outputs/apyx/` and the Lake
+package symlinks them, so the apyx deliverable is self-contained. The
+important distinction remains between:
 
 - generated requirement-conformance material;
 - reusable design invariants;
@@ -817,21 +886,47 @@ This order makes it possible to find a broken accounting definition before spend
 
 ## 14. Completion criteria
 
-The proof map is complete only when the following questions have clear answers:
+The proof map is complete only when the following questions have clear
+answers. The current source answers each one; the pointer says where.
 
-- Which claims are design-level Lean theorems?
-- Which claims are implementation-level checks?
-- What is the initial state, and what states are reachable?
-- Are both accepted and reverted actions modeled?
-- Which accounting identities connect balances, supply, reserves, and liabilities?
-- Where do time, phases, rounding, and oracle assumptions enter?
-- Which properties are local, global, bounded, approximate, or threat-model dependent?
-- Which external calls and privileges are in scope?
-- Does every important property have a stable property ID?
-  (`outputs/apyx/property-manifest.csv` currently answers this for the
-  requirement surface; keep it regenerated when the theorem surface moves.)
-- Are SPECA results recorded as audit candidates rather than treated as automatic proofs?
-- Is a refinement theorem actually proved, or is the model-to-code connection still a review or tool-assisted obligation?
+- **Which claims are design-level Lean theorems?** The `model=*` rows of
+  `property-manifest.csv`, each naming its theorem(s) and scope tag.
+- **Which claims are implementation-level checks?** Every row's
+  `impl=not-run` — no implementation tool has been run; the hand-off targets
+  are named per row. This is a recorded boundary, not a completion failure.
+- **What is the initial state, and what states are reachable?** Any state
+  satisfying `Init` (`Init.lean`); `default` and the funded `fundedInit` both
+  qualify, and `ReachInit` closes reachability with operation-side conditions
+  only.
+- **Are both accepted and reverted actions modeled?** Yes — `StepResult`
+  (`Transition.lean`); a revert is the absence of a successor, and
+  `RevertReason.modelUnknown` deliberately does not identify the failed guard
+  (recorded resolution decision).
+- **Which accounting identities connect balances, supply, reserves, and
+  liabilities?** The finite ledgers (`Ledger.lean`, `HolderValue.lean`),
+  `SolventOutstanding` (`Invariant.lean`), and the unified
+  `apxUSDObligations` with the backstop residual (`Accounting.lean`).
+- **Where do time, phases, rounding, and oracle assumptions enter?** Time:
+  the three clock lemmas (§5.3) and the safety/liveness pairs. Phases:
+  `NormalPhase`/`StressPhase` and the exception contracts (`Phase.lean`).
+  Rounding: §5.4 plus `ArithmeticSafe` and `backstopResidual`. Oracle/price:
+  `PriceBoundedOp` and the price-writer capability theorems.
+- **Which properties are local, global, bounded, approximate, or
+  threat-model dependent?** The manifest `scope` column plus the per-module
+  `Status (proof-map §11)` lines.
+- **Which external calls and privileges are in scope?** Privileges: the
+  `BlastRadius.lean` role family and `stepContract`. External
+  calls/reentrancy: out of model, recorded in §8 and README §6.
+- **Does every important property have a stable property ID?**
+  `property-manifest.csv` — requirement rows, deployment-derived DR rows, and
+  the `APYX-PM-*` invariant-layer rows; keep it regenerated when the theorem
+  surface moves.
+- **Are SPECA results recorded as audit candidates rather than treated as
+  automatic proofs?** No SPECA run exists yet; the manifest reserves the
+  hand-off columns.
+- **Is a refinement theorem actually proved?** No — the model-to-code
+  connection remains a review/tool obligation (`MulDivFidelity.lean`,
+  `model.md` §5, README §6), stated as such everywhere it is relevant.
 
 A missing answer is a visible assurance gap. It should be recorded as such instead of being hidden by a successful build.
 
