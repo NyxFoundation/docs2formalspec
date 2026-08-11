@@ -197,8 +197,8 @@ side modelled. Do not cite it as covered.
 
 ## この61定理の `confidence` 上の位置づけ
 
-本リポジトリの人手査読は定理を `confidence` で格付けする(`outputs/apyx/human_review_*.md`、
-`outputs/apyx/textbook_admin_rfq_coalition/ch7.md`):
+本リポジトリの人手査読は定理を `confidence` で格付けする(`outputs/apyx/archive/audit-evidence/human_review_*.md`、
+`outputs/apyx/archive/supplementary/textbook_admin_rfq_coalition/ch7.md`):
 
 - `confidence perfect` = 実プロトコルについての主張として額面通り信頼してよい
 - `confidence high` = モデル内の主張としては信頼できる。ただし原典との対応に注記が要る

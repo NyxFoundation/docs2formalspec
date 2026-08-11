@@ -3,7 +3,7 @@
 > 対象読者: Solidity 実務経験があり、抽象化志向で、金融用語には不慣れ、
 > Lean 文法は弱め、Apyx は未知のソフトウェアエンジニア。
 >
-> 出典: `human_review_admin_rfq_coalition_drains.md`（2026-07-12 人間査読報告）、
+> 出典: `../audit-evidence/human_review_admin_rfq_coalition_drains.md`（2026-07-12 人間査読報告）、
 > および Lean モデル `D2fsSpecs/Apyx.lean` / `D2fsSpecs/BlastRadius.lean`、
 > 原典 `corpus.md` / `SPEC.md` / `model.md`。
 
@@ -25,7 +25,7 @@
 
 ## 1.0 この教科書のゴール
 
-査読報告 `human_review_admin_rfq_coalition_drains.md` は、`admin_rfq_coalition_drains` という Lean 定理について「**perfect 昇格は保留**」という判断を下しています。その理由の中核が **F1** と **F2** という2つの「重大・忠実性」所見です。
+査読報告 `../audit-evidence/human_review_admin_rfq_coalition_drains.md` は、`admin_rfq_coalition_drains` という Lean 定理について「**perfect 昇格は保留**」という判断を下しています。その理由の中核が **F1** と **F2** という2つの「重大・忠実性」所見です。
 
 この教科書のゴールは、あなたが **F1 と F2 を、丸暗記ではなく、原理から再導出できる** ようになることです。そのために7章を次のように積み上げます。
 
@@ -631,7 +631,7 @@ headline は前者を主張しています。しかし原典に忠実なら後�
 
 > パイプラインの過去レビュー(review_run1–3)も `rfq-redemption-allowed` を … "partial" と全会一致で判定
 
-実際、`review_run1.json` の該当エントリの note を見ると:
+実際、`../audit-evidence/review_run1.json` の該当エントリの note を見ると:
 
 > "The theorem captures the 'only approved counterparties may execute' clause, but **only provides a sufficient condition for success rather than guaranteeing that every valid user redemption request is allowed**, and adds extra preconditions not stated in the requirement."
 
@@ -860,7 +860,7 @@ redemptionValue := totalCollateralValue = 100
 
 ## 5.5 過去レビューとの整合
 
-査読報告(36行目)は F1 と同様、F2 も自動レビューと整合すると述べています。`review_run1.json` の該当 note:
+査読報告(36行目)は F1 と同様、F2 も自動レビューと整合すると述べています。`../audit-evidence/review_run1.json` の該当 note:
 
 > "The theorem **only guarantees Redemption Value = Total Collateral Value, omitting the required distribution of the entire reserve (including buffer) pro-rata to holders** and restricting the operation to the admin caller."
 

@@ -2735,7 +2735,7 @@ property of the current protocol.
 **The clock is the base clock.** An earlier version of this wrapper carried its own
 `RLOp.advanceEpoch` action — free, permissionless, and unrelated to `base.now` — so the bound
 counted markers the attacker had put in their own trace and did **not** mean "linear in
-elapsed time". That was the defect `code_review_lean.md` §1.2 recorded. The wrapper now has no
+elapsed time". That was the defect `archive/audit-evidence/code_review_lean.md` §1.2 recorded. The wrapper now has no
 clock of its own: it steps on plain base operations, and the allowance is *derived* from
 `base.now`, which only `Op.tick` moves. `docs/06` §7.3's E1 asks for exactly this — the clock
 in `Op`, with `execTrace` advancing it — so the wrapper is now an instance of E1 rather than a
@@ -2779,7 +2779,7 @@ Two quantities matter and they are not the same. `usdcReserve - usdcReserve'` is
 the reserve — a transfer out. `totalSupply_apxUSD - totalSupply_apxUSD'` is claims destroyed,
 valued at par — what holders gave up. A fair redemption makes them equal. A redemption at a
 crashed `redemptionValue` burns claims for **nothing**, so the reserve does not move and metering
-outflow alone charges zero: that was the residual `code_review_lean.md` §1.2 recorded after the
+outflow alone charges zero: that was the residual `archive/audit-evidence/code_review_lean.md` §1.2 recorded after the
 clock fix, and it let a reprice-to-zero drain pass an arbitrarily tight limiter untouched.
 
 Charging the **larger** of the two closes it while leaving honest traffic priced as before: a fair
@@ -3001,7 +3001,7 @@ is not an `AdminOp`. `execute i` runs the stored base operation via the unmodifi
 clock** (`t₀ + delay ≤ base.now`).
 
 Two defects of the earlier version are what this shape fixes
-(`code_review_lean.md` §1.2):
+(`archive/audit-evidence/code_review_lean.md` §1.2):
 
 * it carried its **own** clock field, advanced by a free `TLOp.tick` with no relation
   to `base.now` or `Op.tick`, so the guarantee counted wrapper tokens rather than
@@ -3581,7 +3581,7 @@ human review: an attributable loss, not just a mechanism.**
 
 `admin_rfq_coalition_drains` above holds the reserve at 0, so the victim's total loss
 is uncompensated but no value is actually redistributed — the human review
-(`human_review_admin_rfq_coalition_drains.md`, F3) read it as demonstrating the
+(`archive/audit-evidence/human_review_admin_rfq_coalition_drains.md`, F3) read it as demonstrating the
 mechanism rather than an attributable harm, and recommended a funded witness. The
 literal fix it proposed (fund the reserve, keep the victim as sole holder) no longer
 produces a loss on the current model: the backstop's pro-rata leg — which this model

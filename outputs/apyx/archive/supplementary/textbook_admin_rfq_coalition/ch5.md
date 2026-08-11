@@ -205,7 +205,7 @@ redemptionValue := totalCollateralValue = 100
 
 ## 5.5 過去レビューとの整合
 
-査読報告(36行目)は F1 と同様、F2 も自動レビューと整合すると述べています。`review_run1.json` の該当 note:
+査読報告(36行目)は F1 と同様、F2 も自動レビューと整合すると述べています。`../audit-evidence/review_run1.json` の該当 note:
 
 > "The theorem **only guarantees Redemption Value = Total Collateral Value, omitting the required distribution of the entire reserve (including buffer) pro-rata to holders** and restricting the operation to the admin caller."
 

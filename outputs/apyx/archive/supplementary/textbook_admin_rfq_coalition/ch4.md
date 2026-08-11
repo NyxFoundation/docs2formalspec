@@ -156,7 +156,7 @@ headline は前者を主張しています。しかし原典に忠実なら後�
 
 > パイプラインの過去レビュー(review_run1–3)も `rfq-redemption-allowed` を … "partial" と全会一致で判定
 
-実際、`review_run1.json` の該当エントリの note を見ると:
+実際、`../audit-evidence/review_run1.json` の該当エントリの note を見ると:
 
 > "The theorem captures the 'only approved counterparties may execute' clause, but **only provides a sufficient condition for success rather than guaranteeing that every valid user redemption request is allowed**, and adds extra preconditions not stated in the requirement."
 

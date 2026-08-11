@@ -177,8 +177,8 @@ judgeノイズを追加ラウンドで潰すのではなく、測定手法自体
 - **token-no-rebase**: full/partial/mismatchが1票ずつの三すくみ
   (真の多数決なし、僅差の判定)。
 
-`outputs/apyx/review.json` を多数決結果に更新し、生の3回分は
-`review_run{1,2,3}.json` として保存(再現性のため)。
+`outputs/apyx/archive/audit-evidence/review.json` を多数決結果に更新し、生の3回分は
+`outputs/apyx/archive/audit-evidence/review_run{1,2,3}.json` として保存(再現性のため)。
 
 **最終確定値**: 定理81件、証明済み81件(sorry 0、100%)、忠実カバレッジ
 (3回多数決)**93.5%**(full 23 / partial 49 / mismatch 3 / unformalizable 2)。

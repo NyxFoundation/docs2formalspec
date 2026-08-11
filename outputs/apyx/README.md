@@ -10,7 +10,7 @@
 | **Method** | RFC 2119 specification → Lean 4 state-machine model → machine-checked theorems |
 | **Result** | The current Lean tree builds with 0 `sorry` and 0 vacuous theorems (`lake build D2fsSpecs`, Lean 4.31.0). The model proves the active design, ledger, registry, pending-liability, and adversarial boundaries described below; it does not prove bytecode conformance. The model still exposes a single-key (`ADMIN_ROLE`) reserve-drain and unbounded repricing path, and the absence of a redemption-price floor (§4.1, §5, §9.1). |
 | **Last updated** | 2026-08-11 |
-| **Self-review** | This report has been reviewed against its own Lean source; findings and fixes are in [`code_review_lean.md`](code_review_lean.md) and §9.3. Regression tests: [`review_witnesses/`](review_witnesses/). Deployment reads that ground the fixes: [`deployment_ground_truth.md`](deployment_ground_truth.md). |
+| **Self-review** | This report has been reviewed against its own Lean source; the reader-facing conclusions are summarized in §9.3. Kernel-checked regression tests remain in [`review_witnesses/`](review_witnesses/); detailed audit evidence is archived under [`archive/audit-evidence/`](archive/audit-evidence/). |
 
 ---
 
@@ -46,6 +46,10 @@ The strongest positive result is **design-level accounting and transition safety
 ### How to read Lean results without knowing Lean
 
 Lean is the proof checker, not the security claim. A theorem is an implication: given the stated model, preconditions, threat model, and operation scope, the conclusion follows and is checked by Lean's kernel. The `scope` column in [`property-manifest.csv`](property-manifest.csv) distinguishes local one-step properties, reachable-state properties, traces, and witnesses. `sorry=0` means there are no admitted proof holes; it does **not** mean that every real-world behavior is modeled.
+
+`review_witnesses/Regression.lean` contains concrete regression scenarios for the formal model. These
+examples pin previously identified model boundaries and fixes; they are not a separate protocol model
+and do not by themselves claim that the deployed contracts are vulnerable.
 
 A result marked `model=proved` is therefore a proved property of the model. `impl=not-run` means that implementation-level tools such as SPECA, Certora, Halmos, SMT checking, or fuzzing have not yet been run. Counterexamples and design findings are evidence about the modeled or deployment-derived boundary, not automatically bytecode vulnerabilities.
 
@@ -145,7 +149,7 @@ Headline findings for Apyx:
   positive-share withdrawal guards, unlock-record retirement, and separation of vesting yield from the
   USDC reserve. These are grounded in the deployed contracts' verified source and live reads, not only
   in the documentation
-  ([`deployment_ground_truth.md`](deployment_ground_truth.md)).
+  ([`archive/audit-evidence/deployment_ground_truth.md`](archive/audit-evidence/deployment_ground_truth.md)).
 - **The ERC-4626 inflation attack is mitigated, not impossible.** `ApyUSD._decimalsOffset()` returns
   `0`, so the vault relies on OpenZeppelin's single virtual
   share; §9.3 quantifies what that leaves open and §5 item 7 is the resulting recommendation.
@@ -741,9 +745,9 @@ lake build D2fsSpecs
 ```
 
 `D2fsSpecs` is the library of analyzed systems; naming it explicitly compiles the
-Lean modules imported by `lean/D2fsSpecs.lean`. The regression witnesses in
-[`review_witnesses/Regression.lean`](review_witnesses/Regression.lean) are compiled separately with
-`lake env lean`; they are not silently counted as part of the library target. (A bare `lake build` additionally compiles
+Lean modules imported by `lean/D2fsSpecs.lean`, including
+[`review_witnesses/Regression.lean`](review_witnesses/Regression.lean). You can also run that file
+directly with `lake env lean` for focused checking. (A bare `lake build` additionally compiles
 `TemplateExamples`, a fictional model that regression-tests the reusable proof templates in
 `templates/`; it is unrelated to Apyx.)
 
@@ -753,8 +757,8 @@ argument linter warnings in `Init.lean`, which are code-quality warnings rather 
 An axiom report must be regenerated from the
 current source whenever public declarations change; it should confirm that no theorem depends on
 `sorryAx`, while standard logical axioms such as `propext`, `Quot.sound`, or `Classical.choice`
-are not protocol assumptions. The requirement-pipeline metrics are recorded in
-[`leancheck.json`](leancheck.json). They describe the requirement-oriented Lean run; the complete
+are not protocol assumptions. The requirement-pipeline metrics are retained in the archived
+[`leancheck.json`](archive/audit-evidence/leancheck.json). They describe the requirement-oriented Lean run; the complete
 current proof surface is checked by the build and mapped in
 [`docs/11-apyx-proof-map.md`](../../docs/11-apyx-proof-map.md). Two of its fields are frozen at
 generation time and no longer describe the pruned sources: `killed: 8` counts the `-- BROKEN:`
@@ -794,11 +798,9 @@ module, not the hand-written proof surface the build checks.
 | [`RedemptionOracle.lean`](RedemptionOracle.lean) | The deployed two-stage redemption-price pipeline (§4.5) |
 | [`MinterRateLimit.lean`](MinterRateLimit.lean) | `MinterV0`'s sliding-window mint rate limit (§4.6) |
 | [`LiquidationBatcher.lean`](LiquidationBatcher.lean) | Construction-time bounds on the one undelayed keyed role (§4.6) |
-| [`leancheck.json`](leancheck.json) | Requirement-pipeline metadata; the active surface is audited by the current proof map and build |
-| [`corpus.md`](corpus.md) | The raw ingested source documentation |
-| [`code_review_lean.md`](code_review_lean.md) | Self-review of this report's Lean source — every finding, fixed and unfixed (§9.3) |
-| [`deployment_ground_truth.md`](deployment_ground_truth.md) | Verified-source and live-read facts the §9.3 fixes are grounded in |
 | [`review_witnesses/Regression.lean`](review_witnesses/Regression.lean) | Kernel-checked regression tests pinning each §9.3 fix |
+| [`archive/audit-evidence/`](archive/audit-evidence/) | Archived source corpus, pipeline metadata, deployment notes, and detailed self-review retained for audit traceability; not required for the reader-facing report |
+| [`archive/supplementary/`](archive/supplementary/) | Archived explanatory material not required by the current specification or Lean build |
 
 ---
 
@@ -841,7 +843,7 @@ check flagged one apparent conflict:
 - `catastrophic-backstop` requires that, on a catastrophic event, the system **distribute the entire buffer**.
 
 A proof confirmed those two *extracted* statements were jointly unsatisfiable. Tracing the requirement back to
-the source documentation (`corpus.md`) then showed the **source is consistent**: it states the buffer is "not
+the source documentation (`archive/audit-evidence/corpus.md`) then showed the **source is consistent**: it states the buffer is "not
 consumed during **routine redemptions**" and "preserved through **stress events**," and separately that a
 **catastrophic scenario** (a devastating hack or wind-down) distributes the entire buffer — an explicitly
 *separate*, terminal mechanism. Our automated extractor had generalized the *stress-events* sentence into an
@@ -862,14 +864,14 @@ checks (all traced to the source and resolved — none a protocol defect) are in
 ### 9.3 Current model self-review and residual boundaries
 
 This section turns the lens on **our own Lean source**: are the theorems as strong as this report's
-prose says? Full findings are in [`code_review_lean.md`](code_review_lean.md). The current model
+prose says? Full findings are in [`archive/audit-evidence/code_review_lean.md`](archive/audit-evidence/code_review_lean.md). The current model
 boundaries and deployment-derived caveats are listed below; they are part of the current assurance
 boundary.
 
 The fixes are grounded in the deployed contracts rather than in the documentation. `ApyUSD`'s
 verified source (impl [`0xfd6165…b112`](https://etherscan.io/address/0xfd616567ecc1607f61073951a1e822f7315bb112),
 OpenZeppelin upgradeable 5.5.0) and live reads are recorded in
-[`deployment_ground_truth.md`](deployment_ground_truth.md).
+[`archive/audit-evidence/deployment_ground_truth.md`](archive/audit-evidence/deployment_ground_truth.md).
 
 **1. The vault priced off a stale cache, and three §4.2 rows were false because of it.**
 The model stored `exchangeRate` as a field refreshed only inside vault operations, while
@@ -1009,7 +1011,7 @@ on the definition instead).
 bytecode; the two can diverge (see §4.3). Most of it is derived from the documentation corpus alone.
 Where a section cites a contract — §9.3's deployment-gap rows, [`DeploymentFees.lean`](DeploymentFees.lean),
 [`DeploymentGaps.lean`](DeploymentGaps.lean), [`MulDivFidelity.lean`](MulDivFidelity.lean) and
-[`deployment_ground_truth.md`](deployment_ground_truth.md) — the source was read from sourcify-verified
+[`archive/audit-evidence/deployment_ground_truth.md`](archive/audit-evidence/deployment_ground_truth.md) — the source was read from sourcify-verified
 implementations and checked against live mainnet reads, but the Lean transcription of that Solidity is
 **hand-written and machine-unchecked**: Lean proves things about the transcription, and its fidelity to
 the contract is a human judgement, not a theorem. Questions about protocol behavior should be verified

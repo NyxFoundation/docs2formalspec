@@ -5,14 +5,14 @@ import D2fsSpecs.Apyx
 Results of the "fourth activity" of §`docs/07`: turning the lens on the RFC 2119 requirement
 set itself and asking whether it is internally consistent, rather than proving `model ⊨
 requirement` (which treats the spec as ground truth and can never find it *wrong*). Each
-candidate from `docs/07` §3 is triaged against the **source documentation** (`corpus.md`,
+candidate from `docs/07` §3 is triaged against the **source documentation** (`archive/audit-evidence/corpus.md`,
 implementation): a candidate confirmed as a genuine *source* defect stays here as a defect
 witness; a candidate traced to an *extraction* artifact (D6 — the LLM dropping a scope/exception
 present in the source) is **fixed at the source** (`requirements.json`/`SPEC.md`) and its theorem
 kept as the conformance property it actually demonstrates.
 
 **Candidate 1 — resolved as an extraction defect, source now fixed.** The apparent
-`buffer-non-decreasing` vs `catastrophic-backstop` contradiction was traced to `corpus.md`,
+`buffer-non-decreasing` vs `catastrophic-backstop` contradiction was traced to `archive/audit-evidence/corpus.md`,
 which is consistent: it scopes buffer preservation to *routine redemptions* and *stress events*
 and treats the catastrophic backstop (a terminal hack/wind-down) as a separate mechanism that
 distributes the buffer. The extractor had over-generalized `buffer-non-decreasing` into an
@@ -82,7 +82,7 @@ is what `catastrophic-backstop` requires and what the corrected `buffer-non-decr
 The witness exhibits a state with a strictly positive buffer on which the admin-authorized
 `catastrophicBackstop` step, whose own postcondition `redemptionValue = totalCollateralValue`
 holds on the result, *strictly decreases* the buffer. This originally surfaced as an apparent
-requirement contradiction; tracing it to `corpus.md` showed the source is consistent and the
+requirement contradiction; tracing it to `archive/audit-evidence/corpus.md` showed the source is consistent and the
 fault was an over-generalized extraction of `buffer-non-decreasing` (now corrected in
 `requirements.json`/`SPEC.md`). The theorem is retained as the positive statement of the
 exception, and it partially closes the "second clause of catastrophic-backstop not modeled"

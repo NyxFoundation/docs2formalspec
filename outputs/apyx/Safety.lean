@@ -644,7 +644,7 @@ Scope, exactly mirroring `req_overcollateralization_limit`: `claimUnlock` and
 obligation the aggregate state does not track as a liability, `handleStressEvent` is
 excluded because it models an exogenous collateral loss that deliberately eats into
 the margin, and `catastrophicBackstop` is excluded because it is the documented
-wind-down operation: per model.md/corpus.md it pays the **entire** USDC reserve —
+wind-down operation: per `model.md` and `archive/audit-evidence/corpus.md` it pays the **entire** USDC reserve —
 buffer included — out to holders pro-rata and zeroes the recorded buffer, which
 deliberately ends the overcollateralized regime `Solvent` describes rather than
 operating inside it. **`withdrawReserve` is excluded too** — a fifth operation the earlier

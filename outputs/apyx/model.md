@@ -6,7 +6,7 @@ The model is an abstract design model, not a Solidity refinement proof. Successf
 `some State`; reverted steps return `none` and are skipped by `execTrace`. The companion modules add
 ledger, registry, pending-liability, holder-value, and deployment-derived boundaries.
 
-Proof Map v3 is implemented inside this existing model. `Apyx.lean` projects the concrete state into
+The current assurance boundaries are implemented inside this existing model. `Apyx.lean` projects the concrete state into
 `LedgerState`, `VaultState`, `RedemptionState`, `ReserveState`, `AuthorityState`, `OracleState`,
 `TimeState`, and `ExternalState`; `AuthorityState.roleGraph` names the four model-level caller
 capabilities; `Phase.lean` classifies every operation into a security family and an exhaustive
@@ -59,7 +59,7 @@ it does not claim that the corresponding implementation is resistant.
 | `redemptionValue` | `uint256` (ray, 1e27) | Per-apxUSD redemption price in USDC (`1e27` = $1.00); redeeming `amount` apxUSD pays `amount·redemptionValue/1e27` USDC. Corresponds to **`RedemptionPoolV0.exchangeRate`** — the value that actually prices a redemption (`previewRedeem = assetsAmount·exchangeRate/1e18/10^|assetDec−reserveDec|`). **Scale differs**: the contract is `1e18`, the model is `ray = 1e27`; only the dimension (per-unit, not aggregate) is shared. Not `ApxUSDRateOracle.rate` — see §5. |
 | `totalCollateralValue` | `uint256` | Full value of the reserve (collateral basket + buffer). |
 | `overcollateralizationBuffer` (derived) | `uint256` | `max(0, totalCollateralValue − totalSupply_apxUSD·redemptionValue/1e27)` — the excess of collateral over the outstanding redemption obligation. |
-| `overcollateralizationBuffer` (**field**) | `uint256` | A *different object* from the derived function above, and never synchronised with it. Written by exactly one operation — `catastrophicBackstop`, which sets it to `0` — and `0` in the default state, so it is identically zero on every reachable trace. It used to appear as a "required margin" term in the solvency invariant; that term was removed rather than left in place (`README` §9.3). |
+| `overcollateralizationBuffer` (**field**) | `uint256` | A *different object* from the derived function above, and never synchronised with it. Written by exactly one operation — `catastrophicBackstop`, which sets it to `0` — and `0` in the default state, so it is identically zero on every reachable trace. It is not used as a required-margin term in the solvency invariant (`README` §9.3). |
 | `exchangeRate` | `uint256` (ray, 1e27) | **A published record, not a pricing input.** The deployed `ApyUSD` stores no rate: `totalAssets()` is a `view` returning `asset.balanceOf(this) + vesting.vestedAmount()` and every conversion recomputes off it. So the model prices everything off the derived `computeExchangeRate s = ((totalAssets s + 1) * ray) / (totalSupply_apyUSD + 1)`, and this field only records the last published value. The `+1` terms are OpenZeppelin's virtual share and virtual asset (`_decimalsOffset() = 0`); they also make the denominator structurally non-zero. See §5 and `README` §9.3. |
 | `cooldownEnd[user][requestId]` | `uint256` (timestamp) | Time after which the unlock token may be redeemed. |
 | `whitelist[address]` | `bool` | `true` ⇒ address may mint/redeem. |
@@ -160,7 +160,7 @@ ties together — and that surface belongs to the Curve pool, outside this state
 **The ERC-4626 vault, read from verified source (2026-07-30).** `ApyUSD` is a UUPS proxy
 (`0x38EE…8a6A`) over implementation `0xfd616567…b112`, built on OpenZeppelin upgradeable **5.5.0**.
 Four facts here changed the model rather than merely annotating it; see `README` §9.3 and
-`deployment_ground_truth.md`.
+`archive/audit-evidence/deployment_ground_truth.md`.
 
 | On-chain | Model |
 |---|---|

@@ -6,7 +6,7 @@ import D2fsSpecs.HolderValue
 Everything here is read off verified sources fetched from sourcify for implementation
 `0xfd616567ecc1607f61073951a1e822f7315bb112` (`src/ApyUSD.sol`, `src/FeeCurve.sol`; solidity
 0.8.30, OpenZeppelin upgradeable 5.5.0), plus live reads against the proxy
-`0x38EEb52F0771140d10c4E9A9a72349A329Fe8a6A`. See `deployment_ground_truth.md`.
+`0x38EEb52F0771140d10c4E9A9a72349A329Fe8a6A`. See `archive/audit-evidence/deployment_ground_truth.md`.
 
 The model in `Apyx.lean` was built from the documentation corpus. The corpus does not mention
 mechanism A **at all**; it describes mechanism B, but describes it wrongly, and the model inherits

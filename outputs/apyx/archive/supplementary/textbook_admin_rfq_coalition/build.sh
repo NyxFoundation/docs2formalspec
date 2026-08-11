@@ -31,7 +31,7 @@ cat > "$OUT" <<'HEADER'
 > 対象読者: Solidity 実務経験があり、抽象化志向で、金融用語には不慣れ、
 > Lean 文法は弱め、Apyx は未知のソフトウェアエンジニア。
 >
-> 出典: `human_review_admin_rfq_coalition_drains.md`（2026-07-12 人間査読報告）、
+> 出典: `../audit-evidence/human_review_admin_rfq_coalition_drains.md`（2026-07-12 人間査読報告）、
 > および Lean モデル `D2fsSpecs/Apyx.lean` / `D2fsSpecs/BlastRadius.lean`、
 > 原典 `corpus.md` / `SPEC.md` / `model.md`。
 

@@ -1,7 +1,6 @@
 # Apyx Protocol Specification  
-**Version:** 1.1 – Lean-synchronized
 **Status:** Current public specification; Lean correspondence and limitations are recorded in §10b.
-**Last synchronized:** 2026-08-06
+**Last updated:** 2026-08-11
 
 ---
 
@@ -425,7 +424,7 @@ open: it can choose neither which markets it touches nor where proceeds go.
 
 Read from `ApyUSD`'s verified source — proxy `0x38EE…8a6A` over implementation
 `0xfd616567…b112`, OpenZeppelin upgradeable 5.5.0 — plus live reads at ≈ block 25,642,103. These
-supersede the model's earlier assumptions; see `README` §9.3 and `deployment_ground_truth.md`.
+supersede the model's earlier assumptions; see `README` §9.3 and `archive/audit-evidence/deployment_ground_truth.md`.
 
 | # | Requirement | Level |
 |---|---|---|

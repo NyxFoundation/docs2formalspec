@@ -40,7 +40,7 @@ structure State where
   denylist : Address → Bool
   rfqCounterparties : List Address
   /-- Pending RFQ redemption requests: the apxUSD amount each user has asked to have
-  redeemed through the structured RFQ process (corpus.md "Users may submit redemption
+  redeemed through the structured RFQ process (archive/audit-evidence/corpus.md "Users may submit redemption
   requests through a structured RFQ process") but that no approved counterparty has
   executed yet. Registered by `Op.submitRFQRequest` (the user's own submission) and
   consumed by `Op.executeRFQRedemption` — a counterparty can only execute against a
@@ -377,7 +377,7 @@ def totalAssets (s : State) : Nat :=
 
 /-- The live per-share price, in `ray`.
 
-**Faithful to the deployment** (`outputs/apyx/deployment_ground_truth.md`). The deployed `ApyUSD`
+**Faithful to the deployment** (`outputs/apyx/archive/audit-evidence/deployment_ground_truth.md`). The deployed `ApyUSD`
 (impl `0xfd616567…b112`, OpenZeppelin upgradeable 5.5.0) stores **no** exchange rate:
 `totalAssets()` is a `view` returning `asset.balanceOf(this) + vesting.vestedAmount()`, and every
 conversion recomputes off it, so the price moves continuously as yield vests. Read on-chain,
@@ -1241,7 +1241,7 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     else some { s with bufferDeployed := s.bufferDeployed || (s.governanceTokenBal caller ≥ s.governanceThreshold) }
   | Op.submitRFQRequest amount =>
     -- a user submits a redemption request through the structured RFQ process
-    -- (corpus.md); an approved counterparty may later execute it against the
+    -- (archive/audit-evidence/corpus.md); an approved counterparty may later execute it against the
     -- reserve via `Op.executeRFQRedemption`
     if s.globalPause then none
     else some { s with
@@ -1311,7 +1311,7 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     -- catastrophic scenario (model.md guard: "Governance emergency flag set" — the
     -- backstop can only fire once the emergency flag is already up, raised by the
     -- stress pathway `Op.handleStressEvent`; it does not raise the flag itself).
-    -- Effect, per model.md/corpus.md: every claim is repriced so the per-apxUSD
+    -- Effect, per model.md and archive/audit-evidence/corpus.md: every claim is repriced so the per-apxUSD
     -- redemption value becomes Total Collateral Value ÷ total apxUSD supply, in `ray`
     -- fixed-point per token (matching the deployed `ApxUSDRateOracle`, whose `rate` is a
     -- per-unit apxUSD→USDC price, not an aggregate — the dimensional fix from
@@ -3060,7 +3060,7 @@ theorem req_deposit_permissionless (s : State) (amount : Nat) (caller : Address)
 
 /-- (Scope: the four apxUSD-burning operations enumerated in the hypothesis. `Op.poolRedeem`, the
 on-chain settlement leg, also burns apxUSD against the reserve and is **not** among them.)
-REQ buffer-non-decreasing (corrected 2026-07-08 to match `corpus.md`): outside of a
+REQ buffer-non-decreasing (corrected 2026-07-08 to match `archive/audit-evidence/corpus.md`): outside of a
 catastrophic backstop, the overcollateralization buffer MUST NOT decrease during routine
 redemptions or stress events; it MAY increase over time via yield spreads and collateral
 appreciation. A catastrophic backstop is the sole exception and distributes the entire buffer

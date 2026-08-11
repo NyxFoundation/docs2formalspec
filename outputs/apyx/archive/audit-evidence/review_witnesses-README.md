@@ -18,7 +18,7 @@ lake env lean ../outputs/apyx/review_witnesses/Regression.lean
 
 ## 何を修正したか
 
-根拠は [`../deployment_ground_truth.md`](../deployment_ground_truth.md)(検証済みソースと
+根拠は [`../deployment_ground_truth.md`](deployment_ground_truth.md)(検証済みソースと
 mainnet の実測値)。
 
 1. **`computeExchangeRate` をライブ価格にした。**

@@ -2,7 +2,7 @@
 
 ## 1.0 この教科書のゴール
 
-査読報告 `human_review_admin_rfq_coalition_drains.md` は、`admin_rfq_coalition_drains` という Lean 定理について「**perfect 昇格は保留**」という判断を下しています。その理由の中核が **F1** と **F2** という2つの「重大・忠実性」所見です。
+査読報告 `../audit-evidence/human_review_admin_rfq_coalition_drains.md` は、`admin_rfq_coalition_drains` という Lean 定理について「**perfect 昇格は保留**」という判断を下しています。その理由の中核が **F1** と **F2** という2つの「重大・忠実性」所見です。
 
 この教科書のゴールは、あなたが **F1 と F2 を、丸暗記ではなく、原理から再導出できる** ようになることです。そのために7章を次のように積み上げます。
 

@@ -4,7 +4,7 @@ import D2fsSpecs.Invariant
 /-!
 # Regression tests for the ERC-4626 pricing fix
 
-These began as the five counterexamples from `code_review_lean.md` §1.0, re-pointed at the
+These began as the five counterexamples from `../archive/audit-evidence/code_review_lean.md` §1.0, re-pointed at the
 **fixed** model; the file now runs R1–R13 as later fixes landed. Before the fix each of the
 original five proved the model *violated* a README §4.2 headline claim; each assertion below pins
 the corrected behaviour instead.
@@ -13,7 +13,7 @@ Read "pins" carefully: most assertions discriminate — they would fail if the f
 but a few are markers rather than discriminators, and those say so where they sit (§R4's
 denominator note is the clearest example).
 
-The fix, grounded in the verified deployment (`../deployment_ground_truth.md`):
+The fix, grounded in the verified deployment (`../archive/audit-evidence/deployment_ground_truth.md`):
 
 * `computeExchangeRate` is the **live** price `((totalAssets + 1) * ray) / (totalSupply_apyUSD + 1)`,
   matching `ApyUSD`'s stateless `totalAssets()`-based reads and OpenZeppelin 5.5.0's virtual
@@ -247,7 +247,7 @@ example : computeExchangeRate (default : State) = ray := by decide
 
 /-! ## R6 — settling a standard unlock no longer strands the next request
 
-`code_review_lean.md` §2.2: `claimUnlock` burned the receipt but left `unlockRequests id` and
+`../archive/audit-evidence/code_review_lean.md` §2.2: `claimUnlock` burned the receipt but left `unlockRequests id` and
 `unlockRequestId owner` set. A later `requestUnlock` therefore topped up the already-settled
 entry, and since the claim guard needs `unlockTokenOwner id = some owner` — which the burn had
 set to `none` — the topped-up amount became **permanently unclaimable**.
@@ -289,7 +289,7 @@ example : (execTrace c2 [(Op.tick cooldownPeriod, 0), (Op.claimUnlock 1, 1)]).ap
 
 /-! ## R7 — `creditYield` no longer credits the USDC reserve
 
-`code_review_lean.md` §2.1: the op added `amount` to **both** `usdcReserve` and the vest pool,
+`../archive/audit-evidence/code_review_lean.md` §2.1: the op added `amount` to **both** `usdcReserve` and the vest pool,
 so one dollar of yield inflated the collateral side of `Solvent` /
 `req_overcollateralization_limit` for free. On-chain `IVesting.depositYield(amount)` moves apxUSD
 into the vesting contract and touches nothing else; the USDC redemption reserve is
@@ -312,7 +312,7 @@ example (s : State) (σ : List (Op × Address)) (h : ∀ p ∈ σ, DistributorOp
 
 /-! ## R8 — the rate limiter is metered by the base clock, not by a free counter
 
-`code_review_lean.md` §1.2: `rate_limit_linear_bound`'s wrapper carried its own
+`../archive/audit-evidence/code_review_lean.md` §1.2: `rate_limit_linear_bound`'s wrapper carried its own
 `RLOp.advanceEpoch` action — free, permissionless, unrelated to `base.now` — so the theorem
 counted markers the attacker had placed in their own trace. `[drain, advanceEpoch, drain,
 advanceEpoch, …]` drained the whole reserve without a single unit of time passing.
@@ -353,7 +353,7 @@ example : b0.usdcReserve
 
 /-! ## R9 — the timelock window is real elapsed time, and the escape is usable
 
-`code_review_lean.md` §1.2 recorded two defects in this wrapper. It carried its own clock
+`../archive/audit-evidence/code_review_lean.md` §1.2 recorded two defects in this wrapper. It carried its own clock
 field advanced by a free `TLOp.tick`, unrelated to `base.now`, so the guarantee counted
 wrapper tokens rather than time. And `queue` accepted *any* operation while `execute` was the
 only route to the base state, so a user wanting to exit had to queue their own redemption and
@@ -414,7 +414,7 @@ example :
 
 /-! ## R10 — the per-holder measure now covers the payout channels
 
-`code_review_lean.md` flagged twice that `Safety.valueAt` omits pending unlock positions — the
+`../archive/audit-evidence/code_review_lean.md` flagged twice that `Safety.valueAt` omits pending unlock positions — the
 place `requestUnlock`/`withdraw`/`redeem` put the payout — so the caller laws read as "the holder
 loses value" when the truth is "the holder is not extracting value".
 [`../HolderValue.lean`](../HolderValue.lean) closes the measure and proves the three channels
@@ -479,7 +479,7 @@ example : pv0.unlockRequestId 1 = none := by decide
 
 /-! ## R12 — the rate limiter charges destroyed claims, not just reserve outflow
 
-The residual `code_review_lean.md` §1.2 recorded after the clock fix: the meter charged
+The residual `../archive/audit-evidence/code_review_lean.md` §1.2 recorded after the clock fix: the meter charged
 `usdcReserve` outflow only, so a settlement at a crashed `redemptionValue` burned a holder's claim
 for **nothing**, moved no reserve, and passed an arbitrarily tight limiter uncharged.
 
@@ -524,7 +524,7 @@ example (s s' : State) : s.totalSupply_apxUSD - s'.totalSupply_apxUSD ≤ stepCo
 
 /-! ## R13 — the redemption paths are deny-list gated, as the deployment gates them
 
-`code_review_lean.md` §2.6: `redeemApxUSD`, `requestUnlock`, `flexibleRequestUnlock` and
+`../archive/audit-evidence/code_review_lean.md` §2.6: `redeemApxUSD`, `requestUnlock`, `flexibleRequestUnlock` and
 `poolRedeem` carried no deny-list check, so the model was **more permissive than the chain**.
 On-chain `ApyUSD` overrides `_update` against both `ERC20PausableUpgradeable` and
 `ERC20DenyListUpgradable`, so every mint, burn and transfer is gated structurally rather than by
