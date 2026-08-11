@@ -152,6 +152,15 @@ theorem protocolInvFull_reachable (s : State) (h : ReachInit s) :
       exact protocolInvFull_step _ _ _ _ ih
         ((stepResult_accepted_iff _ _ _ _ _).mp hacc).1 hscope hprice
 
+/-! The v3 state-view form of the main reachability theorem.  This is not a
+new projection-only fact: it consumes the same `ProtocolInvFull` induction
+and then routes its pending-aware component through
+`protocolInvOutstanding_to_view`. -/
+
+theorem protocolInvFull_reachable_view (s : State) (h : ReachInit s) :
+    ProtocolViewInvariant (protocolState s) (outstandingApxUSD s) :=
+  protocolInvOutstanding_to_view s (protocolInvFull_reachable s h).1
+
 /-! ## The funded witness
 
 A concrete nonzero legitimate initial state: one holder (address 1) with 1000

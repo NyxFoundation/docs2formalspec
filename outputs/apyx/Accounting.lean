@@ -364,6 +364,173 @@ theorem apxUSDObligations_creditYield (s : State) (amount : Nat)
     omega
   · exact absurd h_step (by simp)
 
+/-! ## Proof Map v3: mixed lifecycle trace
+
+`apxUSDObligations` is not a protocol-wide conservation law for every `Op`:
+deposit/mint add a new obligation and `creditYield` adds an explicitly modeled
+inflow.  The v3 trace theorem therefore quantifies the mixed lifecycle scope
+whose operations are neutral, except that a flexible claim may reduce the
+measure by its named fee.  The scope and its premises are explicit rather than
+hidden in an induction hypothesis. -/
+
+def obligationTraceOp (op : Op) : Prop :=
+  (∃ amount, op = Op.lockApxUSD amount) ∨
+  (∃ amount, op = Op.requestUnlock amount) ∨
+  (∃ id, op = Op.claimUnlock id) ∨
+  (∃ amount, op = Op.flexibleRequestUnlock amount) ∨
+  (∃ id, op = Op.flexibleClaimUnlock id) ∨
+  (∃ assets receiver, op = Op.withdraw assets receiver) ∨
+  (∃ shares receiver, op = Op.redeem shares receiver) ∨
+  (∃ dt, op = Op.tick dt)
+
+def obligationStepPremises (s : State) : Op → Prop
+  | Op.lockApxUSD amount => amount ≤ s.totalSupply_apxUSD
+  | Op.requestUnlock amount => amount ≤ s.totalSupply_apxUSD ∧ RegistryWellIndexed s
+  | Op.claimUnlock _ => RegistryWellIndexed s
+  | Op.flexibleRequestUnlock amount => amount ≤ s.totalSupply_apxUSD ∧ RegistryWellIndexed s
+  | Op.flexibleClaimUnlock _ => RegistryWellIndexed s
+  | Op.withdraw _ _ => RegistryWellIndexed s
+  | Op.redeem _ _ => RegistryWellIndexed s
+  | Op.tick _ => True
+  | _ => False
+
+theorem apxUSDObligations_step_nonincreasing (s : State) (op : Op)
+    (caller : Address) (s' : State)
+    (hop : obligationTraceOp op)
+    (hpre : obligationStepPremises s op)
+    (hstep : step s op caller = some s') :
+    apxUSDObligations s' ≤ apxUSDObligations s := by
+  rcases hop with ⟨amount, rfl⟩ | ⟨amount, rfl⟩ | ⟨id, rfl⟩ | ⟨amount, rfl⟩ |
+      ⟨id, rfl⟩ | ⟨assets, receiver, rfl⟩ | ⟨shares, receiver, rfl⟩ | ⟨dt, rfl⟩
+  · have h := apxUSDObligations_lockApxUSD s amount caller s' hpre hstep
+    simp [h]
+  · have h := apxUSDObligations_requestUnlock s amount caller s'
+      hpre.2 hpre.1 hstep
+    simp [h]
+  · have h := apxUSDObligations_claimUnlock s id caller s' hpre hstep
+    simp [h]
+  · have h := apxUSDObligations_flexibleRequestUnlock s amount caller s'
+      hpre.2 hpre.1 hstep
+    simp [h]
+  · obtain ⟨owner, amount, requestTime, cooldownEnd, hreq, hfee⟩ :=
+      apxUSDObligations_flexibleClaimUnlock s id caller s' hpre hstep
+    omega
+  · have h := apxUSDObligations_withdraw s assets receiver caller s' hpre hstep
+    simp [h]
+  · have h := apxUSDObligations_redeem s shares receiver caller s' hpre hstep
+    simp [h]
+  · have h := apxUSDObligations_tick s dt caller s' hstep
+    simp [h]
+
+inductive ObligationTrace : State → List (Op × Address) → Prop
+  | nil (s : State) : ObligationTrace s []
+  | reverted (s : State) (op : Op) (caller : Address) (σ : List (Op × Address))
+      (hop : obligationTraceOp op)
+      (hpre : obligationStepPremises s op)
+      (hstep : step s op caller = none)
+      (htail : ObligationTrace s σ) :
+      ObligationTrace s ((op, caller) :: σ)
+  | accepted (s s' : State) (op : Op) (caller : Address) (σ : List (Op × Address))
+      (hop : obligationTraceOp op)
+      (hpre : obligationStepPremises s op)
+      (hstep : step s op caller = some s')
+      (htail : ObligationTrace s' σ) :
+      ObligationTrace s ((op, caller) :: σ)
+
+theorem obligationTrace_execTrace_le {s : State} {σ : List (Op × Address)}
+    (htrace : ObligationTrace s σ) :
+    apxUSDObligations (execTrace s σ) ≤ apxUSDObligations s := by
+  induction htrace with
+  | nil => exact Nat.le_refl _
+  | reverted s op caller σ hop hpre hstep htail ih =>
+      simp only [execTrace, hstep]
+      exact ih
+  | accepted s s' op caller σ hop hpre hstep htail ih =>
+      simp only [execTrace, hstep]
+      exact Nat.le_trans ih (apxUSDObligations_step_nonincreasing s op caller s'
+        hop hpre hstep)
+
+/-! ## Custody-aware solvency for the mixed lifecycle
+
+`SolventOutstanding` is the right measure for circulating supply plus pending
+claims, but it intentionally excludes vault exits because it does not include
+vault custody.  `apxUSDObligations` does include custody and the unpulled vest
+stream.  The following layer makes the corresponding backing claim explicit
+for the exact `ObligationTrace` language: lifecycle operations can rearrange or
+reduce the obligation measure, while they leave collateral and reserve alone.
+This is a model-local trace theorem with explicit premises; it does not include
+deposit/mint inflows, yield credit, stress, backstop, or reserve withdrawal. -/
+
+def SolventObligations (s : State) : Prop :=
+  apxUSDObligations s ≤ s.totalCollateralValue + s.usdcReserve
+
+theorem obligation_backing_frame (s : State) (op : Op) (caller : Address)
+    (s' : State) (hop : obligationTraceOp op)
+    (hstep : step s op caller = some s') :
+    s'.totalCollateralValue = s.totalCollateralValue ∧
+    s'.usdcReserve = s.usdcReserve := by
+  rcases hop with ⟨amount, rfl⟩ | ⟨amount, rfl⟩ | ⟨id, rfl⟩ |
+      ⟨amount, rfl⟩ | ⟨id, rfl⟩ | ⟨assets, receiver, rfl⟩ |
+      ⟨shares, receiver, rfl⟩ | ⟨dt, rfl⟩
+  · obtain ⟨-, -, hpost⟩ := lockApxUSDStep_effect s amount caller s' hstep
+    rw [hpost]
+    simp [emitEvent, updateExchangeRate, mintApyUSD, burnApxUSD]
+  · obtain ⟨-, -, hpost⟩ := requestUnlockStep_effect s amount caller s' hstep
+    rw [hpost]
+    exact ⟨requestUnlockStep_totalCollateralValue s caller amount,
+      requestUnlockStep_usdcReserve s caller amount⟩
+  · obtain ⟨owner, amount, cooldownEnd, hreq, howner, hcaller, hcool, hpost⟩ :=
+      claimUnlockStep_effect s id caller s' hstep
+    rw [hpost]
+    simp [mintApxUSD, retireStandardUnlock, burnUnlockNFT]
+  · obtain ⟨-, -, hpost⟩ := flexibleRequestUnlockStep_effect s amount caller s' hstep
+    rw [hpost]
+    simp [createFlexibleUnlock, burnApxUSD]
+  · obtain ⟨owner, amount, requestTime, cooldownEnd, hreq, howner, hcaller, hcool, hpost⟩ :=
+      flexibleClaimStep_effect s id caller s' hstep
+    rw [hpost]
+    simp [mintApxUSD, retireFlexibleUnlock, burnUnlockNFT]
+  · obtain ⟨-, -, -, hpost⟩ := withdrawStep_effect s assets receiver caller s' hstep
+    rw [hpost]
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  · obtain ⟨-, -, -, hpost⟩ := redeemStep_effect s shares receiver caller s' hstep
+    rw [hpost]
+    simp [emitEvent, updateExchangeRate, createStandardUnlock, burnApyUSD]
+  · cases Option.some.inj hstep
+    exact ⟨rfl, rfl⟩
+
+theorem solventObligations_step (s : State) (op : Op) (caller : Address)
+    (s' : State) (h : SolventObligations s)
+    (hop : obligationTraceOp op)
+    (hpre : obligationStepPremises s op)
+    (hstep : step s op caller = some s') :
+    SolventObligations s' := by
+  have hmeasure := apxUSDObligations_step_nonincreasing s op caller s'
+    hop hpre hstep
+  have hframe := obligation_backing_frame s op caller s' hop hstep
+  unfold SolventObligations at h ⊢
+  rw [hframe.1, hframe.2]
+  exact Nat.le_trans hmeasure h
+
+theorem solventObligations_trace {s : State} {σ : List (Op × Address)}
+    (htrace : ObligationTrace s σ) (hinit : SolventObligations s) :
+    SolventObligations (execTrace s σ) := by
+  induction htrace with
+  | nil => exact hinit
+  | reverted s op caller σ hop hpre hstep htail ih =>
+      simp only [execTrace, hstep]
+      exact ih hinit
+  | accepted s s' op caller σ hop hpre hstep htail ih =>
+      simp only [execTrace, hstep]
+      exact ih (solventObligations_step s op caller s' hinit hop hpre hstep)
+
+/-- The concrete funded anchor satisfies the stronger custody-aware backing
+inequality, not only the older circulating-plus-pending one. -/
+theorem solventObligations_fundedInit : SolventObligations fundedInit := by
+  unfold SolventObligations apxUSDObligations apxUSDFlow outstandingApxUSD
+    pendingApxUSD standardUnlockTotal flexibleUnlockTotal
+  simp [fundedInit, default]
+
 /-! ## Individual claim coverage from the accounting invariant
 
 The claim-level non-depletion corollaries (Proof Map v2 V2-VALUE): each
@@ -456,6 +623,37 @@ theorem pending_flexible_claim_covered_reachable (s : State) (h : ReachInit s)
     amount ≤ s.totalCollateralValue + s.usdcReserve :=
   pending_flexible_claim_covered s (protocolInvFull_reachable s h)
     id owner amount requestTime cooldownEnd hid hreq
+
+/-! **Proof Map v3 user-claim composition.**  The standard and flexible
+    redemption channels share one user-facing coverage boundary, while their
+    registries and timing fields remain separate. -/
+
+theorem pending_claim_coverage_reachable (s : State) (h : ReachInit s) :
+    (∀ id owner amount cooldownEnd,
+      id < s.nextUnlockId →
+      s.unlockRequests id = some (owner, amount, cooldownEnd) →
+      amount ≤ s.totalCollateralValue + s.usdcReserve) ∧
+    (∀ id owner amount requestTime cooldownEnd,
+      id < s.nextUnlockId →
+      s.flexibleUnlockRequests id = some (owner, amount, requestTime, cooldownEnd) →
+      amount ≤ s.totalCollateralValue + s.usdcReserve) := by
+  constructor
+  · intro id owner amount cooldownEnd hid hreq
+    exact pending_standard_claim_covered_reachable s h id owner amount cooldownEnd hid hreq
+  · intro id owner amount requestTime cooldownEnd hid hreq
+    exact pending_flexible_claim_covered_reachable s h id owner amount requestTime cooldownEnd hid hreq
+
+theorem pending_claim_coverage_reachable_view (s : State) (h : ReachInit s) :
+    (∀ id owner amount cooldownEnd,
+      id < (protocolState s).redemption.nextUnlockId →
+      (protocolState s).redemption.standardRequests id = some (owner, amount, cooldownEnd) →
+      amount ≤ (protocolState s).reserve.collateralValue + (protocolState s).reserve.reserve) ∧
+    (∀ id owner amount requestTime cooldownEnd,
+      id < (protocolState s).redemption.nextUnlockId →
+      (protocolState s).redemption.flexibleRequests id =
+        some (owner, amount, requestTime, cooldownEnd) →
+      amount ≤ (protocolState s).reserve.collateralValue + (protocolState s).reserve.reserve) := by
+  simpa [protocolState] using pending_claim_coverage_reachable s h
 
 
 end Apyx

@@ -1194,4 +1194,31 @@ theorem apxUSDLedgerConsistent_balance_le (s : State)
     have hle := sumOver_mem_le s.apxUSDBal hmem
     omega
 
+/-! ## Ledger-derived aggregate solvency
+
+`Safety.solvency_preserved_price_derived` still asks for the per-prefix
+balance bound because it predates the finite-support ledger.  Once the initial
+state carries `ApxUSDLedgerConsistent`, the universal ledger trace theorem
+above supplies that bound at every revert-skip prefix.  The theorem below is
+therefore the stronger trace interface for callers that can state the actual
+ledger identity.  It keeps the genuine price and operation exclusions visible;
+it does not silently turn them into an unconditional solvency claim. -/
+
+theorem solvency_preserved_ledger_derived (s : State) (σ : List (Op × Address))
+    (h_solvent : Solvent s)
+    (h_ledger : ApxUSDLedgerConsistent s)
+    (h_price : PriceUnderPar s)
+    (h_excl : ∀ p ∈ σ, (∀ id, p.1 ≠ Op.claimUnlock id) ∧
+      (∀ id, p.1 ≠ Op.flexibleClaimUnlock id) ∧
+      (∀ a, p.1 ≠ Op.handleStressEvent a) ∧
+      p.1 ≠ Op.catastrophicBackstop ∧
+      (∀ amt r, p.1 ≠ Op.withdrawReserve amt r) ∧
+      (∀ v, p.1 ≠ Op.updateRedemptionValue v)) :
+    Solvent (execTrace s σ) := by
+  apply solvency_preserved_price_derived s σ h_solvent h_price
+  · intro n
+    exact apxUSDLedgerConsistent_balance_le _
+      (apxUSDLedgerConsistent_trace s (σ.take n) h_ledger)
+  · exact h_excl
+
 end Apyx

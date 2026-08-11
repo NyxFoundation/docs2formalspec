@@ -568,6 +568,34 @@ def ProtocolInvOutstanding (s : State) : Prop :=
   RegistryWellIndexed s ∧ SolventOutstanding s ∧ WellFormed s ∧
     ApxUSDLedgerConsistent s ∧ ApyUSDLedgerConsistent s
 
+/-! ## v3 state-view invariant bridge
+
+The v3 `ProtocolState` is useful only if the old invariant proofs can be
+consumed through it.  This predicate is deliberately view-shaped: it contains
+the ledger bound, pending-aware reserve coverage, the oracle price bound, and
+the model's explicit authority/external boundary facts.  It does not recreate
+the full `State` invariant or pretend that a projection contains omitted
+deployment storage.
+-/
+
+def ProtocolViewInvariant (p : ProtocolState) (obligation : Nat) : Prop :=
+  (∀ a, p.ledger.apxUSDBalance a ≤ p.ledger.totalSupplyApxUSD) ∧
+  p.oracle.redemptionValue ≤ ray ∧
+  obligation ≤ p.reserve.collateralValue + p.reserve.reserve ∧
+  p.authority.roleGraph.length = 4 ∧
+  p.external.callbackDepth = 0
+
+theorem protocolInvOutstanding_to_view (s : State)
+    (h : ProtocolInvOutstanding s) :
+    ProtocolViewInvariant (protocolState s) (outstandingApxUSD s) := by
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · simpa [protocolState] using
+      apxUSDLedgerConsistent_balance_le s h.2.2.2.1
+  · simpa [protocolState] using h.2.2.1.2
+  · simpa [protocolState, SolventOutstanding] using h.2.1
+  · exact protocolState_roleGraph_lists_model_callers s
+  · rfl
+
 theorem protocolInvOutstanding_implies_protocolInv (s : State)
     (h : ProtocolInvOutstanding s) : ProtocolInv s :=
   ⟨h.1, solventOutstanding_implies_solvent s h.2.1, h.2.2.1, h.2.2.2.1, h.2.2.2.2⟩
@@ -595,6 +623,14 @@ theorem protocolInvOutstanding_step
     apyUSDLedgerConsistent_step s s' op caller h.2.2.2.2 hstep⟩
   exact redemptionValue_le_ray_step s op caller s' hstep h.2.2.1.2 hprice
     hscope.2.2.2.1
+
+theorem protocolInvOutstanding_step_to_view
+    (s : State) (op : Op) (caller : Address) (s' : State)
+    (h : ProtocolInvOutstanding s) (hstep : step s op caller = some s')
+    (hscope : OutstandingScopedOp op) (hprice : PriceBoundedOp op) :
+    ProtocolViewInvariant (protocolState s') (outstandingApxUSD s') :=
+  protocolInvOutstanding_to_view s'
+    (protocolInvOutstanding_step s op caller s' h hstep hscope hprice)
 
 /-!
 The pending-aware reachability relation lives in `Init.lean`: `ReachInit`

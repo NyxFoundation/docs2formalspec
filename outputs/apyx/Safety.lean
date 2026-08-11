@@ -14,6 +14,37 @@ Additive: `Apyx.lean` and `BlastRadius.lean` are untouched.
 
 namespace Apyx
 
+/-! ## Trace form of the time-only exchange-rate property
+
+`req_exchange_rate_non_decreasing` is intentionally a fixed-state theorem:
+only `now` changes.  The corresponding trace claim is valid for the explicit
+time-only sublanguage, where every entry is `Op.tick`; it is not silently
+extended to deposits, vault exits, or share-supply changes. -/
+
+def TickOnlyTrace (σ : List (Op × Address)) : Prop :=
+  ∀ p ∈ σ, ∃ dt, p.1 = Op.tick dt
+
+theorem exchange_rate_non_decreasing_tick_trace
+    (s : State) (σ : List (Op × Address))
+    (h_ticks : TickOnlyTrace σ) :
+    computeExchangeRate s ≤ computeExchangeRate (execTrace s σ) := by
+  induction σ generalizing s with
+  | nil => exact Nat.le_refl _
+  | cons p σ ih =>
+      obtain ⟨op, caller⟩ := p
+      obtain ⟨dt, hop⟩ := h_ticks (op, caller) List.mem_cons_self
+      change op = Op.tick dt at hop
+      cases hop
+      have htail : TickOnlyTrace σ := by
+        intro q hq
+        exact h_ticks q (List.mem_cons_of_mem _ hq)
+      have hrun : execTrace s ((Op.tick dt, caller) :: σ) =
+          execTrace { s with now := s.now + dt } σ := by
+        simp [execTrace, step]
+      rw [hrun]
+      exact Nat.le_trans (req_exchange_rate_non_decreasing s dt)
+        (ih { s with now := s.now + dt } htail)
+
 /-! ## Local frame lemmas for `pullVestedYield`
 
 (Re-derived: the equivalents in `Apyx.lean` and `BlastRadius.lean` are `private`.) -/

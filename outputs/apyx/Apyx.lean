@@ -101,6 +101,226 @@ structure State where
   usdcReserve : Nat
   eventLog : List (String × List Nat)
 
+/-! ## Proof Map v3: composed security state
+
+The transition model keeps one concrete `State` so that the existing effect
+proofs remain readable.  Proof Map v3 nevertheless requires the security
+boundaries to be explicit.  These structures are the composed substates used
+by the existing proofs; they are projections, not a second transition model.
+Keeping the projections here prevents a ledger theorem from silently being
+read as a vault, authority, oracle, or external-state theorem. -/
+
+structure LedgerState where
+  totalSupplyApxUSD : Nat
+  totalSupplyApyUSD : Nat
+  apxUSDBalance : Address → Nat
+  apyUSDBalance : Address → Nat
+  usdcBalance : Address → Nat
+  governanceBalance : Address → Nat
+
+structure VaultState where
+  custodyApxUSD : Nat
+  exchangeRate : Nat
+  vestStart : Nat
+  vestTotal : Nat
+  fullyVestedAmount : Nat
+  vestPeriod : Nat
+
+structure RedemptionState where
+  nextUnlockId : Nat
+  ownerRequestId : Address → Option Nat
+  standardRequests : Nat → Option (Address × Nat × Nat)
+  flexibleRequests : Nat → Option (Address × Nat × Nat × Nat)
+  receiptOwner : Nat → Option Address
+  receiptAmount : Nat → Nat
+  receiptOperator : Address
+
+structure AuthorityRole where
+  roleId : Nat
+  roleName : String
+  holder : Address
+  delay : Option Nat
+  capabilities : List String
+
+structure ReserveState where
+  collateralValue : Nat
+  reserve : Nat
+  redemptionValue : Nat
+  overcollateralizationBuffer : Nat
+
+structure AuthorityState where
+  admin : Address
+  governance : Address
+  oracle : Address
+  pauseController : Address
+  yieldDistributor : Address
+  rfqCounterparties : List Address
+  whitelist : Address → Bool
+  denylist : Address → Bool
+  governanceThreshold : Nat
+  /-- Model-level caller-to-capability graph. Deployment-specific AccessManager edges are separate. -/
+  roleGraph : List AuthorityRole
+  /-- Deployment authority is intentionally not inferred from a model caller. -/
+  authorityAddress : Option Address
+  /-- A multisig/Safe threshold is an implementation configuration, not a State field. -/
+  safeThreshold : Option Nat
+  /-- Delay before a role operation becomes executable, when known from deployment. -/
+  roleDelay : Option Nat
+  /-- Delay for changing the authority itself. -/
+  setAuthorityDelay : Option Nat
+  /-- Upgrade authority and delay are kept optional until bytecode/config evidence is joined. -/
+  upgradeAuthority : Option Address
+  upgradeDelay : Option Nat
+
+structure OracleState where
+  redemptionValue : Nat
+  marketPrice : Nat
+
+structure TimeState where
+  now : Nat
+
+structure ExternalState where
+  usdcBalance : Address → Nat
+  rfqRequests : Address → Nat
+  /-- Timestamp/freshness metadata for an oracle read; absent in the design model. -/
+  oracleTimestamp : Option Nat
+  /-- Mutable state owned by an external pool or custody contract. -/
+  externalPoolState : Option Nat
+  /-- Nonce/replay state for EIP-712/ERC-1271 style authorization. -/
+  signatureNonce : Address → Option Nat
+  /-- Proxy implementation slot and initializer state are implementation boundaries. -/
+  proxyImplementation : Option Address
+  initializerConsumed : Option Bool
+  /-- Callback depth is zero because `step` is an atomic, callback-free model transition. -/
+  callbackDepth : Nat
+  /-- Gas/loop budget is not represented by the abstract machine. -/
+  gasBudget : Option Nat
+
+structure ProtocolState where
+  ledger : LedgerState
+  vault : VaultState
+  redemption : RedemptionState
+  reserve : ReserveState
+  authority : AuthorityState
+  oracle : OracleState
+  time : TimeState
+  external : ExternalState
+
+def protocolState (s : State) : ProtocolState :=
+  { ledger :=
+      { totalSupplyApxUSD := s.totalSupply_apxUSD
+        totalSupplyApyUSD := s.totalSupply_apyUSD
+        apxUSDBalance := s.apxUSDBal
+        apyUSDBalance := s.apyUSDBal
+        usdcBalance := s.usdcBal
+        governanceBalance := s.governanceTokenBal }
+    vault :=
+      { custodyApxUSD := s.vaultApxUSDBal
+        exchangeRate := s.exchangeRate
+        vestStart := s.vestStart
+        vestTotal := s.vestTotal
+        fullyVestedAmount := s.fullyVestedAmount
+        vestPeriod := s.vestPeriod }
+    redemption :=
+      { nextUnlockId := s.nextUnlockId
+        ownerRequestId := s.unlockRequestId
+        standardRequests := s.unlockRequests
+        flexibleRequests := s.flexibleUnlockRequests
+        receiptOwner := s.unlockTokenOwner
+        receiptAmount := s.unlockTokenAmount
+        receiptOperator := s.unlockTokenOperator }
+    reserve :=
+      { collateralValue := s.totalCollateralValue
+        reserve := s.usdcReserve
+        redemptionValue := s.redemptionValue
+        overcollateralizationBuffer := s.overcollateralizationBuffer }
+    authority :=
+      { admin := s.admin
+        governance := s.governance
+        oracle := s.oracle
+        pauseController := s.pauseController
+        yieldDistributor := s.yieldDistributor
+        rfqCounterparties := s.rfqCounterparties
+        whitelist := s.whitelist
+        denylist := s.denylist
+        governanceThreshold := s.governanceThreshold
+        roleGraph :=
+          [ { roleId := 0, roleName := "admin", holder := s.admin, delay := none
+              capabilities := ["configuration", "reserve withdrawal", "repricing"] }
+          , { roleId := 1, roleName := "pauseController", holder := s.pauseController, delay := none
+              capabilities := ["pause", "unpause"] }
+          , { roleId := 2, roleName := "oracle", holder := s.oracle, delay := none
+              capabilities := ["market price update"] }
+          , { roleId := 3, roleName := "yieldDistributor", holder := s.yieldDistributor, delay := none
+              capabilities := ["credit yield"] } ]
+        authorityAddress := none
+        safeThreshold := none
+        roleDelay := none
+        setAuthorityDelay := none
+        upgradeAuthority := none
+        upgradeDelay := none }
+    oracle :=
+      { redemptionValue := s.redemptionValue
+        marketPrice := s.apxUSDMarketPrice }
+    time := { now := s.now }
+    external :=
+      { usdcBalance := s.usdcBal
+        rfqRequests := s.rfqRequests
+        oracleTimestamp := none
+        externalPoolState := none
+        signatureNonce := fun _ => none
+        proxyImplementation := none
+        initializerConsumed := none
+        callbackDepth := 0
+        gasBudget := none } }
+
+theorem protocolState_tick_frames (s : State) (dt : Nat) :
+    let s' := { s with now := s.now + dt }
+    (protocolState s').ledger = (protocolState s).ledger ∧
+    (protocolState s').vault = (protocolState s).vault ∧
+    (protocolState s').redemption = (protocolState s).redemption ∧
+    (protocolState s').reserve = (protocolState s).reserve ∧
+    (protocolState s').authority = (protocolState s).authority ∧
+    (protocolState s').oracle = (protocolState s).oracle ∧
+    (protocolState s').external = (protocolState s).external := by
+  simp [protocolState]
+
+/-! ### Explicit implementation boundaries
+
+The fields above make the missing deployment controls visible in the composed state without
+pretending that a caller address proves them.  The core model has no `setAuthority`, `upgrade`,
+signature, callback, oracle-freshness, or gas transition, so these fields are empty/zero in the
+projection.  The following predicates are deliberately named hand-offs: a future implementation
+refinement must supply them before a deployment-level theorem can be claimed. -/
+
+def authorityWiringModeled (p : ProtocolState) : Prop :=
+  p.authority.authorityAddress.isSome ∧
+    p.authority.safeThreshold.isSome ∧
+    p.authority.roleDelay.isSome ∧
+    p.authority.setAuthorityDelay.isSome ∧
+    p.authority.upgradeAuthority.isSome ∧
+    p.authority.upgradeDelay.isSome
+
+def externalExecutionModeled (p : ProtocolState) : Prop :=
+  p.external.oracleTimestamp.isSome ∧
+    p.external.externalPoolState.isSome ∧
+    (∀ a, (p.external.signatureNonce a).isSome) ∧
+    p.external.proxyImplementation.isSome ∧
+    p.external.initializerConsumed.isSome ∧
+    p.external.gasBudget.isSome
+
+theorem protocolState_authority_wiring_is_handoff (s : State) :
+    ¬ authorityWiringModeled (protocolState s) := by
+  simp [authorityWiringModeled, protocolState]
+
+theorem protocolState_external_execution_is_handoff (s : State) :
+    ¬ externalExecutionModeled (protocolState s) := by
+  simp [externalExecutionModeled, protocolState]
+
+theorem protocolState_roleGraph_lists_model_callers (s : State) :
+    (protocolState s).authority.roleGraph.length = 4 := by
+  rfl
+
 /-- `default : State` is the **empty** state, spelled out field by field.
 
 This instance used to be `deriving Inhabited`, which was a trap: for the two fields of type
@@ -1129,6 +1349,58 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     if caller == s.oracle then some { s with apxUSDMarketPrice := price }
     else none
 
+/-! ### Refinement boundary (Proof Map v3 §V3-6)
+
+`ProtocolState` is the semantic target of a future implementation model.  `ImplState` is kept
+structurally separate so that a bytecode/storage extraction cannot accidentally be treated as the
+same object as the design state.  `Rep` and `ForwardSimulation` are the obligations to discharge
+when such an extraction exists; defining them does not claim that the obligation has been run. -/
+
+structure ImplState where
+  ledger : LedgerState
+  vault : VaultState
+  redemption : RedemptionState
+  reserve : ReserveState
+  authority : AuthorityState
+  oracle : OracleState
+  time : TimeState
+  external : ExternalState
+
+def Rep (impl : ImplState) (model : ProtocolState) : Prop :=
+  impl.ledger = model.ledger ∧
+    impl.vault = model.vault ∧
+    impl.redemption = model.redemption ∧
+    impl.reserve = model.reserve ∧
+    impl.authority = model.authority ∧
+    impl.oracle = model.oracle ∧
+    impl.time = model.time ∧
+    impl.external = model.external
+
+def implStateOf (model : ProtocolState) : ImplState :=
+  { ledger := model.ledger
+    vault := model.vault
+    redemption := model.redemption
+    reserve := model.reserve
+    authority := model.authority
+    oracle := model.oracle
+    time := model.time
+    external := model.external }
+
+theorem rep_implStateOf (model : ProtocolState) : Rep (implStateOf model) model := by
+  simp [Rep, implStateOf]
+
+def ImplementationStep := ImplState → Op → Address → Option ImplState
+
+def ForwardSimulation (implStep : ImplementationStep) : Prop :=
+  ∀ (impl : ImplState) (s : State) (op : Op) (caller : Address),
+    Rep impl (protocolState s) →
+      match implStep impl op caller with
+      | none => step s op caller = none
+      | some impl' => ∃ s', step s op caller = some s' ∧ Rep impl' (protocolState s')
+
+def refinementStatus : String :=
+  "schema defined; deployed bytecode/storage extraction and ForwardSimulation proof not run"
+
 /-- ERC-4626 slippage wrappers: revert (return `none`) when the preview violates the
 user-supplied bound, otherwise defer to the underlying vault operation. -/
 def depositForMinShares (s : State) (assets minShares : Nat) (_receiver caller : Address) : Option State :=
@@ -1161,6 +1433,87 @@ def withdrawForMaxShares (s : State) (assets maxShares : Nat) (receiver caller :
 def redeemForMinAssets (s : State) (shares minAssets : Nat) (receiver caller : Address) : Option State :=
   if previewRedeem s shares < minAssets then none
   else step s (Op.redeem shares receiver) caller
+
+/-! The wrapper guards below are deliberately one-directional.  If the bound is
+violated, the wrapper itself must revert.  When the bound is satisfied, the
+wrapper delegates to the underlying operation, which may still revert for its
+own protocol guards.  This distinction keeps a slippage proof from claiming
+successful execution. -/
+
+theorem depositForMinShares_reverts_on_slippage
+    (s : State) (assets minShares : Nat) (receiver caller : Address)
+    (h : previewDeposit s assets < minShares) :
+    depositForMinShares s assets minShares receiver caller = none := by
+  simp [depositForMinShares, h]
+
+theorem depositForMinShares_delegates_when_bounded
+    (s : State) (assets minShares : Nat) (receiver caller : Address)
+    (h : minShares ≤ previewDeposit s assets) :
+    depositForMinShares s assets minShares receiver caller =
+      step s (Op.lockApxUSD assets) caller := by
+  simp [depositForMinShares, Nat.not_lt_of_ge h]
+
+theorem mintForMaxAssets_reverts_on_slippage
+    (s : State) (shares maxAssets : Nat) (receiver caller : Address)
+    (h : previewMint s shares > maxAssets) :
+    mintForMaxAssets s shares maxAssets receiver caller = none := by
+  simp [mintForMaxAssets, h]
+
+theorem mintForMaxAssets_delegates_when_bounded
+    (s : State) (shares maxAssets : Nat) (receiver caller : Address)
+    (h : previewMint s shares ≤ maxAssets) :
+    mintForMaxAssets s shares maxAssets receiver caller =
+      step s (Op.lockApxUSD (previewMint s shares)) caller := by
+  simp [mintForMaxAssets, Nat.not_lt_of_ge h]
+
+theorem withdrawForMaxShares_reverts_on_slippage
+    (s : State) (assets maxShares : Nat) (receiver caller : Address)
+    (h : previewWithdraw s assets > maxShares) :
+    withdrawForMaxShares s assets maxShares receiver caller = none := by
+  simp [withdrawForMaxShares, h]
+
+theorem withdrawForMaxShares_delegates_when_bounded
+    (s : State) (assets maxShares : Nat) (receiver caller : Address)
+    (h : previewWithdraw s assets ≤ maxShares) :
+    withdrawForMaxShares s assets maxShares receiver caller =
+      step s (Op.withdraw assets receiver) caller := by
+  simp [withdrawForMaxShares, Nat.not_lt_of_ge h]
+
+theorem redeemForMinAssets_reverts_on_slippage
+    (s : State) (shares minAssets : Nat) (receiver caller : Address)
+    (h : previewRedeem s shares < minAssets) :
+    redeemForMinAssets s shares minAssets receiver caller = none := by
+  simp [redeemForMinAssets, h]
+
+theorem redeemForMinAssets_delegates_when_bounded
+    (s : State) (shares minAssets : Nat) (receiver caller : Address)
+    (h : minAssets ≤ previewRedeem s shares) :
+    redeemForMinAssets s shares minAssets receiver caller =
+      step s (Op.redeem shares receiver) caller := by
+  simp [redeemForMinAssets, Nat.not_lt_of_ge h]
+
+/-! `totalAssets` is intentionally a direct view of the two deployment-side
+sources: the vault's held apxUSD and the vesting contract's report.  Naming the
+equation makes the scope visible to later refinement proofs. -/
+
+theorem totalAssets_eq_vault_balance_plus_vested (s : State) :
+    totalAssets s = s.vaultApxUSDBal + vestedAmount s s.now :=
+  rfl
+
+theorem voteBufferDeployment_requires_governance_holder
+    (s : State) (caller : Address) (s' : State)
+    (h : step s Op.voteBufferDeployment caller = some s') :
+    0 < s.governanceTokenBal caller := by
+  simp only [step] at h
+  split at h
+  · simp_all
+  · omega
+
+theorem voteBufferDeployment_reverts_without_governance_holder
+    (s : State) (caller : Address)
+    (h : s.governanceTokenBal caller = 0) :
+    step s Op.voteBufferDeployment caller = none := by
+  simp [step, h]
 
 -- Requirements as theorems
 
@@ -1396,6 +1749,41 @@ private theorem flexibleUnlockFee_antitone (rt : Nat) {t1 t2 : Nat}
         have hdiv : (t1 - rt) * 340 / cooldownPeriod ≤ (t2 - rt) * 340 / cooldownPeriod :=
           Nat.div_le_div_right (Nat.mul_le_mul_right _ (by omega))
         omega) (Nat.le_max_left _ _), Nat.le_max_right _ _⟩)
+
+/-! The claimability boundary matters for the advertised maximum.  The fee
+formula measures elapsed time from the request, while the earliest flexible
+claim is only allowed after `minFlexibleClaim` (three days).  Consequently the
+first executable claim is already below the nominal 350 bps starting constant.
+These lemmas make that distinction machine-checkable instead of hiding it in
+the prose. -/
+
+theorem flexibleUnlockFee_at_min_claim (rt : Nat) :
+    flexibleUnlockFee rt (rt + minFlexibleClaim) = 299 := by
+  unfold flexibleUnlockFee
+  dsimp only
+  have hnot : ¬rt + minFlexibleClaim < rt + minFlexibleClaim := by omega
+  have hcool : ¬cooldownPeriod ≤ rt + minFlexibleClaim - rt := by
+    simp [minFlexibleClaim, cooldownPeriod, day]
+  simp [minFlexibleClaim, cooldownPeriod, day]
+
+theorem flexibleUnlockFee_claimable_le (rt now : Nat)
+    (h : rt + minFlexibleClaim ≤ now) :
+    flexibleUnlockFee rt now ≤ 299 := by
+  have hmono := flexibleUnlockFee_antitone rt (t1 := rt + minFlexibleClaim)
+    (t2 := now) (by omega) h
+  rw [flexibleUnlockFee_at_min_claim] at hmono
+  exact hmono
+
+theorem flexibleUnlockFee_before_cooldown_exact (rt now : Nat)
+    (hmin : rt + minFlexibleClaim ≤ now)
+    (hmax : now < rt + cooldownPeriod) :
+    flexibleUnlockFee rt now =
+      max (350 - ((now - rt) * 340) / cooldownPeriod) 10 := by
+  unfold flexibleUnlockFee
+  dsimp only
+  have hnotmin : ¬now < rt + minFlexibleClaim := by omega
+  have hnotcool : ¬cooldownPeriod ≤ now - rt := by omega
+  simp [hnotmin, hnotcool]
 
 /-- Once the full cooldown has elapsed the flexible-unlock fee is exactly the 10 bps floor. -/
 private theorem flexibleUnlockFee_after_cooldown (rt now : Nat)
@@ -2174,17 +2562,19 @@ theorem req_pay_to_non_cooldown (s : State) (amount : Nat) (caller : Address) (s
   · exact absurd h_step (by simp)
 
 /-- REQ early-unlock-fee-linear-decline: The early unlock fee MUST decline linearly over
-time from 3.5% down to 0.1%. (Model: within the claim window the fee is bounded by
-350 bps, never falls below the 10 bps floor, declines monotonically, and equals exactly
-10 bps once the full cooldown has elapsed.) -/
+time from 3.5% down to 0.1%. (Model: within the executable claim window the fee is
+bounded by 299 bps, never falls below the 10 bps floor, declines monotonically, and
+equals exactly 10 bps once the full cooldown has elapsed. The nominal 350 bps value is
+unreachable for a successful claim because claims are gated for the first three days.) -/
 theorem req_early_unlock_fee_linear_decline (requestTime t1 t2 : Nat)
     (h1 : requestTime + minFlexibleClaim ≤ t1) (h12 : t1 ≤ t2) :
     flexibleUnlockFee requestTime t2 ≤ flexibleUnlockFee requestTime t1 ∧
     10 ≤ flexibleUnlockFee requestTime t2 ∧
-    flexibleUnlockFee requestTime t2 ≤ 350 ∧
+    flexibleUnlockFee requestTime t2 ≤ 299 ∧
     (requestTime + cooldownPeriod ≤ t2 → flexibleUnlockFee requestTime t2 = 10) :=
   ⟨flexibleUnlockFee_antitone _ h1 h12, flexibleUnlockFee_ge_min _ _ (by omega),
-   flexibleUnlockFee_le_start _ _, fun h => flexibleUnlockFee_after_cooldown _ _ (by omega) h⟩
+   flexibleUnlockFee_claimable_le _ _ (by omega),
+   fun h => flexibleUnlockFee_after_cooldown _ _ (by omega) h⟩
 
 /-- Helper: a new apxUSD_unlock position can only be created by one of the vault's own
 unlock entry points (`requestUnlock`/`flexibleRequestUnlock`/`withdraw`/`redeem`), and it
@@ -2528,6 +2918,24 @@ theorem req_rfq_redemption_allowed (s : State) (user caller : Address) (amount :
         Nat.not_lt.mpr h3, Nat.not_lt.mpr h4])
     · exact ⟨s', rfl⟩
 
+/-- A failed RFQ execution cannot be rescued by a caller who is outside the
+approved counterparty set. This is the negative half of the counterparty
+boundary, stated directly on the executable transition. -/
+theorem executeRFQRedemption_reverts_without_counterparty
+    (s : State) (user : Address) (amount : Nat) (caller : Address)
+    (h : s.rfqCounterparties.contains caller = false) :
+    step s (Op.executeRFQRedemption user amount) caller = none := by
+  have hmem : ¬ caller ∈ s.rfqCounterparties := by simpa using h
+  simp [step, hmem]
+
+/-- RFQ settlement cannot manufacture a request: an amount larger than the
+user's recorded request is rejected, regardless of the other guards. -/
+theorem executeRFQRedemption_reverts_without_request
+    (s : State) (user : Address) (amount : Nat) (caller : Address)
+    (h : s.rfqRequests user < amount) :
+    step s (Op.executeRFQRedemption user amount) caller = none := by
+  simp [step, h]
+
 /-- REQ deposit_immediate: The apyUSD vault MUST complete deposit operations synchronously and
 deliver apyUSD shares to the receiver without any delay. (Model: the apyUSD vault's synchronous
 ERC-4626 deposit is `Op.lockApxUSD` — it locks apxUSD and mints apyUSD *shares* in return, unlike
@@ -2537,6 +2945,17 @@ same atomic `step`, not deferred into a pending/settlement record the way a rede
 theorem states exactly that: on a successful lock the receiver's apyUSD balance has *already*
 increased, by exactly the freshly minted `lockShares amount (computeExchangeRate s)`, with no intermediate
 state — the strong, exact form of "synchronous, immediate share delivery".) -/
+theorem lockApxUSDStep_effect (s : State) (amount : Nat) (caller : Address)
+    (s' : State) (h : step s (Op.lockApxUSD amount) caller = some s') :
+    s.globalPause = false ∧ amount ≤ s.apxUSDBal caller ∧
+    s' = emitEvent (updateExchangeRate (mintApyUSD
+          { burnApxUSD s caller amount with
+              vaultApxUSDBal := (burnApxUSD s caller amount).vaultApxUSDBal + amount }
+          caller (lockShares amount (computeExchangeRate s))))
+      "Deposit" [caller, caller, caller, amount,
+        lockShares amount (computeExchangeRate s)] := by
+  exact step_lockApxUSD_some s amount caller s' h
+
 theorem req_deposit_immediate (s : State) (amount : Nat) (caller : Address) (s' : State)
     (h_step : step s (Op.lockApxUSD amount) caller = some s') :
     s'.apyUSDBal caller = s.apyUSDBal caller + lockShares amount (computeExchangeRate s) := by
