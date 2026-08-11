@@ -41,6 +41,71 @@ against `periodEnd_invariant_under_pullEvery`, which needed giving this module a
 
 namespace Apyx
 
+/-! ## Proof Map v3: deployment authority map
+
+The core `State` models role addresses as caller guards.  That is not the same as proving who can
+submit those calls on mainnet.  The records below consolidate the deployment-derived authority facts
+already used by the companion modules.  `role 0` is recorded as the direct admin path; roles 22, 24,
+and 41 are kept separate because their delays differ.  Safe membership/threshold, authority-change
+and proxy-storage facts remain explicit unknowns rather than being filled with guesses. -/
+
+structure AuthorityDeploymentRecord where
+  target : String
+  operation : String
+  role : Nat
+  executionDelay : Nat
+  authorityEvidence : String
+  modelOperation : String
+
+def authorityDeploymentMap : List AuthorityDeploymentRecord :=
+  [ { target := "ApyxCollateralRatioOracle"
+      operation := "pushRound(int256)"
+      role := 22
+      executionDelay := 4 * 60 * 60
+      authorityEvidence := "AccessManager role assignment; deployment-derived"
+      modelOperation := "Op.setApxUSDMarketPrice" }
+  , { target := "LinearVestV0"
+      operation := "setBeneficiary(address)"
+      role := 24
+      executionDelay := 3 * day
+      authorityEvidence := "AccessManager role assignment; deployment-derived"
+      modelOperation := "not represented" }
+  , { target := "CommitToken / UnlockingDelay"
+      operation := "setUnlockingDelay(uint256)"
+      role := 24
+      executionDelay := 3 * day
+      authorityEvidence := "AccessManager role assignment; deployment-derived"
+      modelOperation := "not represented in Apyx.State" }
+  , { target := "LiquidationBatcher"
+      operation := "withdrawTokens(address,uint256)"
+      role := 41
+      executionDelay := 0
+      authorityEvidence := "single EOA grant; deployment-derived"
+      modelOperation := "Op.withdrawReserve" }
+  , { target := "ApyUSD / UnlockReceipt"
+      operation := "setFeeCurve / fee configuration"
+      role := 0
+      executionDelay := 0
+      authorityEvidence := "restricted admin path; deployment-derived"
+      modelOperation := "not represented" }
+  , { target := "UUPS implementations"
+      operation := "upgradeToAndCall"
+      role := 24
+      executionDelay := 3 * day
+      authorityEvidence := "proxy authority reading; implementation refinement required"
+      modelOperation := "not represented" } ]
+
+theorem authorityDeploymentMap_has_explicit_delay_classes :
+    (authorityDeploymentMap.map AuthorityDeploymentRecord.executionDelay).length = 6 := by
+  rfl
+
+def authorityDeploymentUnknowns : List String :=
+  [ "Safe/multisig membership and threshold"
+  , "setAuthority target and delay on every authority"
+  , "UUPS implementation slot and initializer state"
+  , "beneficiary/fee recipient relationship to user claim custody"
+  , "complete role graph for every deployed async vault" ]
+
 /-! ## §A. The vesting beneficiary is a single-key drain
 
 A miniature of `LinearVestV0` in the style of the wrapper machines in `BlastRadius.lean`: only

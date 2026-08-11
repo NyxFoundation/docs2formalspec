@@ -1,10 +1,29 @@
 **Apyx Protocol – Formal State‑Transition Model**  
-*(Lean-synchronized public model, 2026-08-06)*
+*(Lean-synchronized public model, 2026-08-11)*
 
 This document describes the current `State`, `Op`, and `step` definitions in [`Apyx.lean`](Apyx.lean).
 The model is an abstract design model, not a Solidity refinement proof. Successful steps return
 `some State`; reverted steps return `none` and are skipped by `execTrace`. The companion modules add
 ledger, registry, pending-liability, holder-value, and deployment-derived boundaries.
+
+Proof Map v3 is implemented inside this existing model. `Apyx.lean` projects the concrete state into
+`LedgerState`, `VaultState`, `RedemptionState`, `ReserveState`, `AuthorityState`, `OracleState`,
+`TimeState`, and `ExternalState`; `AuthorityState.roleGraph` names the four model-level caller
+capabilities; `Phase.lean` classifies every operation into a security family and an exhaustive
+`AccountingEffect`; and `BlastRadius.lean` states the passive-holder trace and total-key threat
+assumptions used by the nominal-balance theorem. `Phase.lean` also exposes an operation-contract
+coverage entry for every `Op`, with separate precondition, postcondition, revert, frame, and
+relational statuses. Those entries are an honest coverage index: many are still `incomplete`,
+`notModeled`, or `handoff`, and therefore are not proofs. These are views over the single transition
+model, not a second unconnected model. The user-facing distinction remains important: nominal balance
+preservation is not economic-value preservation, and model theorems are not bytecode-refinement
+theorems.
+
+The attack-pattern index in `BlastRadius.lean` has the same discipline. Each of the nine normalized
+patterns carries a source PoC/corpus link, root cause, attacker capability, preconditions, trace
+skeleton, target assets, loss metric, Apyx mapping, model status, implementation status, and human-review
+status. `attackPatternCatalog_records_are_complete` checks that the required record fields are present;
+it does not claim that the corresponding implementation is resistant.
 
 ---
 

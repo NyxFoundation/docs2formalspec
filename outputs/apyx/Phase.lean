@@ -41,6 +41,270 @@ vault exits appear here through their V2-ACC conservation equations — under
 
 namespace Apyx
 
+/-! ## Proof Map v3: operation families
+
+The v2 `opCoverage` theorem classifies preserving operations versus named
+exceptions.  v3 adds the orthogonal security boundary: each public operation
+belongs to exactly one family.  The classification is used by the existing
+step-contract proofs and gives later attacker/composition proofs a closed
+operation domain to quantify over. -/
+
+inductive OperationFamily
+  | user
+  | vault
+  | redemption
+  | admin
+  | oracle
+  | governance
+  | external
+  | time
+
+def operationFamily : Op → OperationFamily
+  | Op.depositUSDC _ => .user
+  | Op.mintApxUSD _ _ => .user
+  | Op.lockApxUSD _ => .vault
+  | Op.requestUnlock _ => .redemption
+  | Op.claimUnlock _ => .redemption
+  | Op.redeemApxUSD _ => .redemption
+  | Op.withdraw _ _ => .vault
+  | Op.redeem _ _ => .vault
+  | Op.flexibleRequestUnlock _ => .redemption
+  | Op.flexibleClaimUnlock _ => .redemption
+  | Op.pause => .admin
+  | Op.unpause => .admin
+  | Op.addToWhitelist _ => .admin
+  | Op.removeFromWhitelist _ => .admin
+  | Op.addToDenylist _ => .admin
+  | Op.removeFromDenylist _ => .admin
+  | Op.setYieldRate _ => .admin
+  | Op.creditYield _ => .admin
+  | Op.voteBufferDeployment => .governance
+  | Op.submitRFQRequest _ => .redemption
+  | Op.executeRFQRedemption _ _ => .external
+  | Op.updateRedemptionValue _ => .admin
+  | Op.handleStressEvent _ => .admin
+  | Op.catastrophicBackstop => .admin
+  | Op.setVestPeriod _ => .admin
+  | Op.setApxUSDMarketPrice _ => .oracle
+  | Op.withdrawReserve _ _ => .admin
+  | Op.poolRedeem _ _ _ => .external
+  | Op.tick _ => .time
+
+theorem operationFamily_total (op : Op) :
+    ∃ family, operationFamily op = family := by
+  cases op <;> exact ⟨_, rfl⟩
+
+theorem operationFamily_stepContract_scope (op : Op) :
+    operationFamily op = .admin →
+      (∃ amount, op = Op.handleStressEvent amount) ∨
+      op = Op.catastrophicBackstop ∨
+      (∃ amount receiver, op = Op.withdrawReserve amount receiver) ∨
+      (∃ value, op = Op.updateRedemptionValue value) ∨
+      OutstandingScopedOp op := by
+  intro h
+  cases op <;> simp_all [operationFamily, OutstandingScopedOp]
+
+/-! ## Proof Map v3: exhaustive accounting boundary
+
+`opCoverage` proves which operations preserve the composite invariant, but that is not the same as
+enumerating where value/accounting can change.  This second classifier is intentionally broader: it
+names every operation's accounting boundary, including inflows, fee loss, reserve outflow, repricing,
+and external settlement.  The class is a scope index; the exact delta theorems remain the evidence. -/
+
+inductive AccountingEffect
+  | preserving
+  | obligationInflow
+  | feeOutflow
+  | reserveOutflow
+  | collateralLoss
+  | backstopSettlement
+  | externalSettlement
+  | repricing
+  | administrative
+
+def accountingEffect : Op → AccountingEffect
+  | Op.depositUSDC _ => .obligationInflow
+  | Op.mintApxUSD _ _ => .obligationInflow
+  | Op.lockApxUSD _ => .preserving
+  | Op.requestUnlock _ => .preserving
+  | Op.claimUnlock _ => .preserving
+  | Op.redeemApxUSD _ => .externalSettlement
+  | Op.withdraw _ _ => .preserving
+  | Op.redeem _ _ => .preserving
+  | Op.flexibleRequestUnlock _ => .preserving
+  | Op.flexibleClaimUnlock _ => .feeOutflow
+  | Op.pause => .administrative
+  | Op.unpause => .administrative
+  | Op.addToWhitelist _ => .administrative
+  | Op.removeFromWhitelist _ => .administrative
+  | Op.addToDenylist _ => .administrative
+  | Op.removeFromDenylist _ => .administrative
+  | Op.setYieldRate _ => .administrative
+  | Op.creditYield _ => .obligationInflow
+  | Op.voteBufferDeployment => .administrative
+  | Op.submitRFQRequest _ => .preserving
+  | Op.executeRFQRedemption _ _ => .externalSettlement
+  | Op.updateRedemptionValue _ => .repricing
+  | Op.handleStressEvent _ => .collateralLoss
+  | Op.catastrophicBackstop => .backstopSettlement
+  | Op.setVestPeriod _ => .administrative
+  | Op.setApxUSDMarketPrice _ => .repricing
+  | Op.withdrawReserve _ _ => .reserveOutflow
+  | Op.poolRedeem _ _ _ => .externalSettlement
+  | Op.tick _ => .preserving
+
+theorem accountingEffect_total (op : Op) :
+    ∃ effect, accountingEffect op = effect := by
+  cases op <;> exact ⟨_, rfl⟩
+
+theorem accountingEffect_preserving_scope (op : Op) :
+    accountingEffect op = .preserving →
+      (obligationTraceOp op ∨
+        (∃ a, op = Op.submitRFQRequest a)) := by
+  intro h
+  cases op <;> simp [accountingEffect, obligationTraceOp] at h ⊢
+
+/-! ## Proof Map v3: operation-contract coverage
+
+`OperationFamily` and `AccountingEffect` answer *where an operation belongs*;
+they do not, by themselves, prove its transition contract.  The following
+catalog makes the five contract dimensions explicit for every constructor of
+the public `Op` type.  A `partial` or `notModeled` entry is intentionally not a
+proof result: it is a typed to-do boundary that prevents a future report from
+silently treating a family classification as a pre/postcondition proof.
+-/
+
+inductive ContractStatus
+  | proved
+  | incomplete
+  | handoff
+  | notModeled
+
+structure OperationContractCoverage where
+  family : OperationFamily
+  accounting : AccountingEffect
+  precondition : ContractStatus
+  postcondition : ContractStatus
+  revert : ContractStatus
+  frame : ContractStatus
+  relational : ContractStatus
+  evidence : List String
+  nextCheck : String
+
+private def modelContract (family : OperationFamily) (accounting : AccountingEffect)
+    (evidence : List String) (nextCheck : String) : OperationContractCoverage :=
+  { family := family
+    accounting := accounting
+    precondition := .incomplete
+    postcondition := .incomplete
+    revert := .notModeled
+    frame := .incomplete
+    relational := .notModeled
+    evidence := evidence
+    nextCheck := nextCheck }
+
+private def implementationContract (family : OperationFamily) (accounting : AccountingEffect)
+    (evidence : List String) (nextCheck : String) : OperationContractCoverage :=
+  { family := family
+    accounting := accounting
+    precondition := .incomplete
+    postcondition := .incomplete
+    revert := .notModeled
+    frame := .incomplete
+    relational := .handoff
+    evidence := evidence
+    nextCheck := nextCheck }
+
+def operationContract : Op → OperationContractCoverage
+  | Op.depositUSDC _ => modelContract .user .obligationInflow
+      ["depositUSDC_step_effect", "apxUSDLedgerConsistent_step"]
+      "prove named guard reasons and USDC boundary"
+  | Op.mintApxUSD _ _ => modelContract .user .obligationInflow
+      ["mintApxUSD_step_effect", "apxUSDLedgerConsistent_step"]
+      "prove oracle-price and recipient guard contract"
+  | Op.lockApxUSD _ => modelContract .vault .preserving
+      ["apxUSDObligations_lockApxUSD", "apyUSDLedgerConsistent_lock_step"]
+      "prove live-rate rounding postcondition"
+  | Op.requestUnlock _ => modelContract .redemption .preserving
+      ["requestUnlockStep_effect", "apxUSDObligations_requestUnlock"]
+      "return typed standard-request revert reasons"
+  | Op.claimUnlock _ => modelContract .redemption .preserving
+      ["claimUnlockStep_effect", "apxUSDObligations_claimUnlock"]
+      "prove owner/operator and cooldown failure reasons"
+  | Op.redeemApxUSD _ => modelContract .redemption .externalSettlement
+      ["redeemApxUSD_step_effect", "req_buffer_non_decreasing"]
+      "connect reserve sufficiency and external USDC settlement"
+  | Op.withdraw _ _ => implementationContract .vault .preserving
+      ["withdrawStep_effect", "holder_value_withdraw"]
+      "refine vault custody and UnlockToken receipt semantics"
+  | Op.redeem _ _ => implementationContract .vault .preserving
+      ["redeemStep_effect", "holder_value_redeem"]
+      "refine vault custody and UnlockReceipt semantics"
+  | Op.flexibleRequestUnlock _ => modelContract .redemption .preserving
+      ["flexibleRequestUnlockStep_effect", "apxUSDObligations_flexibleRequestUnlock"]
+      "prove concurrent-position and fee-recipient frames"
+  | Op.flexibleClaimUnlock _ => modelContract .redemption .feeOutflow
+      ["flexibleClaimStep_effect", "flexibleClaim_holderValueAt_fee"]
+      "prove fee recipient conservation"
+  | Op.pause => modelContract .admin .administrative ["pause_guard"]
+      "add role-specific revert and frame theorem"
+  | Op.unpause => modelContract .admin .administrative ["unpause_guard"]
+      "add role-specific revert and frame theorem"
+  | Op.addToWhitelist _ => modelContract .admin .administrative ["whitelist_frame"]
+      "connect AccessManager role graph"
+  | Op.removeFromWhitelist _ => modelContract .admin .administrative ["whitelist_frame"]
+      "connect AccessManager role graph"
+  | Op.addToDenylist _ => modelContract .admin .administrative ["denylist_frame"]
+      "connect token hook behavior"
+  | Op.removeFromDenylist _ => modelContract .admin .administrative ["denylist_frame"]
+      "connect token hook behavior"
+  | Op.setYieldRate _ => modelContract .admin .administrative ["yield_rate_guard"]
+      "prove cadence and collateral-base relational contract"
+  | Op.creditYield _ => modelContract .admin .obligationInflow
+      ["apxUSDObligations_creditYield", "REQ-credit-preserves-accrued-vest"]
+      "connect YieldDistributor authority and custody"
+  | Op.voteBufferDeployment => modelContract .governance .administrative ["governance_guard"]
+      "model vote aggregation and timelock"
+  | Op.submitRFQRequest _ => modelContract .redemption .preserving ["rfq_request_frame"]
+      "connect RFQ request registry and counterparty settlement"
+  | Op.executeRFQRedemption _ _ => implementationContract .external .externalSettlement
+      ["external settlement boundary"]
+      "model approved-counterparty and USDC transfer semantics"
+  | Op.updateRedemptionValue _ => modelContract .admin .repricing ["redemption_value_frame"]
+      "prove price-authority and user-value relational effects"
+  | Op.handleStressEvent _ => modelContract .admin .collateralLoss ["handleStressEvent_contract"]
+      "connect exogenous loss to reserve/collateral evidence"
+  | Op.catastrophicBackstop => modelContract .admin .backstopSettlement
+      ["catastrophicBackstop_contract", "catastrophicBackstop_accounting"]
+      "prove deployed payout and rounding-residual boundary"
+  | Op.setVestPeriod _ => modelContract .admin .administrative
+      ["apxUSDObligations_pullVestedYield"]
+      "prove admin authority and vesting-clock frame"
+  | Op.setApxUSDMarketPrice _ => modelContract .oracle .repricing ["oracle price field frame"]
+      "model freshness, source, and multi-price consistency"
+  | Op.withdrawReserve _ _ => implementationContract .admin .reserveOutflow
+      ["withdrawReserve_contract", "reserve_outflow_only_via_redemption"]
+      "connect AccessManager delay and Safe threshold"
+  | Op.poolRedeem _ _ _ => implementationContract .external .externalSettlement
+      ["pool redemption boundary"]
+      "model redeemer role, minOut, and token custody"
+  | Op.tick _ => modelContract .time .preserving
+      ["apxUSDObligations_tick", "now_moves_only_by_tick"]
+      "add liveness/fairness contract if progress is claimed"
+
+theorem operationContract_family (op : Op) :
+    (operationContract op).family = operationFamily op := by
+  cases op <;> rfl
+
+theorem operationContract_accounting (op : Op) :
+    (operationContract op).accounting = accountingEffect op := by
+  cases op <;> rfl
+
+theorem operationContract_dimensions_explicit (op : Op) :
+    ∃ c : OperationContractCoverage,
+      operationContract op = c :=
+  ⟨operationContract op, rfl⟩
+
 /-! ## Phases
 
 `NormalPhase` is defined in `Init.lean` (it is a conjunct of `Init`); this

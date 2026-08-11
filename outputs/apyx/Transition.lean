@@ -64,6 +64,63 @@ unfolding of the wrapper plus elementary list arithmetic, and two bridges into
 
 namespace Apyx
 
+/-! ## External execution boundary (Proof Map v3 §V3-5)
+
+The abstract dispatcher has no Solidity call stack.  Making that limitation a datatype keeps
+"no callback in the model" separate from "reentrancy is impossible in the deployment".  The latter
+requires an implementation refinement and is intentionally not stated here. -/
+
+inductive ExternalExecution
+  | none
+  | oracleRead (source : Address)
+  | tokenTransfer (token recipient : Address) (amount : Nat)
+  | callback (target : Address)
+  | flashLoan (provider : Address) (amount : Nat)
+
+inductive ExternalRisk
+  | callbackReentrancy
+  | flashLoanComposition
+  | oracleFreshness
+  | signatureReplay
+  | upgradeInitializer
+  | gasDenialOfService
+
+structure ExternalHandoff where
+  risk : ExternalRisk
+  implementationCheck : String
+  modelStatus : String
+
+def externalHandoffCatalog : List ExternalHandoff :=
+  [ { risk := .callbackReentrancy
+      implementationCheck := "call graph + reentrancy guard / callback harness"
+      modelStatus := "not represented by State.step" }
+  , { risk := .flashLoanComposition
+      implementationCheck := "cross-protocol mutable-state composition"
+      modelStatus := "not represented by State.step" }
+  , { risk := .oracleFreshness
+      implementationCheck := "source, timestamp, deviation and multi-price consistency"
+      modelStatus := "price value is modeled; freshness is not" }
+  , { risk := .signatureReplay
+      implementationCheck := "EIP-712 domain, nonce and ERC-1271 validation"
+      modelStatus := "signature state is not represented by State.step" }
+  , { risk := .upgradeInitializer
+      implementationCheck := "UUPS authority, initializer and storage-layout checks"
+      modelStatus := "upgrade transitions are not represented by State.step" }
+  , { risk := .gasDenialOfService
+      implementationCheck := "loop bounds, queue growth and gas profiling"
+      modelStatus := "gas is not represented by State.step" } ]
+
+def modelExternalExecution (s : State) (op : Op) (caller : Address) : ExternalExecution :=
+  match op with
+  | Op.executeRFQRedemption _ _ => .tokenTransfer unlockTokenAddress caller 0
+  | Op.poolRedeem _ _ _ => .tokenTransfer vaultAddress caller 0
+  | Op.setApxUSDMarketPrice _ => .oracleRead s.oracle
+  | _ => .none
+
+theorem modelExternalExecution_has_no_callback (s : State) (op : Op) (caller : Address) :
+    modelExternalExecution s op caller ≠ .callback caller := by
+  cases op <;> simp [modelExternalExecution]
+
 /-- An emitted event, matching the entries of `State.eventLog`: an event name
 together with its (already ABI-flattened) numeric arguments. -/
 abbrev Event : Type := String × List Nat
@@ -206,6 +263,10 @@ theorem stepResult_state? (s : State) (op : Op) (caller : Address) :
     (stepResult s op caller).state? = step s op caller := by
   unfold stepResult
   cases h : step s op caller <;> rfl
+
+theorem stepResult_external_boundary (s : State) (op : Op) (caller : Address) :
+    (stepResult s op caller).state? = step s op caller := by
+  exact stepResult_state? s op caller
 
 /-- Totality of the case split: every call either reverts (necessarily with the
 model-unknown reason) or accepts with some successor state and event payload. -/

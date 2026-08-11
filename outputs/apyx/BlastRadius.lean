@@ -59,6 +59,351 @@ in `D2fsSpecs/Apyx.lean` are untouched. Because that file's helper lemmas are
 
 namespace Apyx
 
+/-! ## Proof Map v3: explicit threat models and attacker traces
+
+The existing role-frame theorems prove effects of a caller address.  v3 makes
+the surrounding attacker assumptions first-class so that a caller is not
+mistaken for a complete threat model.  The capability fields are deliberately
+small: implementation-specific role graphs, timelocks, external callbacks,
+and upgrade authority remain hand-off obligations rather than hidden model
+assumptions. -/
+
+inductive ThreatModel
+  | passiveHolder
+  | honestUser
+  | compromisedAdmin
+  | compromisedOracle
+  | approvedRFQCounterparty
+  | totalKeyCompromise
+  | externalAttacker
+  | governanceOrUpgrader
+deriving DecidableEq
+
+inductive AttackObjective
+  | nominalBalanceLoss
+  | economicValueLoss
+  | reserveDrain
+  | denialOfService
+  | exitAvailability
+deriving DecidableEq
+
+structure AttackerProfile where
+  model : ThreatModel
+  controlledCallers : Address → Bool
+  mayUsePermissionlessOps : Bool
+  mayAdvanceTime : Bool
+  mayInvokeExternal : Bool
+  objectives : List AttackObjective
+
+def passiveHolderTrace (u : Address) (σ : List (Op × Address)) : Prop :=
+  (∀ p ∈ σ, p.2 ≠ u) ∧
+    (∀ p ∈ σ, ∀ amount, p.1 ≠ Op.executeRFQRedemption u amount)
+
+def totalKeyAttacker : AttackerProfile :=
+  { model := .totalKeyCompromise
+    controlledCallers := fun _ => true
+    mayUsePermissionlessOps := true
+    mayAdvanceTime := true
+    mayInvokeExternal := true
+    objectives := [.nominalBalanceLoss, .economicValueLoss, .reserveDrain,
+      .denialOfService, .exitAvailability] }
+
+def passiveHolderAttacker (u : Address) : AttackerProfile :=
+  { model := .passiveHolder
+    controlledCallers := fun a => a = u
+    mayUsePermissionlessOps := false
+    mayAdvanceTime := false
+    mayInvokeExternal := false
+    objectives := [.economicValueLoss, .exitAvailability] }
+
+/-! ## DeFiHackLabs-shaped attack-pattern normalization
+
+This is a review index, not a proof oracle.  Each row records the pattern class, the capability
+and operation families it touches, the model evidence (if any), and the implementation hand-off.
+The source label deliberately names a corpus class rather than inventing a PoC identifier: a
+specific deployed-contract PoC must be joined only after bytecode/config review. -/
+
+inductive AttackPatternKind
+  | accessControl
+  | oracleManipulation
+  | accounting
+  | roundingInflation
+  | reentrancy
+  | flashLoan
+  | signatureReplay
+  | upgradeability
+  | denialOfService
+deriving DecidableEq
+
+inductive AttackPatternStatus
+  | modelWitness
+  | modelBound
+  | implementationHandoff
+  | notApplicable
+deriving DecidableEq
+
+inductive AttackPatternModelStatus
+  | applicable
+  | partiallyModeled
+  | modelWitness
+  | implementationAuditRequired
+  | notApplicable
+  | outOfScope
+deriving DecidableEq
+
+inductive ImplementationStatus
+  | checked
+  | violated
+  | candidate
+  | notModeled
+  | notRun
+deriving DecidableEq
+
+inductive HumanReviewStatus
+  | reviewed
+  | pending
+deriving DecidableEq
+
+structure AttackPattern where
+  attackPatternId : String
+  sourceCorpus : String
+  /-- A concrete PoC or corpus path; it is never silently replaced by a theorem name. -/
+  sourcePoc : String
+  sourceCommit : Option String
+  sourcePattern : String
+  kind : AttackPatternKind
+  rootCause : String
+  capability : ThreatModel
+  /-- Names are used here to avoid making the threat index import the transition classifier. -/
+  affectedFamilies : List String
+  objective : String
+  preconditions : List String
+  traceSkeleton : List String
+  targetAssets : List String
+  lossMetric : List AttackObjective
+  apxMapping : List String
+  modelEvidence : List String
+  status : AttackPatternStatus
+  modelStatus : AttackPatternModelStatus
+  implementationStatus : ImplementationStatus
+  humanReview : HumanReviewStatus
+  implementationNextCheck : String
+deriving DecidableEq
+
+def AttackPattern.complete (p : AttackPattern) : Bool :=
+  !p.attackPatternId.isEmpty &&
+    !p.sourcePoc.isEmpty &&
+    !p.sourcePattern.isEmpty &&
+    !p.rootCause.isEmpty &&
+    !p.preconditions.isEmpty &&
+    !p.traceSkeleton.isEmpty &&
+    !p.targetAssets.isEmpty &&
+    !p.lossMetric.isEmpty &&
+    !p.apxMapping.isEmpty &&
+    !p.implementationNextCheck.isEmpty
+
+def attackPatternCatalog : List AttackPattern :=
+  [ { attackPatternId := "AP-AC-001"
+      sourceCorpus := "DeFiHackLabs"
+      sourcePoc := "https://github.com/SunWeb3Sec/DeFiHackLabs/tree/main/src/test/2022-02"
+      sourceCommit := none
+      sourcePattern := "access-control / privileged withdrawal"
+      kind := .accessControl
+      rootCause := "privileged or governance authority can redirect protocol value"
+      capability := .compromisedAdmin
+      affectedFamilies := ["admin", "redemption", "external"]
+      objective := "drain reserve or redirect protocol value"
+      preconditions := ["attacker controls an authority-bearing key", "reserve or vesting custody is funded"]
+      traceSkeleton := ["authorize admin", "withdraw reserve or retarget beneficiary", "observe user claim loss"]
+      targetAssets := ["reserve", "vesting pool", "pending claims"]
+      lossMetric := [.economicValueLoss, .reserveDrain]
+      apxMapping := ["State.admin", "Op.withdrawReserve", "DeploymentGaps.setBeneficiary"]
+      modelEvidence := ["admin_alone_drains_reserve", "admin_alone_moves_redemption_price"]
+      status := .modelWitness
+      modelStatus := .modelWitness
+      implementationStatus := .notRun
+      humanReview := .pending
+      implementationNextCheck := "resolve AccessManager roles, threshold and delay on deployed addresses" }
+  , { attackPatternId := "AP-ORACLE-001"
+      sourceCorpus := "DeFiHackLabs"
+      sourcePoc := "https://github.com/SunWeb3Sec/DeFiHackLabs/blob/main/src/test/2026-01/makina_exp.sol"
+      sourceCommit := none
+      sourcePattern := "oracle manipulation / stale price"
+      kind := .oracleManipulation
+      rootCause := "price input is mutable or stale without a proved freshness/deviation boundary"
+      capability := .compromisedOracle
+      affectedFamilies := ["oracle", "redemption", "vault"]
+      objective := "change conversion or redemption value"
+      preconditions := ["a consuming operation reads the manipulated price", "freshness or deviation checks are absent or bypassed"]
+      traceSkeleton := ["publish or manipulate price input", "perform conversion or redemption", "measure value transfer"]
+      targetAssets := ["redemption price", "share value", "reserve"]
+      lossMetric := [.economicValueLoss, .reserveDrain]
+      apxMapping := ["State.apxUSDMarketPrice", "State.redemptionValue", "Op.setApxUSDMarketPrice"]
+      modelEvidence := ["redemption_price_writers", "redemption_has_no_floor"]
+      status := .modelBound
+      modelStatus := .partiallyModeled
+      implementationStatus := .notRun
+      humanReview := .pending
+      implementationNextCheck := "verify oracle source, freshness, deviation and all consuming prices" }
+  , { attackPatternId := "AP-ACCOUNTING-001"
+      sourceCorpus := "DeFiHackLabs"
+      sourcePoc := "https://github.com/SunWeb3Sec/DeFiHackLabs/blob/main/src/test/2026-03/EST_exp.sol"
+      sourceCommit := none
+      sourcePattern := "accounting / outstanding claim omission"
+      kind := .accounting
+      rootCause := "circulating supply, custody, or pending liabilities are not reconciled in one measure"
+      capability := .externalAttacker
+      affectedFamilies := ["redemption", "vault", "external"]
+      objective := "make pending liabilities unbacked"
+      preconditions := ["a liability is created asynchronously", "one custody or fee ledger is omitted"]
+      traceSkeleton := ["create claim", "move custody or supply", "settle or inspect omitted liability"]
+      targetAssets := ["circulating supply", "vault custody", "pending claim", "fee wallet"]
+      lossMetric := [.economicValueLoss, .nominalBalanceLoss]
+      apxMapping := ["apxUSDObligations", "ObligationTrace", "pending_claim_coverage_reachable"]
+      modelEvidence := ["pending_claim_coverage_reachable", "apxUSDObligations"]
+      status := .modelBound
+      modelStatus := .partiallyModeled
+      implementationStatus := .notRun
+      humanReview := .pending
+      implementationNextCheck := "refine external custody, fee wallet and all async vaults" }
+  , { attackPatternId := "AP-ROUND-001"
+      sourceCorpus := "DeFiHackLabs"
+      sourcePoc := "https://github.com/SunWeb3Sec/DeFiHackLabs/blob/main/src/test/2026-03/Curve_LlamaLend_exp.sol"
+      sourceCommit := none
+      sourcePattern := "rounding / ERC-4626 inflation"
+      kind := .roundingInflation
+      rootCause := "floor/ceil conversion or donation changes share ownership without a global bound"
+      capability := .externalAttacker
+      affectedFamilies := ["user", "vault"]
+      objective := "extract value through conversion rounding or donation"
+      preconditions := ["attacker can seed or donate to a vault", "conversion uses a lossy integer boundary"]
+      traceSkeleton := ["seed vault", "donate or manipulate rate", "deposit/withdraw victim-sized amount"]
+      targetAssets := ["vault custody", "user shares", "conversion rate"]
+      lossMetric := [.economicValueLoss, .nominalBalanceLoss]
+      apxMapping := ["Vault.lean", "MulDivFidelity.lean", "Op.lockApxUSD", "Op.withdraw"]
+      modelEvidence := ["redemption_payout_has_no_cap", "vault_roundtrip_assets_le"]
+      status := .modelBound
+      modelStatus := .partiallyModeled
+      implementationStatus := .notRun
+      humanReview := .pending
+      implementationNextCheck := "check decimalsOffset, virtual assets/shares and donation paths in bytecode" }
+  , { attackPatternId := "AP-REENT-001"
+      sourceCorpus := "DeFiHackLabs"
+      sourcePoc := "https://github.com/SunWeb3Sec/DeFiHackLabs/tree/main/src/test/2021-12"
+      sourceCommit := none
+      sourcePattern := "reentrancy / callback"
+      kind := .reentrancy
+      rootCause := "external callback can observe or re-enter before the intended state update is complete"
+      capability := .externalAttacker
+      affectedFamilies := ["external", "vault", "redemption"]
+      objective := "re-enter before effects or settlement"
+      preconditions := ["a state-changing path performs an external call", "callee can invoke a callback"]
+      traceSkeleton := ["enter public operation", "external call", "callback into protocol", "repeat or observe stale state"]
+      targetAssets := ["vault custody", "pending claim", "user balance"]
+      lossMetric := [.nominalBalanceLoss, .economicValueLoss, .exitAvailability]
+      apxMapping := ["Transition.ExternalExecution.callback", "Op.withdraw", "Op.claimUnlock"]
+      modelEvidence := []
+      status := .implementationHandoff
+      modelStatus := .implementationAuditRequired
+      implementationStatus := .notRun
+      humanReview := .pending
+      implementationNextCheck := "build external-call graph and callback harness" }
+  , { attackPatternId := "AP-FLASH-001"
+      sourceCorpus := "DeFiHackLabs"
+      sourcePoc := "https://github.com/SunWeb3Sec/DeFiHackLabs/blob/main/src/test/2024-06/SteamSwap_exp.sol"
+      sourceCommit := none
+      sourcePattern := "flash-loan / cross-protocol composition"
+      kind := .flashLoan
+      rootCause := "temporary external liquidity changes a price or state relied on within one transaction"
+      capability := .externalAttacker
+      affectedFamilies := ["external", "oracle", "vault"]
+      objective := "temporarily manipulate mutable external state"
+      preconditions := ["an external pool permits same-transaction borrowing", "protocol reads mutable external state"]
+      traceSkeleton := ["borrow", "manipulate pool/oracle", "call protocol", "repay and retain gain"]
+      targetAssets := ["oracle price", "vault shares", "reserve"]
+      lossMetric := [.economicValueLoss, .reserveDrain]
+      apxMapping := ["ExternalState.externalPoolState", "ExternalRisk.flashLoanComposition", "Op.poolRedeem"]
+      modelEvidence := []
+      status := .implementationHandoff
+      modelStatus := .implementationAuditRequired
+      implementationStatus := .notRun
+      humanReview := .pending
+      implementationNextCheck := "compose pool, oracle and vault state across one transaction" }
+  , { attackPatternId := "AP-SIG-001"
+      sourceCorpus := "DeFiHackLabs"
+      sourcePoc := "https://github.com/SunWeb3Sec/DeFiHackLabs/tree/main/src/test"
+      sourceCommit := none
+      sourcePattern := "signature replay / authorization"
+      kind := .signatureReplay
+      rootCause := "authorization lacks nonce, domain, expiry, or contract-signature binding"
+      capability := .externalAttacker
+      affectedFamilies := ["user", "admin", "external"]
+      objective := "reuse or cross-domain an authorization"
+      preconditions := ["a signature-authorized entry point exists", "replay state is absent or incorrectly scoped"]
+      traceSkeleton := ["obtain signed authorization", "submit in original domain", "reuse in another context"]
+      targetAssets := ["user balance", "admin capability", "permit allowance"]
+      lossMetric := [.nominalBalanceLoss, .economicValueLoss]
+      apxMapping := ["ExternalState.signatureNonce", "ExternalRisk.signatureReplay", "future signature Op"]
+      modelEvidence := []
+      status := .implementationHandoff
+      modelStatus := .implementationAuditRequired
+      implementationStatus := .notRun
+      humanReview := .pending
+      implementationNextCheck := "verify EIP-712 domain separation, nonce and ERC-1271 behavior" }
+  , { attackPatternId := "AP-UPGRADE-001"
+      sourceCorpus := "DeFiHackLabs"
+      sourcePoc := "https://github.com/SunWeb3Sec/DeFiHackLabs/tree/main/src/test"
+      sourceCommit := none
+      sourcePattern := "upgradeability / initializer takeover"
+      kind := .upgradeability
+      rootCause := "upgrade or initialization authority can replace invariants or storage interpretation"
+      capability := .governanceOrUpgrader
+      affectedFamilies := ["governance", "admin", "external"]
+      objective := "replace logic or seize initialization"
+      preconditions := ["proxy or upgrade authority is mutable", "initializer/storage assumptions are not enforced"]
+      traceSkeleton := ["change implementation or initializer", "invoke user operation", "observe changed semantics"]
+      targetAssets := ["all protocol custody", "authority state", "storage layout"]
+      lossMetric := [.economicValueLoss, .reserveDrain, .exitAvailability]
+      apxMapping := ["AuthorityState.upgradeAuthority", "ExternalState.proxyImplementation", "Rep"]
+      modelEvidence := []
+      status := .implementationHandoff
+      modelStatus := .implementationAuditRequired
+      implementationStatus := .notRun
+      humanReview := .pending
+      implementationNextCheck := "verify UUPS authority, initializer, implementation slot and storage layout" }
+  , { attackPatternId := "AP-DOS-001"
+      sourceCorpus := "DeFiHackLabs"
+      sourcePoc := "https://github.com/SunWeb3Sec/DeFiHackLabs/tree/main/src/test"
+      sourceCommit := none
+      sourcePattern := "denial of service / unbounded work"
+      kind := .denialOfService
+      rootCause := "queue, loop, batch, or cooldown behavior can make a required operation too expensive or unavailable"
+      capability := .externalAttacker
+      affectedFamilies := ["user", "redemption", "external", "time"]
+      objective := "prevent claims, settlement or progress"
+      preconditions := ["attacker can grow a queue or registry", "victim operation iterates over attacker-controlled state"]
+      traceSkeleton := ["grow queue/registry", "submit claim or settlement", "exceed gas or progress bound"]
+      targetAssets := ["pending claim", "exit availability", "settlement queue"]
+      lossMetric := [.denialOfService, .exitAvailability]
+      apxMapping := ["ExternalState.gasBudget", "Op.requestUnlock", "Op.claimUnlock", "CommitToken.liveDeployments"]
+      modelEvidence := ["redemption_cycle_closes_after_cooldown"]
+      status := .implementationHandoff
+      modelStatus := .implementationAuditRequired
+      implementationStatus := .notRun
+      humanReview := .pending
+      implementationNextCheck := "bound queue/loop growth and profile gas at worst-case registry size" } ]
+
+theorem attackPatternCatalog_covers_v3_classes :
+    (attackPatternCatalog.map AttackPattern.kind).length = 9 := by
+  rfl
+
+def attackPatternCatalogComplete : Bool :=
+  attackPatternCatalog.all AttackPattern.complete
+
+theorem attackPatternCatalog_records_are_complete :
+    attackPatternCatalogComplete = true := by
+  native_decide
+
 /-! ## Trace execution (revert-skip semantics)
 
 An attack trace is a list of `(op, caller)` pairs executed in order. An operation
@@ -1594,12 +1939,12 @@ shares, external USDC, and governance tokens (the last is bitwise unchanged). Th
 team being fully phished cannot move your balances. -/
 theorem user_assets_immune_to_total_key_compromise
     (s : State) (σ : List (Op × Address)) (u : Address)
-    (h_u : ∀ p ∈ σ, p.2 ≠ u)
-    (h_rfq : ∀ p ∈ σ, ∀ amount, p.1 ≠ Op.executeRFQRedemption u amount) :
+    (htrace : passiveHolderTrace u σ) :
     s.apxUSDBal u ≤ (execTrace s σ).apxUSDBal u ∧
     s.apyUSDBal u ≤ (execTrace s σ).apyUSDBal u ∧
     s.usdcBal u ≤ (execTrace s σ).usdcBal u ∧
     (execTrace s σ).governanceTokenBal u = s.governanceTokenBal u := by
+  obtain ⟨h_u, h_rfq⟩ := htrace
   induction σ generalizing s with
   | nil => exact ⟨Nat.le_refl _, Nat.le_refl _, Nat.le_refl _, rfl⟩
   | cons p σ ih =>
@@ -1920,14 +2265,13 @@ entire trace, hence so is the derived ledger `netHoldings` — proved by lifting
 single-step non-custodial lemmas through the trace via
 `user_assets_immune_to_total_key_compromise`. -/
 theorem no_theft_ledger (s : State) (σ : List (Op × Address)) (a : Address)
-    (h_never_signs : ∀ p ∈ σ, p.2 ≠ a)
-    (h_never_rfq_target : ∀ p ∈ σ, ∀ amount, p.1 ≠ Op.executeRFQRedemption a amount) :
+    (htrace : passiveHolderTrace a σ) :
     s.apxUSDBal a ≤ (execTrace s σ).apxUSDBal a ∧
     s.apyUSDBal a ≤ (execTrace s σ).apyUSDBal a ∧
     s.usdcBal a ≤ (execTrace s σ).usdcBal a ∧
     netHoldings s a ≤ netHoldings (execTrace s σ) a := by
   obtain ⟨hapx, hapy, husdc, _⟩ :=
-    user_assets_immune_to_total_key_compromise s σ a h_never_signs h_never_rfq_target
+    user_assets_immune_to_total_key_compromise s σ a htrace
   refine ⟨hapx, hapy, husdc, ?_⟩
   unfold netHoldings
   omega

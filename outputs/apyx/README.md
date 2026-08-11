@@ -1,17 +1,114 @@
-# Apyx Protocol — Formal Verification Report
+# Apyx Protocol — Design-Level Verification Report
+
+> **Reader's note.** This is a security assessment of a machine-checked model of Apyx's design. It is not an independent smart-contract audit, and it does not claim that the deployed Solidity bytecode refines the model. Read the executive summary first; the Lean theorem names are evidence pointers, not prerequisites.
 
 | | |
 |---|---|
 | **Subject** | Apyx (apyx.fi) — the apxUSD / apyUSD dividend-backed stablecoin protocol |
 | **Contracts** (Ethereum mainnet, per the ingested documentation) | apxUSD [`0x98A8…4665`](https://etherscan.io/address/0x98A878b1Cd98131B271883B390f68D2c90674665) · apyUSD [`0x38EE…8a6A`](https://etherscan.io/address/0x38EEb52F0771140d10c4E9A9a72349A329Fe8a6A) · UnlockToken [`0x9377…BF4e6`](https://etherscan.io/address/0x93775E2dFa4e716c361A1f53F212c7AE031BF4e6) |
+| **Assessment type** | Design-level formal verification / security assessment; not an independent code audit |
 | **Method** | RFC 2119 specification → Lean 4 state-machine model → machine-checked theorems |
 | **Result** | The current Lean tree builds with 0 `sorry` and 0 vacuous theorems (`lake build D2fsSpecs`, Lean 4.31.0). The model proves the active design, ledger, registry, pending-liability, and adversarial boundaries described below; it does not prove bytecode conformance. The model still exposes a single-key (`ADMIN_ROLE`) reserve-drain and unbounded repricing path, and the absence of a redemption-price floor (§4.1, §5, §9.1). |
-| **Date** | 2026-08-06 (synchronized with the current Lean tree) |
+| **Report revision** | 2026-08-11; Proof Map v3 typed assurance layer added |
 | **Self-review** | This report has been reviewed against its own Lean source; findings and fixes are in [`code_review_lean.md`](code_review_lean.md) and §9.3. Regression tests: [`review_witnesses/`](review_witnesses/). Deployment reads that ground the fixes: [`deployment_ground_truth.md`](deployment_ground_truth.md). |
 
 ---
 
-## 1. Summary
+## Executive summary
+
+### What was assessed
+
+The assessment translates Apyx's published protocol documentation and selected deployment facts into an executable state-machine model. The model represents token balances, supply, collateral, reserve, vault shares, vesting, asynchronous redemption requests, receipts, prices, time, and privileged operations. Lean checks the stated mathematical properties of that model.
+
+In plain terms, the report asks:
+
+- Does the model keep token ledgers and redemption records internally consistent?
+- Are pending redemption claims included in the solvency calculation?
+- Do accepted operations respect balance, rounding, and arithmetic guards?
+- What can a stolen admin, oracle, pause, or yield-distributor key do?
+- Which conclusions are design properties, and which still require implementation-level verification?
+
+### Assurance at a glance
+
+| Area | Current conclusion | Assurance boundary |
+|---|---|---|
+| Token, receipt, and registry accounting | Preserved for the modeled operations and stated finite-support conditions | Model-level; selected trace theorems |
+| Pending-liability solvency | Pending standard/flexible claims are included and individually covered in reachable modeled states | Explicit initial-state and operation-side premises |
+| Redemption lifecycle | Cooldown rejection and funded request → wait → claim traces are modeled | Existence of a successful trace is not unconditional liveness |
+| Vault accounting | Conversion rounding, round-trip bounds, pause limits, and burn/pending agreement are separately proved | Accounting properties, not ERC-4626 bytecode/ABI conformance |
+| Privileged-key blast radius | Passive users' nominal balances are protected under a narrow threat model | Value is not protected: admin reserve drain and repricing remain possible |
+| Deployed implementation | Not established by this report | Bytecode refinement, reentrancy, upgradeability, and implementation tools remain open |
+
+### Bottom line
+
+The strongest positive result is **design-level accounting and transition safety under explicit assumptions**. The strongest negative result is that **`ADMIN_ROLE` is still a direct economic-loss boundary**: the modeled admin can withdraw the reserve to a chosen address and change the redemption price without a floor or delay. Therefore this report must not be summarized as “Apyx is safe”; it should be summarized as “the modeled accounting and operation boundaries are machine-checked, while material privileged and implementation-level risks remain.”
+
+### How to read Lean results without knowing Lean
+
+Lean is the proof checker, not the security claim. A theorem is an implication: given the stated model, preconditions, threat model, and operation scope, the conclusion follows and is checked by Lean's kernel. The `scope` column in [`property-manifest.csv`](property-manifest.csv) distinguishes local one-step properties, reachable-state properties, traces, and witnesses. `sorry=0` means there are no admitted proof holes; it does **not** mean that every real-world behavior is modeled.
+
+A result marked `model=proved` is therefore a proved property of the model. `impl=not-run` means that implementation-level tools such as SPECA, Certora, Halmos, SMT checking, or fuzzing have not yet been run. Counterexamples and design findings are evidence about the modeled or deployment-derived boundary, not automatically bytecode vulnerabilities.
+
+## 1. User decision summary
+
+This section is for current and prospective Apyx users. It is intentionally written before the Lean
+evidence. It is not financial advice, a recommendation to buy or use Apyx, or a promise that principal
+will be preserved. Its purpose is to make the protocol's mechanics and known risks legible enough for a
+user to decide whether those risks are acceptable.
+
+### What a user is taking on
+
+The basic user journey is:
+
+```text
+USDC deposit
+  → apxUSD
+  → optional apyUSD vault shares
+  → redemption request
+  → cooldown / receipt period
+  → claim apxUSD or USDC, depending on the path
+```
+
+The important user-facing consequences are:
+
+| Question | What this assessment says |
+|---|---|
+| Can I redeem immediately? | Not always. Standard redemption uses a request → cooldown → claim lifecycle; flexible redemption has its own minimum wait and fee schedule. |
+| What do I hold? | apxUSD is the base token; apyUSD is a vault share whose value depends on the vault's live assets and share supply; a pending receipt is a claim, not immediately available cash. |
+| Is my wallet balance protected from a stolen operator key? | In the model, a passive user not targeted through the approved RFQ path keeps their recorded nominal balances even if all operator keys are compromised. |
+| Is the economic value protected? | No unconditional guarantee. A user's balance field can remain unchanged while reserve withdrawal, repricing, rounding, or implementation risk reduces what it is worth. |
+| Does the solvency proof mean every real-world claim is safe? | It proves pending-liability coverage in the modeled reachable states and accounting boundary. It does not prove deployed bytecode, external USDC accounting, or every connected vault. |
+| Can I treat this as a low-risk or guaranteed investment? | No. The report identifies material privileged, smart-contract, liquidity, governance, and implementation risks. |
+
+### What may reasonably provide confidence
+
+The model gives machine-checked support for several design properties: token and receipt accounting,
+pending redemption liabilities, cooldown rejection, funded request → wait → claim traces, accepted-path
+arithmetic guards, vault conversion rounding, and selected stolen-key balance protections. These are useful
+evidence that the stated design has been made precise and that the modeled transitions preserve the stated
+relations.
+
+### What should prevent overconfidence
+
+The same assessment proves or records important loss boundaries:
+
+- the modeled admin can withdraw reserve to a chosen address without settling a redemption;
+- the modeled redemption price has no lower floor, so a price of zero can burn a claim for zero USDC;
+- the deployed vesting beneficiary path is outside the core model and may redirect accrued value;
+- the vault's ERC-4626 inflation defense is mitigated but not proved impossible;
+- implementation-level verification has not been run, and the model is not a bytecode-refinement proof;
+- cooldowns and asynchronous redemption create liquidity and timing risk even when accounting is correct.
+
+For a user, the practical question is therefore not “does Lean say Apyx is safe?” It is “am I comfortable
+with the remaining admin, liquidity, smart-contract, and implementation risks after reading the exact
+scope of the evidence?”
+
+The rest of this document explains the protocol first, then presents the Lean-backed assurance and the
+remaining risks. Maintainer remediation priorities appear in §5.
+
+## 2. Protocol behavior, scope, and model
+
+### 2.1 What was assessed
 
 Apyx's public protocol documentation was formalized into (a) a normative RFC 2119 specification
 ([`SPEC.md`](SPEC.md)) and (b) an executable Lean 4 model of the protocol's state machine
@@ -64,7 +161,7 @@ this report as a rigorous design-level cross-check to sit **alongside** a byteco
 
 ---
 
-## 2. The specification
+### 2.2 The specification
 
 [`SPEC.md`](SPEC.md) is the normative RFC 2119 requirements document extracted from the source
 documentation; [`requirements.json`](requirements.json) is the same content in structured form (each
@@ -87,7 +184,7 @@ state variables, and operations).
 
 ---
 
-## 3. Active Lean proof surface
+## 3. Assurance results and evidence
 
 The active Lean theorem surface follows [`docs/11-apyx-proof-map.md`](../../docs/11-apyx-proof-map.md).
 The requirement inventory and the proof map serve different purposes: `requirements.json` records the
@@ -96,23 +193,24 @@ safety, accounting, boundary, and implementation hand-off claims that are checke
 to another verification method.
 
 The row-level join between the two is
-[`property-manifest.csv`](property-manifest.csv): one row per requirement (the 83 extracted records
-plus the 25 deployment-derived `DR` items of `SPEC.md` §10a), each carrying its specification
-anchor, the Lean theorem(s) that cover it, and a `result` column that states the current assurance
-level honestly — `model=proved` for a named theorem, `model=proved (unnamed mapping)` where the
-behaviour is proved under non-requirement names, `model=partial` with the missing clause recorded
-in the evidence column, `model=guard-only` where the transition enforces the behaviour but no
-theorem states it, `model=formalized (deployment-derived)` for the `DR` rows whose module-level
-formalization is named in `SPEC.md` §10a, `declined`/`out-of-scope` with the documented reason,
-and `impl=not-run`
-everywhere, because no implementation-level tool (SPECA, Certora, Halmos, fuzzing) has been run
-yet. Since Proof Map v2 (life#59) the table also carries a `scope` column implementing the
-proof-map §11 status tags — `model-local` (one transition or component), `reachable` (requires a
-Reach relation), `trace` (about operation sequences), `witness` (a counterexample or regression
-case), with `out-of-scope`/`declined` and `model-local (deployment-derived)` for the DR rows —
-so a reader can tell a local model theorem from a reachable-state guarantee without opening the
-source. A row whose result you cannot defend from the cited evidence is a bug in the manifest;
-regenerate or fix it rather than letting the table drift from the sources.
+[`property-manifest.csv`](property-manifest.csv). The current manifest has 147 rows and 12 columns: the extracted
+requirements, deployment-derived properties, and the Proof Map v2 invariant, accounting, capability,
+phase, arithmetic, and vault-assurance rows. Each row carries its specification anchor, the Lean
+theorem(s) that cover it, a `result` column, evidence, and a `scope` column. It also separates
+`evidence_kind`, `implementation_status`, and `human_review_status`; these are not inferred from
+theorem names. The eleven added v3 rows
+cover typed state views, exhaustive operation families, named threat models, passive-holder trace
+assumptions, user claim coverage, admin-loss witnesses, an attack-pattern catalog, and explicit
+implementation handoffs. Five further v3 rows record the mixed obligation trace, all four async
+vault instances, deployment authority facts, external-execution handoffs, and the `Rep`/simulation
+refinement schema. (The manifest count is updated when those rows are appended.)
+
+The result column distinguishes `model=proved`, `model=partial`, `model=guard-only`,
+`model=formalized (deployment-derived)`, `declined`, and `out-of-scope`; `impl=not-run` is retained
+where no implementation-level tool has been run. The `scope` column distinguishes `model-local`,
+`reachable`, `trace`, `witness`, and deployment-derived model claims. This is the report's assurance
+ledger: a row marked `model=proved` is not a bytecode result, and a theorem named in prose but absent
+from the manifest should not be treated as an active assurance claim.
 
 The remaining proofs are organized around a small set of reusable boundaries:
 
@@ -122,6 +220,25 @@ The remaining proofs are organized around a small set of reusable boundaries:
 - holder-value, solvency, rounding, price, and blast-radius properties;
 - trace composition with explicit revert-skip, time, support, and caller premises;
 - deployment/SPECA hand-off points for fees, decimal scaling, and implementation fidelity.
+
+### Proof Map v3 in user terms
+
+The v3 boundaries are integrated into the existing proof modules rather than maintained as a separate
+catalog file. `Apyx.lean` now exposes the composed ledger/vault/redemption/reserve/authority/oracle/
+time/external state views and the `Rep`/`ForwardSimulation` refinement schema; `Phase.lean` assigns
+every `Op` to an operation family, an exhaustive `AccountingEffect`, and a five-dimension operation
+contract coverage entry; `BlastRadius.lean` names the attacker models and normalizes the
+nine DeFiHackLabs-shaped attack classes; `Accounting.lean` composes standard and flexible claim
+coverage into one reachable-state user property, adds an explicit mixed lifecycle trace, and
+classifies every `Op` with an exhaustive `AccountingEffect`; and
+`DeploymentGaps.lean` consolidates the deployment-derived authority/delay map.
+
+The key user-facing theorem is deliberately narrow: `user_assets_immune_to_total_key_compromise`
+preserves recorded balances for a passive holder under `passiveHolderTrace`. It does not preserve
+economic value. The companion existing witnesses, `admin_alone_drains_reserve` and
+`admin_alone_moves_redemption_price`, quantify modeled ways value can be lost while a user's balance
+field stays unchanged. `pending_claim_coverage_reachable` connects both pending-claim channels to the
+reachable collateral-plus-reserve accounting result.
 
 The latest Lean additions close the following model-local layers. These are the current source of truth
 for what is proved; prose claims not backed by one of these declarations are not promoted to protocol
@@ -133,8 +250,12 @@ guarantees:
 | Registry and receipts | `RegistryWellIndexed`, `RegistryBounded`, `OwnerPointerSound`, and `unlockTokenLedgerConsistent_trace` preserve allocation, owner-pointer, and receipt face-value consistency. |
 | Composite invariant | `ProtocolInv` carries registry indexing, solvency, `WellFormed`, and both finite token ledgers; `ProtocolInvWithReceiptLedger` adds the receipt relation. `protocolInv_reachableOps` derives post-state `WellFormed` under the explicit at-most-par price regime. |
 | Pending liabilities | `SolventOutstanding` and `protocolInvFull_reachable` (over `ReachInit`, `Init.lean`) include pending standard/flexible unlock face amounts; claims are in scope, while vault exits, stress, backstop, and bare reserve withdrawal remain explicit exclusions. |
+| Mixed obligation trace | `ObligationTrace` and `obligationTrace_execTrace_le` close the modeled lock/request/claim/vault-exit/tick lifecycle as a revert-skip trace; `AccountingEffect` classifies every other operation by its accounting boundary. Deposit, mint, yield credit, RFQ settlement, pool redemption, reserve outflow, and backstop remain outside this scoped preservation theorem. |
 | USDC boundary | `UsdcLedgerConsistent` / `usdcLedgerConsistent_trace` preserve an external-parameterized USDC ledger under explicit holder-support and non-backstop premises. This is not a `State`-internal total-supply theorem. |
+| Four async vaults | `CommitToken.liveDeployments` enumerates CT-apxUSD, CT-apyUSDapx, CT-apxUSDUSDC, and apxUSD_unlock; `cycle_closes_after_the_delay` is parameterized over each instance's delay, while deployment authority and bytecode refinement remain separate. |
 | Holder value | `holderValue` includes pending positions; `holderValueAt_rateAware_trace_rateAdjusted` accounts for signed rate revaluation, while `holderValue_rateAware_trace_nonincreasing` remains conditional on a non-increasing execution-rate schedule. |
+| Authority and external boundaries | `AuthorityRole`/`roleGraph` project the four model caller capabilities; `authorityDeploymentMap` records deployment delay classes and unknowns; `ExternalHandoff` records callback, flash-loan, freshness, replay, upgrade, and gas checks. These remain evidence/handoff records, not resistance proofs. |
+| Operation contracts | `operationContract` covers every `Op` with explicit precondition, postcondition, revert, frame, and relational status. Current `incomplete`, `notModeled`, and `handoff` entries are outstanding proof or implementation tasks, not positive results. |
 
 The exact theorem names and their proof dependencies are maintained in the proof map. A theorem mentioned only in the historical report is not, by itself, an active Lean result.
 
@@ -142,7 +263,7 @@ The exact theorem names and their proof dependencies are maintained in the proof
 
 ---
 
-## 4. What was proved — adversarial analysis
+## 4. Security findings and positive guarantees
 
 ### 4.1 Key-compromise blast radius ( [`BlastRadius.lean`](BlastRadius.lean))
 
@@ -411,7 +532,7 @@ inside a large batch). the corresponding trace bound lifts the two pins to whole
 
 ---
 
-## 5. Design recommendations for Apyx
+## 5. Remediation plan for Apyx maintainers
 
 These follow directly from the proofs above. Items 1–3 are the defenses whose *absence* leaves the
 repricing and reserve-outflow losses unbounded — note that §4.1's headline is now the **admin-only**
@@ -438,7 +559,7 @@ formalized, the theorem naming what it would guarantee is cited.
    moves no reserve — is charged its full face value instead of zero (`Regression.lean` §R12).
    Honest traffic is priced exactly as before.
 
-3. **Add a timelock on privileged admin changes.** The base model is proved to have **no exit window** —
+3. **Verify and complete the timelock authority policy.** The base model is proved to have **no exit window** —
    admin changes take effect in the same block (`base_model_has_no_timelock`,
    the instantaneous backstop boundary). That negative result is sound.
    The positive half (`timelock_escape_guarantee`) now holds on the base clock. The wrapper has no
@@ -447,13 +568,14 @@ formalized, the theorem naming what it would guarantee is cited.
    including an exit, does not. `Regression.lean` §R9 pins the boundary (499 units short and the
    queued change does not land; 500 and it does) and pins the escape itself (mid-window a holder
    exits through `direct` while the queued change is still pending).
-   **Largely already met on-chain, and this recommendation was written against a stale
-   observation.** The deployed `AccessManager` (`0xe167330E…2824`) runs a graded delay ladder —
+   **Largely already met on-chain.** The deployed `AccessManager` (`0xe167330E…2824`) runs a graded delay ladder —
    0 for `pause()`, 4h for the price push, 24h for privileged token withdrawal, 3 days for
    `upgradeToAndCall`, 7 days for `setAuthority` — with a 5-day minimum setback on any reduction
-   and a 7-day grant delay on `ADMIN_ROLE` itself. What still carries **no** delay is `ADMIN_ROLE`,
-   held by a single Safe. See [`model.md`](model.md) §6 for the snapshot and the addresses; the
-   residual recommendation is about that one role, not about the scheme.
+   and a 7-day grant delay on `ADMIN_ROLE` itself. What still carries **no** delay is the
+   `ADMIN_ROLE` capability held by a single Safe. Verify the live role graph, Safe threshold, and
+   effective delay before treating the design-level exit-window result as mitigated. See
+   [`model.md`](model.md) §6 for the snapshot and addresses; the residual recommendation is about
+   authority configuration, not the general delay scheme.
 
 4. **Minimize trust in the RFQ counterparty set.** With defenses 1–3 in place, user-fund safety against a
    compromised admin still depends on the honesty of approved RFQ counterparties — they are the second key
@@ -481,7 +603,7 @@ formalized, the theorem naming what it would guarantee is cited.
 
 ---
 
-## 6. Out of scope and not provable against this model
+## 6. Residual risk and implementation hand-off
 
 Reported honestly so the boundary of these guarantees is clear.
 
@@ -602,7 +724,7 @@ abstractly. #10 (delays/roles) directly determines whether the §5 timelock reco
 
 ---
 
-## 7. Verifying this report yourself
+## 7. Reproduction and verification
 
 The Lean project is dependency-free (no mathlib) and compiles in seconds.
 
@@ -623,8 +745,10 @@ Lean modules imported by `lean/D2fsSpecs.lean`. The regression witnesses in
 `TemplateExamples`, a fictional model that regression-tests the reusable proof templates in
 `templates/`; it is unrelated to Apyx.)
 
-`lake build` exiting `0` with **zero warnings** and no `sorry` is the proof-checking event: the
-Lean kernel re-verifies every theorem from source. An axiom report must be regenerated from the
+`lake build` exiting `0` with no `sorry` is the proof-checking event: the Lean kernel re-verifies every
+theorem from source. The current build exits successfully; it still emits pre-existing unused-simp-
+argument linter warnings in `Init.lean`, which are code-quality warnings rather than admitted proofs.
+An axiom report must be regenerated from the
 current source whenever public declarations change; it should confirm that no theorem depends on
 `sorryAx`, while standard logical axioms such as `propext`, `Quot.sound`, or `Classical.choice`
 are not protocol assumptions. The requirement-pipeline metrics are recorded in
@@ -638,19 +762,25 @@ module, not the hand-written proof surface the build checks.
 
 ---
 
-## 8. Artifact map
+## 8. Evidence map
 
 | File | Contents |
 |---|---|
 | [`SPEC.md`](SPEC.md) | The normative RFC 2119 specification (human-readable) |
 | [`requirements.json`](requirements.json) | The 83 extracted requirements in structured form; not every record has an active standalone theorem |
-| [`property-manifest.csv`](property-manifest.csv) | The requirement-to-theorem join: 108 rows (83 extracted + 25 deployment-derived), each with spec anchor, covering theorem(s), assurance result, and evidence (§3) |
+| [`property-manifest.csv`](property-manifest.csv) | The current requirement-to-theorem join: 147 rows × 12 columns, including extracted requirements, deployment-derived properties, Proof Map v2 assurance rows, and Proof Map v3 rows mapped to existing Lean modules; evidence kind, implementation status, and human-review status are separate (§3) |
 | [`model.md`](model.md) | Plain-English summary of the Lean state machine |
-| [`Apyx.lean`](Apyx.lean) | The formal model (`State`, `Op`, `step`) and the active proof surface |
+| [`Apyx.lean`](Apyx.lean) | The formal model (`State`, `Op`, `step`), composed v3 state views, and the active proof surface |
+| [`Transition.lean`](Transition.lean) | Explicit `StepResult`, external-execution boundary, and implementation-risk handoff catalog |
 | [`Registry.lean`](../../lean/D2fsSpecs/Registry.lean) | Reachability, allocation, owner-pointer, and registry well-indexing invariants |
 | [`Ledger.lean`](../../lean/D2fsSpecs/Ledger.lean) | Finite apxUSD ledger identity and trace preservation |
 | [`Invariant.lean`](../../lean/D2fsSpecs/Invariant.lean) | Composite, receipt-aware, and pending-liability invariant layers |
-| [`BlastRadius.lean`](BlastRadius.lean) | Key-compromise blast-radius proofs and defense wrappers |
+| [`Init.lean`](Init.lean) | Legitimate initial states, funded settlement witness, `ReachInit`, and the main reachable invariant |
+| [`Accounting.lean`](Accounting.lean) | Integrated obligations ledger, backstop residual conservation, reachable claim coverage, and v3 standard/flexible composition |
+| [`Phase.lean`](Phase.lean) | Normal/stress phases, named exception contracts, exhaustive operation classification, and v3 operation families |
+| [`Arithmetic.lean`](Arithmetic.lean) | Accepted-transition no-underflow and denominator-safety boundaries |
+| [`Vault.lean`](Vault.lean) | ERC-4626 accounting decomposition and burn-to-pending agreement |
+| [`BlastRadius.lean`](BlastRadius.lean) | Key-compromise blast-radius proofs, explicit v3 threat models, passive-holder traces, and defense wrappers |
 | [`HolderValue.lean`](HolderValue.lean) | The complete signed per-holder value ledger, and the `caller_value_*` family restated over it (§9.3) |
 | [`DeploymentGaps.lean`](DeploymentGaps.lean) | The vesting-beneficiary single-key drain, the apxUSD supply cap and its coalition escape, and the vest-clock deviation — formalized from verified Solidity (§9.3) |
 | [`DeploymentFees.lean`](DeploymentFees.lean) | The two deployed fee mechanisms the corpus omits — the vault-side `unlockingFee` and the variable-unlock `FeeCurve` — formalized from verified Solidity (§9.3) |
@@ -666,11 +796,10 @@ module, not the hand-written proof surface the build checks.
 | [`code_review_lean.md`](code_review_lean.md) | Self-review of this report's Lean source — every finding, fixed and unfixed (§9.3) |
 | [`deployment_ground_truth.md`](deployment_ground_truth.md) | Verified-source and live-read facts the §9.3 fixes are grounded in |
 | [`review_witnesses/Regression.lean`](review_witnesses/Regression.lean) | Kernel-checked regression tests pinning each §9.3 fix |
-| [`HolderValue.lean`](HolderValue.lean) | The complete, signed per-holder value ledger — positions included (`docs/06` §7.3 E3) |
 
 ---
 
-## 9. Requirement-consistency and parameter-bound gaps
+## 9. Technical appendix: consistency checks and model self-review
 
 This group turns the lens on the requirement set itself and on the economic parameters.
 

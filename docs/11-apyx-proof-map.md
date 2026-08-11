@@ -10,12 +10,59 @@ This document is a working map for proving the safety of Apyx. It separates the 
 > and total operation classification (`Phase.lean`), per-step arithmetic
 > safety (`Arithmetic.lean`), and the ERC-4626 decomposition (`Vault.lean`) —
 > all under `outputs/apyx/`, with `lake build D2fsSpecs` green and zero
-> `sorry`. Sections below describe both the method and the current source; the
-> remaining gaps are recorded inline rather than hidden.
+> `sorry`. Proof Map v3 is integrated into the existing modules: `Apyx.lean`
+> contains the composed state views, `Phase.lean` contains the exhaustive
+> operation-family classification, `BlastRadius.lean` contains explicit threat
+> models and passive-holder trace restrictions, and `Accounting.lean` contains
+> the composed reachable claim-coverage theorem. Attack classes that require
+> external state or bytecode semantics remain explicit implementation handoffs.
+> Sections below describe both the method and the current source; the remaining
+> gaps are recorded inline rather than hidden.
 
 The central idea is simple:
 
 > Prove what one action changes, prove what it cannot change, and then lift those local facts into the accounting and safety properties of the whole protocol.
+
+## 1A. Proof Map v3: user assurance and attacker coverage
+
+Proof Map v3 makes the proof surface legible to a user and to the maintainer
+responsible for closing the remaining gaps. It is implemented by extending the
+existing model and proof modules rather than by adding a parallel metadata
+model.
+
+### What v3 adds
+
+| v3 layer | What is represented | Current assurance boundary |
+|---|---|---|
+| State views | `LedgerState`, `VaultState`, `RedemptionState`, `ReserveState`, `AuthorityState`, `OracleState`, `TimeState`, and `ExternalState` projections in `Apyx.lean`; `AuthorityRole` gives the model caller graph | Projection of the current `State`; deployment-specific authority/external fields remain explicit handoffs |
+| Operation families and contracts | Every current `Op` is assigned to a security family and an exhaustive `AccountingEffect`; `operationContract` records precondition, postcondition, revert, frame, and relational status for every constructor | Coverage is exhaustive as an index, but many statuses remain incomplete/not-modeled/handoff; not a Solidity dispatcher equivalence proof |
+| Threat models | Passive holder, honest user, compromised admin/oracle, approved RFQ counterparty, total-key compromise, external attacker, and governance/upgrader in `BlastRadius.lean`; objectives are nominal balance, economic value, reserve, DoS, and exit availability | Named capability profiles and trace restrictions; deployed role wiring is not proved |
+| User-facing theorem links | Passive-holder nominal-balance isolation and combined reachable standard/flexible claim coverage | Existing v2 theorems are strengthened with explicit v3 assumptions; economic value and bytecode remain separate |
+| Composition and async surface | `ObligationTrace` for the modeled mixed lifecycle and `CommitToken.liveDeployments` for all four async vault instances | The obligation trace is scoped to lifecycle-preserving operations; external custody/fees and bytecode conformance remain outside |
+| Authority map | `AuthorityDeploymentRecord`, `authorityDeploymentMap`, and `authorityDeploymentUnknowns` in `DeploymentGaps.lean` | Confirmed delay classes are deployment-derived readings; Safe threshold, full role graph, authority mutation, and storage layout remain open |
+| External/refinement boundary | `ExternalExecution`, `ExternalHandoff`, `ImplState`, `Rep`, and `ForwardSimulation` | The schemas and handoffs are explicit; no deployed implementation simulation has been run |
+| Attack-pattern handoff | Nine `AttackPattern` records carry `sourcePoc`, root cause, preconditions, trace skeleton, target assets, loss metric, Apyx mapping, model status, implementation status, and human-review status; `attackPatternCatalog_records_are_complete` checks record shape | No catalog row is treated as exploit resistance; implementation and human-review statuses remain explicit |
+
+The most important user-facing distinction is:
+
+```text
+nominal balance isolation  ≠  economic-value protection
+model theorem               ≠  deployed-bytecode assurance
+attack-pattern entry        ≠  exploitability result
+```
+
+For example, `user_assets_immune_to_total_key_compromise` proves that a restricted
+passive holder's recorded balances do not decrease under the modeled total-key
+trace. It does not prove that those balances retain value if an admin drains
+the reserve or changes the redemption price. Conversely,
+`admin_alone_drains_reserve` and `admin_alone_moves_redemption_price` are explicit
+loss witnesses: they make the model's material risk visible rather than letting
+the positive balance theorem be misread as a general safety guarantee.
+
+The v3 implementation-handoff entries deliberately include reentrancy,
+flash-loan composition, signature replay, upgradeability, and gas denial of
+service. These require implementation-level evidence and external-state
+models; the presence of a catalog row is not a proof of resistance.
 
 ## 1. What other formalized DeFi systems teach us
 
@@ -768,9 +815,9 @@ The Lean model should prove the abstract design claims that are stable and econo
 
 A property manifest is the connection point. It is no longer only a
 recommendation: `outputs/apyx/property-manifest.csv` implements this table for
-the current Apyx surface — one row per extracted requirement (83) and per
-deployment-derived requirement (25), each with its specification anchor,
-covering Lean theorem(s), and an honest `result` field (`model=proved`,
+the current Apyx surface — extracted requirements (83), deployment-derived
+requirements (25), and proof-map assurance rows, each with its specification
+anchor, covering Lean theorem(s), and an honest `result` field (`model=proved`,
 `model=partial`, `model=guard-only`, `declined`, `out-of-scope`, with
 `impl=not-run` throughout because no implementation-level tool has been run
 yet). The schema is:
@@ -785,6 +832,9 @@ yet). The schema is:
 | result | Proved, disproved, bounded, inconclusive, or not run |
 | evidence | Query, trace, counterexample, test, or review record |
 | scope | Proof-map §11 status tag: model-local, reachable, trace, witness, … |
+| implementation_status | Separate implementation check status (`not-run` until a tool or review is actually completed) |
+| evidence_kind | Whether the row is a model proof, partial model, witness, deployment reading, scope decision, or mixed evidence |
+| human_review_status | Whether a human has reviewed the row-level evidence; pending is the default until such review occurs |
 
 SPECA is useful for turning natural-language requirements into typed properties such as invariants, preconditions, postconditions, and assumptions, then checking property reachability and the relevant program subgraph. Its output is an audit aid and a source of candidates for proof; a generated finding still requires human validation.
 
@@ -902,6 +952,17 @@ answers. The current source answers each one; the pointer says where.
   (`Transition.lean`); a revert is the absence of a successor, and
   `RevertReason.modelUnknown` deliberately does not identify the failed guard
   (recorded resolution decision).
+- **Does every public operation have a contract surface?** Yes, as an
+  exhaustive coverage index: `operationContract` has separate precondition,
+  postcondition, revert, frame, and relational statuses for every `Op`
+  constructor. `incomplete`, `notModeled`, and `handoff` statuses are explicit
+  residuals; the index is not a claim that all five dimensions are proved.
+- **Are authority, reserve exits, attacker models, and external risks visible?**
+  Yes. `AuthorityRole`/`authorityDeploymentMap`, reserve-outflow and repricing
+  witnesses, typed attacker profiles, nine attack-pattern records, and
+  `ExternalHandoff` enumerate those surfaces. Deployment role wiring, Safe
+  threshold, callbacks, signatures, upgrades, gas, and external price freshness
+  remain implementation-level checks.
 - **Which accounting identities connect balances, supply, reserves, and
   liabilities?** The finite ledgers (`Ledger.lean`, `HolderValue.lean`),
   `SolventOutstanding` (`Invariant.lean`), and the unified

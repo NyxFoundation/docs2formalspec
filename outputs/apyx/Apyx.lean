@@ -101,6 +101,226 @@ structure State where
   usdcReserve : Nat
   eventLog : List (String × List Nat)
 
+/-! ## Proof Map v3: composed security state
+
+The transition model keeps one concrete `State` so that the existing effect
+proofs remain readable.  Proof Map v3 nevertheless requires the security
+boundaries to be explicit.  These structures are the composed substates used
+by the existing proofs; they are projections, not a second transition model.
+Keeping the projections here prevents a ledger theorem from silently being
+read as a vault, authority, oracle, or external-state theorem. -/
+
+structure LedgerState where
+  totalSupplyApxUSD : Nat
+  totalSupplyApyUSD : Nat
+  apxUSDBalance : Address → Nat
+  apyUSDBalance : Address → Nat
+  usdcBalance : Address → Nat
+  governanceBalance : Address → Nat
+
+structure VaultState where
+  custodyApxUSD : Nat
+  exchangeRate : Nat
+  vestStart : Nat
+  vestTotal : Nat
+  fullyVestedAmount : Nat
+  vestPeriod : Nat
+
+structure RedemptionState where
+  nextUnlockId : Nat
+  ownerRequestId : Address → Option Nat
+  standardRequests : Nat → Option (Address × Nat × Nat)
+  flexibleRequests : Nat → Option (Address × Nat × Nat × Nat)
+  receiptOwner : Nat → Option Address
+  receiptAmount : Nat → Nat
+  receiptOperator : Address
+
+structure AuthorityRole where
+  roleId : Nat
+  roleName : String
+  holder : Address
+  delay : Option Nat
+  capabilities : List String
+
+structure ReserveState where
+  collateralValue : Nat
+  reserve : Nat
+  redemptionValue : Nat
+  overcollateralizationBuffer : Nat
+
+structure AuthorityState where
+  admin : Address
+  governance : Address
+  oracle : Address
+  pauseController : Address
+  yieldDistributor : Address
+  rfqCounterparties : List Address
+  whitelist : Address → Bool
+  denylist : Address → Bool
+  governanceThreshold : Nat
+  /-- Model-level caller-to-capability graph. Deployment-specific AccessManager edges are separate. -/
+  roleGraph : List AuthorityRole
+  /-- Deployment authority is intentionally not inferred from a model caller. -/
+  authorityAddress : Option Address
+  /-- A multisig/Safe threshold is an implementation configuration, not a State field. -/
+  safeThreshold : Option Nat
+  /-- Delay before a role operation becomes executable, when known from deployment. -/
+  roleDelay : Option Nat
+  /-- Delay for changing the authority itself. -/
+  setAuthorityDelay : Option Nat
+  /-- Upgrade authority and delay are kept optional until bytecode/config evidence is joined. -/
+  upgradeAuthority : Option Address
+  upgradeDelay : Option Nat
+
+structure OracleState where
+  redemptionValue : Nat
+  marketPrice : Nat
+
+structure TimeState where
+  now : Nat
+
+structure ExternalState where
+  usdcBalance : Address → Nat
+  rfqRequests : Address → Nat
+  /-- Timestamp/freshness metadata for an oracle read; absent in the design model. -/
+  oracleTimestamp : Option Nat
+  /-- Mutable state owned by an external pool or custody contract. -/
+  externalPoolState : Option Nat
+  /-- Nonce/replay state for EIP-712/ERC-1271 style authorization. -/
+  signatureNonce : Address → Option Nat
+  /-- Proxy implementation slot and initializer state are implementation boundaries. -/
+  proxyImplementation : Option Address
+  initializerConsumed : Option Bool
+  /-- Callback depth is zero because `step` is an atomic, callback-free model transition. -/
+  callbackDepth : Nat
+  /-- Gas/loop budget is not represented by the abstract machine. -/
+  gasBudget : Option Nat
+
+structure ProtocolState where
+  ledger : LedgerState
+  vault : VaultState
+  redemption : RedemptionState
+  reserve : ReserveState
+  authority : AuthorityState
+  oracle : OracleState
+  time : TimeState
+  external : ExternalState
+
+def protocolState (s : State) : ProtocolState :=
+  { ledger :=
+      { totalSupplyApxUSD := s.totalSupply_apxUSD
+        totalSupplyApyUSD := s.totalSupply_apyUSD
+        apxUSDBalance := s.apxUSDBal
+        apyUSDBalance := s.apyUSDBal
+        usdcBalance := s.usdcBal
+        governanceBalance := s.governanceTokenBal }
+    vault :=
+      { custodyApxUSD := s.vaultApxUSDBal
+        exchangeRate := s.exchangeRate
+        vestStart := s.vestStart
+        vestTotal := s.vestTotal
+        fullyVestedAmount := s.fullyVestedAmount
+        vestPeriod := s.vestPeriod }
+    redemption :=
+      { nextUnlockId := s.nextUnlockId
+        ownerRequestId := s.unlockRequestId
+        standardRequests := s.unlockRequests
+        flexibleRequests := s.flexibleUnlockRequests
+        receiptOwner := s.unlockTokenOwner
+        receiptAmount := s.unlockTokenAmount
+        receiptOperator := s.unlockTokenOperator }
+    reserve :=
+      { collateralValue := s.totalCollateralValue
+        reserve := s.usdcReserve
+        redemptionValue := s.redemptionValue
+        overcollateralizationBuffer := s.overcollateralizationBuffer }
+    authority :=
+      { admin := s.admin
+        governance := s.governance
+        oracle := s.oracle
+        pauseController := s.pauseController
+        yieldDistributor := s.yieldDistributor
+        rfqCounterparties := s.rfqCounterparties
+        whitelist := s.whitelist
+        denylist := s.denylist
+        governanceThreshold := s.governanceThreshold
+        roleGraph :=
+          [ { roleId := 0, roleName := "admin", holder := s.admin, delay := none
+              capabilities := ["configuration", "reserve withdrawal", "repricing"] }
+          , { roleId := 1, roleName := "pauseController", holder := s.pauseController, delay := none
+              capabilities := ["pause", "unpause"] }
+          , { roleId := 2, roleName := "oracle", holder := s.oracle, delay := none
+              capabilities := ["market price update"] }
+          , { roleId := 3, roleName := "yieldDistributor", holder := s.yieldDistributor, delay := none
+              capabilities := ["credit yield"] } ]
+        authorityAddress := none
+        safeThreshold := none
+        roleDelay := none
+        setAuthorityDelay := none
+        upgradeAuthority := none
+        upgradeDelay := none }
+    oracle :=
+      { redemptionValue := s.redemptionValue
+        marketPrice := s.apxUSDMarketPrice }
+    time := { now := s.now }
+    external :=
+      { usdcBalance := s.usdcBal
+        rfqRequests := s.rfqRequests
+        oracleTimestamp := none
+        externalPoolState := none
+        signatureNonce := fun _ => none
+        proxyImplementation := none
+        initializerConsumed := none
+        callbackDepth := 0
+        gasBudget := none } }
+
+theorem protocolState_tick_frames (s : State) (dt : Nat) :
+    let s' := { s with now := s.now + dt }
+    (protocolState s').ledger = (protocolState s).ledger ∧
+    (protocolState s').vault = (protocolState s).vault ∧
+    (protocolState s').redemption = (protocolState s).redemption ∧
+    (protocolState s').reserve = (protocolState s).reserve ∧
+    (protocolState s').authority = (protocolState s).authority ∧
+    (protocolState s').oracle = (protocolState s).oracle ∧
+    (protocolState s').external = (protocolState s).external := by
+  simp [protocolState]
+
+/-! ### Explicit implementation boundaries
+
+The fields above make the missing deployment controls visible in the composed state without
+pretending that a caller address proves them.  The core model has no `setAuthority`, `upgrade`,
+signature, callback, oracle-freshness, or gas transition, so these fields are empty/zero in the
+projection.  The following predicates are deliberately named hand-offs: a future implementation
+refinement must supply them before a deployment-level theorem can be claimed. -/
+
+def authorityWiringModeled (p : ProtocolState) : Prop :=
+  p.authority.authorityAddress.isSome ∧
+    p.authority.safeThreshold.isSome ∧
+    p.authority.roleDelay.isSome ∧
+    p.authority.setAuthorityDelay.isSome ∧
+    p.authority.upgradeAuthority.isSome ∧
+    p.authority.upgradeDelay.isSome
+
+def externalExecutionModeled (p : ProtocolState) : Prop :=
+  p.external.oracleTimestamp.isSome ∧
+    p.external.externalPoolState.isSome ∧
+    (∀ a, (p.external.signatureNonce a).isSome) ∧
+    p.external.proxyImplementation.isSome ∧
+    p.external.initializerConsumed.isSome ∧
+    p.external.gasBudget.isSome
+
+theorem protocolState_authority_wiring_is_handoff (s : State) :
+    ¬ authorityWiringModeled (protocolState s) := by
+  simp [authorityWiringModeled, protocolState]
+
+theorem protocolState_external_execution_is_handoff (s : State) :
+    ¬ externalExecutionModeled (protocolState s) := by
+  simp [externalExecutionModeled, protocolState]
+
+theorem protocolState_roleGraph_lists_model_callers (s : State) :
+    (protocolState s).authority.roleGraph.length = 4 := by
+  rfl
+
 /-- `default : State` is the **empty** state, spelled out field by field.
 
 This instance used to be `deriving Inhabited`, which was a trap: for the two fields of type
@@ -1128,6 +1348,58 @@ def step (s : State) (op : Op) (caller : Address) : Option State :=
     -- only the price oracle may report apxUSD's secondary-market trading price
     if caller == s.oracle then some { s with apxUSDMarketPrice := price }
     else none
+
+/-! ### Refinement boundary (Proof Map v3 §V3-6)
+
+`ProtocolState` is the semantic target of a future implementation model.  `ImplState` is kept
+structurally separate so that a bytecode/storage extraction cannot accidentally be treated as the
+same object as the design state.  `Rep` and `ForwardSimulation` are the obligations to discharge
+when such an extraction exists; defining them does not claim that the obligation has been run. -/
+
+structure ImplState where
+  ledger : LedgerState
+  vault : VaultState
+  redemption : RedemptionState
+  reserve : ReserveState
+  authority : AuthorityState
+  oracle : OracleState
+  time : TimeState
+  external : ExternalState
+
+def Rep (impl : ImplState) (model : ProtocolState) : Prop :=
+  impl.ledger = model.ledger ∧
+    impl.vault = model.vault ∧
+    impl.redemption = model.redemption ∧
+    impl.reserve = model.reserve ∧
+    impl.authority = model.authority ∧
+    impl.oracle = model.oracle ∧
+    impl.time = model.time ∧
+    impl.external = model.external
+
+def implStateOf (model : ProtocolState) : ImplState :=
+  { ledger := model.ledger
+    vault := model.vault
+    redemption := model.redemption
+    reserve := model.reserve
+    authority := model.authority
+    oracle := model.oracle
+    time := model.time
+    external := model.external }
+
+theorem rep_implStateOf (model : ProtocolState) : Rep (implStateOf model) model := by
+  simp [Rep, implStateOf]
+
+def ImplementationStep := ImplState → Op → Address → Option ImplState
+
+def ForwardSimulation (implStep : ImplementationStep) : Prop :=
+  ∀ (impl : ImplState) (s : State) (op : Op) (caller : Address),
+    Rep impl (protocolState s) →
+      match implStep impl op caller with
+      | none => step s op caller = none
+      | some impl' => ∃ s', step s op caller = some s' ∧ Rep impl' (protocolState s')
+
+def refinementStatus : String :=
+  "schema defined; deployed bytecode/storage extraction and ForwardSimulation proof not run"
 
 /-- ERC-4626 slippage wrappers: revert (return `none`) when the preview violates the
 user-supplied bound, otherwise defer to the underlying vault operation. -/
