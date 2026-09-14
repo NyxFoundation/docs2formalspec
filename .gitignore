@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 lean/.lake/
 outputs/**/*.log
+
+# 顧客案件の成果物は public な本リポジトリに置かない
+# （bitbank 分は private の NyxFoundation/bitbank-precontract-validation へ移送済み）
+outputs/bitbank-precontract-poc/
